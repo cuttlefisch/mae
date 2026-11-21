@@ -30,6 +30,7 @@ const OPS = new Map([
   ['contentOpen', 15],
   ['contentWrap', 16],
   ['contentUnwrap', 17],
+  ['signOp', 18],
 ]);
 
 /**
@@ -195,6 +196,16 @@ export class MaeCrypto {
   }
   signChallenge({ key, issuer, subject, audience, challenge, now = nowSeconds() }) {
     return this.call('signChallenge', { key, issuer, subject, audience, challenge, now });
+  }
+
+  // Signs a KB content op (ADR-036): the module builds the signed message
+  // from these fields; the author is the key's own fingerprint. `epoch` is
+  // decimal text (a random u64, beyond a JavaScript number), `base_sv` and
+  // `update` base64, `issued_at` unix seconds (default: this host's clock).
+  // The result is the header: the top-level params of `kb/node_update`, or
+  // `params.content_header` of `sync/update`.
+  signOp({ key, kb_id, node_id, base_sv, epoch, update, issued_at = nowSeconds() }) {
+    return this.call('signOp', { key, kb_id, node_id, base_sv, epoch, issued_at, update });
   }
 
   // The key backup (envelope v1). The module NFC-normalises the passphrase

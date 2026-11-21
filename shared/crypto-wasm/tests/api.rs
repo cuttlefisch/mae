@@ -56,6 +56,7 @@ fn version_is_the_contract_and_moves_with_mae_crypto() {
     );
     assert_eq!(v["backup_version"], 1);
     assert_eq!(v["challenge_domain"], "mae-identity-binding-v1");
+    assert_eq!(v["content_op_domain"], "maecontent/v1");
 }
 
 #[test]
@@ -79,7 +80,8 @@ fn malformed_requests_and_unknown_ops_are_error_responses() {
     let invalid_utf8 = [b'{', 0xff, b'}'];
     let r: Value = serde_json::from_str(&call(1, &invalid_utf8)).unwrap();
     assert_eq!(r["code"], "bad-request");
-    for op in [0, 18, u32::MAX] {
+    // 0, the first number past the last op, and the top of the range.
+    for op in [0, Op::ALL.len() as u32 + 1, u32::MAX] {
         let r: Value = serde_json::from_str(&call(op, b"{}")).unwrap();
         assert_eq!(r["code"], "unknown-op");
     }

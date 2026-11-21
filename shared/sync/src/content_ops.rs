@@ -22,96 +22,14 @@
 //! Confidentiality (a member/relay still *reads* plaintext) is ADR-037, built on this
 //! same op substrate.
 
-use crate::membership::fingerprint_of;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-
 use crate::kb::Role;
 use crate::membership::ValidMember;
 use std::collections::BTreeMap;
 
-/// The signed authorship header of a content op (ADR-036 §D1). The yrs update
-/// *payload* is carried alongside (in [`SignedContentOp`]) and bound into the
-/// signature, not stored in the header — the header is what is small, structured,
-/// and canonically encoded.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ContentOp {
-    /// The KB the edited node belongs to.
-    pub kb_id: String,
-    /// The node doc edited (e.g. `concept:buffer`), i.e. the `kb:{node_id}` doc.
-    pub node_id: String,
-    /// The author's yrs **state vector** at authoring time (ADR-022). Binds the op
-    /// to the causal position it was produced from; a replay claiming a newer base
-    /// fails the receiver's SV/epoch checks. Opaque bytes (hex-encoded in the
-    /// canonical form so the NUL field separator stays unambiguous).
-    pub base_sv: Vec<u8>,
-    /// The author principal — `fingerprint_of(author_pubkey)`, `SHA256:…`
-    /// (STANDARD_NO_PAD), byte-identical to the membership layer + `mae_mcp`.
-    pub author: String,
-    /// The author's ADR-023 authorization **epoch**, *signed* so every peer agrees
-    /// (a per-peer token would break cross-peer `client_id` agreement — the ADR-026
-    /// §2b-3 rule). The fence rejects an op authored under a stale (pre-grant /
-    /// post-removal) epoch.
-    pub epoch: u64,
-    /// Issue time (unix seconds) — audit + tie-break, not a security boundary.
-    pub issued_at: u64,
-}
-
-impl ContentOp {
-    /// Deterministic canonical encoding — the exact bytes signed + verified:
-    /// version-tagged, NUL-separated header fields, then the **raw yrs payload**
-    /// appended last (so any payload mutation breaks the signature). Stable across
-    /// platforms + serde versions; NUL never appears in a fingerprint, hex string,
-    /// or decimal, so the header separation is unambiguous, and the payload — which
-    /// *may* contain NUL — is unambiguous because it is the unframed remainder.
-    pub fn canonical_bytes(&self, payload: &[u8]) -> Vec<u8> {
-        fn field(b: &mut Vec<u8>, s: &str) {
-            b.extend_from_slice(s.as_bytes());
-            b.push(0);
-        }
-        let mut b = Vec::new();
-        field(&mut b, "maecontent/v1");
-        field(&mut b, &self.kb_id);
-        field(&mut b, &self.node_id);
-        field(&mut b, &hex::encode(&self.base_sv));
-        field(&mut b, &self.author);
-        field(&mut b, &self.epoch.to_string());
-        field(&mut b, &self.issued_at.to_string());
-        b.extend_from_slice(payload);
-        b
-    }
-
-    /// Sign `header ‖ payload` with the author's Ed25519 secret seed. Returns the
-    /// 64-byte signature. Only editors hold an identity key (ADR-017/036 §D2).
-    pub fn sign(&self, secret: &[u8; 32], payload: &[u8]) -> Vec<u8> {
-        SigningKey::from_bytes(secret)
-            .sign(&self.canonical_bytes(payload))
-            .to_bytes()
-            .to_vec()
-    }
-
-    /// Verify `sig` over `header ‖ payload` by the holder of `author_pubkey`. The
-    /// caller must *separately* confirm `author_pubkey`'s fingerprint equals
-    /// `self.author` — see [`fingerprint_matches`](Self::fingerprint_matches), or use
-    /// [`SignedContentOp::verify_signed`] which does both.
-    pub fn verify(&self, sig: &[u8], author_pubkey: &[u8; 32], payload: &[u8]) -> bool {
-        let vk = match VerifyingKey::from_bytes(author_pubkey) {
-            Ok(k) => k,
-            Err(_) => return false,
-        };
-        let arr: [u8; 64] = match sig.try_into() {
-            Ok(a) => a,
-            Err(_) => return false,
-        };
-        vk.verify(&self.canonical_bytes(payload), &Signature::from_bytes(&arr))
-            .is_ok()
-    }
-
-    /// True iff `pubkey`'s `SHA256:<base64>` fingerprint equals `self.author` —
-    /// binds the verifying key to the claimed author principal (no impersonation).
-    pub fn fingerprint_matches(&self, pubkey: &[u8; 32]) -> bool {
-        fingerprint_of(pubkey) == self.author
-    }
-}
+/// The signed authorship header and its canonical encoding live in mae-crypto,
+/// so the browser (mae-crypto-wasm's `sign_op`), the editor and this verifier
+/// run one implementation (ADR-036 F5).
+pub use mae_crypto::content_op::ContentOp;
 
 /// A [`ContentOp`] together with its yrs payload, signature, and the author's public
 /// key — the self-attesting unit a peer receives + verifies. `author_pubkey` travels
@@ -224,7 +142,19 @@ impl SignedContentOp {
         let kb_id = params.get("kb_id")?.as_str()?.to_string();
         let node_id = params.get("node_id")?.as_str()?.to_string();
         let author = params.get("author")?.as_str()?.to_string();
-        let epoch = params.get("epoch")?.as_u64()?;
+        // A number (native clients), or canonical decimal text: a browser cannot
+        // hold a random u64 epoch (#72) in a JavaScript number without rounding
+        // it, so mae-crypto-wasm's `sign_op` returns it as text. The signature
+        // covers its decimal form either way.
+        let epoch = match params.get("epoch")? {
+            serde_json::Value::String(t) => {
+                let canonical = !t.is_empty()
+                    && t.bytes().all(|b| b.is_ascii_digit())
+                    && (t == "0" || !t.starts_with('0'));
+                canonical.then(|| t.parse::<u64>().ok()).flatten()?
+            }
+            v => v.as_u64()?,
+        };
         let issued_at = params.get("issued_at")?.as_u64()?;
         let base_sv = b64(params, "base_sv")?;
         let sig = base64::engine::general_purpose::STANDARD
@@ -250,6 +180,8 @@ impl SignedContentOp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::membership::fingerprint_of;
+    use ed25519_dalek::SigningKey;
 
     /// (secret seed, pubkey bytes, fingerprint) for a deterministic test identity.
     fn ident(seed: u8) -> ([u8; 32], [u8; 32], String) {

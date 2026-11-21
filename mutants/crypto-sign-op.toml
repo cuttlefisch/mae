@@ -1,0 +1,104 @@
+# sign_op (ADR-036 F5): the content-op header every signer and the daemon's
+# verifier share (shared/crypto/src/content_op.rs), the WASM op
+# (shared/crypto-wasm/src/api.rs), and the daemon's decimal-text epoch
+# (shared/sync/src/content_ops.rs). Tests: content_op's unit tests and
+# shared/crypto-wasm/tests/sign_op.rs, which checks the WASM output against
+# mae_sync::content_ops::SignedContentOp.
+
+[[mutant]]
+id = "crypto-sign-op/canonical-field-order"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(the_canonical_bytes_and_signature_are_pinned)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''        field(&mut b, &self.kb_id);
+        field(&mut b, &self.node_id);'''
+replace = '''        field(&mut b, &self.node_id);
+        field(&mut b, &self.kb_id);'''
+
+[[mutant]]
+id = "crypto-sign-op/payload-not-signed"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(a_signature_verifies_only_for_its_exact_header_payload_and_key)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''        field(&mut b, &self.issued_at.to_string());
+        b.extend_from_slice(payload);'''
+replace = '''        field(&mut b, &self.issued_at.to_string());
+        let _ = payload;'''
+
+[[mutant]]
+id = "crypto-sign-op/nul-accepted"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(ids_that_cannot_be_encoded_unambiguously_are_refused)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''            if v.as_bytes().contains(&0) {'''
+replace = '''            if false {'''
+
+[[mutant]]
+id = "crypto-sign-op/author-not-the-key"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "sign_op"]
+filter = "test(a_signed_header_passes_the_daemons_check_on_both_write_paths)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''            author: key.fingerprint(),'''
+replace = '''            author: String::from("SHA256:anyone"),'''
+
+[[mutant]]
+id = "crypto-sign-op/header-unchecked"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "sign_op"]
+filter = "test(a_request_the_encoding_cannot_carry_is_refused_with_its_code)"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''        op.check()?;'''
+replace = ''''''
+
+[[mutant]]
+id = "crypto-sign-op/epoch-non-canonical-signed"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "sign_op"]
+filter = "test(a_request_the_encoding_cannot_carry_is_refused_with_its_code)"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = ''' && (s == "0" || !s.starts_with('0'));'''
+replace = ''';'''
+
+[[mutant]]
+id = "crypto-sign-op/daemon-epoch-non-canonical"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "sign_op"]
+filter = "test(the_daemon_accepts_a_decimal_text_epoch_only_in_canonical_form)"
+[[mutant.edit]]
+file = "shared/sync/src/content_ops.rs"
+find = '''                    && (t == "0" || !t.starts_with('0'));'''
+replace = ''';'''
+
+[[mutant]]
+id = "crypto-sign-op/daemon-text-epoch-refused"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "sign_op"]
+filter = "test(a_signed_header_passes_the_daemons_check_on_both_write_paths)"
+[[mutant.edit]]
+file = "shared/sync/src/content_ops.rs"
+find = '''            serde_json::Value::String(t) => {'''
+replace = '''            serde_json::Value::String(t) if false => {'''
+
+[[mutant]]
+id = "crypto-sign-op/verifier-skips-check"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(a_nul_split_header_never_verifies_even_with_a_valid_signature)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''        if self.check().is_err() {
+            return false;
+        }
+        let Ok(vk)'''
+replace = '''        let Ok(vk)'''
+

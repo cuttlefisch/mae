@@ -547,6 +547,10 @@
           "kind": "mod"
         },
         {
+          "name": "content_op",
+          "kind": "mod"
+        },
+        {
           "name": "identity_challenge",
           "kind": "mod"
         },
@@ -567,7 +571,8 @@
     "mae-crypto-wasm": {
       "path": "shared/crypto-wasm/src/lib.rs",
       "dependencies": [
-        "mae-crypto"
+        "mae-crypto",
+        "mae-sync"
       ],
       "public_items": [
         {
