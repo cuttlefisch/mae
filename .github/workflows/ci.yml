@@ -1441,7 +1441,9 @@ jobs:
     # e2e steps that take seconds; main still builds, tests and installs the
     # release artifact.
     env:
-      PROFILE_FLAG: ${{ github.event_name == 'pull_request' && '' || '--release' }}
+      # (Not `cond && '' || '--release'`: '' is falsy in Actions expressions, so
+      # that always yields '--release'.)
+      PROFILE_FLAG: ${{ github.event_name != 'pull_request' && '--release' || '' }}
       PROFILE_DIR: ${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
     steps:
       - uses: actions/checkout@v7
