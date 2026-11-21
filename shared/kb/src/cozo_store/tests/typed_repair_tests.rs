@@ -544,8 +544,11 @@ fn a_mixed_body_repairs_what_it_should_and_leaves_the_rest() {
     assert!(out.contains(&format!("| [[{D}|D]] |")), "{out}");
 }
 
-#[test]
-fn opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows() {
+/// The table-repair fixture: a native node with two bar-form table links (one
+/// also the source of a typed row) and a table-looking line in a block; a node
+/// with table links and no typed row; a CRDT-backed node and a seed node, each
+/// with a table link. Returns the store and the CRDT node's body.
+fn table_repair_store() -> (CozoKbStore, String) {
     let store = CozoKbStore::open_mem().unwrap();
     // A native node: two bar-form table links (one also the source of a typed
     // row) and a table-looking line in a block that must stay as written.
@@ -588,6 +591,12 @@ fn opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows() {
     // The seed node also has a typed row, so the typed-row half of the plan
     // reaches it: only the seed guard keeps its table from being rewritten.
     store.add_typed_link(E, C, "cites", 1.0).unwrap();
+    (store, shared_body)
+}
+
+#[test]
+fn opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows() {
+    let (store, shared_body) = table_repair_store();
     assert!(
         edge(&store, A, C, "references").is_none(),
         "precondition: no edge"

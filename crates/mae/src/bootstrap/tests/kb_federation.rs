@@ -329,10 +329,12 @@ fn guidance_is_built_from_the_embedded_corpus_when_no_store_is_installed() {
     let index = mae_kb::KbStore::get_node(&store, "index")
         .expect("query")
         .expect("the built KB must carry the real index node");
+    // The title, not the body: since ingest moved onto mae-org (#941) a stored
+    // body holds the node's content only, without its drawer and `#+title`.
     assert!(
-        index.body.contains("DevPractices"),
-        "expected the real DevPractices corpus, got: {}",
-        index.body
+        index.title.contains("DevPractices"),
+        "expected the real DevPractices corpus, got title {:?}",
+        index.title
     );
 }
 

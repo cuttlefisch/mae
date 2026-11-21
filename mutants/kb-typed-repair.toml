@@ -315,8 +315,8 @@ file = "shared/kb/src/org_ingest.rs"
 find = '''    if edits.is_empty() {
         return None;
     }
-    let before = edges_of_body(body).len();'''
-replace = '''    let before = edges_of_body(body).len();'''
+    keep_edge_adding_edits(body, &edits)'''
+replace = '''    keep_edge_adding_edits(body, &edits)'''
 
 [[mutant]]
 id = "kb-typed-repair/no-derivation-lock"

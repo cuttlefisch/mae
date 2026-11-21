@@ -135,6 +135,16 @@ pub fn repair_table_pipe_links(body: &str) -> Option<(String, usize)> {
     if !body.contains("[[") || !body.contains('|') {
         return None;
     }
+    let edits = table_row_edits(body);
+    if edits.is_empty() {
+        return None;
+    }
+    keep_edge_adding_edits(body, &edits)
+}
+
+/// Every bar-form link `[[P|D]]` inside a real table row of `body` (the tree's
+/// `TABLE_ROW`), with the Org form `[[P][D]]` to replace it by, in order.
+fn table_row_edits(body: &str) -> Vec<(Range<usize>, String)> {
     let doc = parse(body, &org_options().parse);
     let rows: Vec<Range<usize>> = doc
         .syntax()
@@ -166,16 +176,19 @@ pub fn repair_table_pipe_links(body: &str) -> Option<(String, usize)> {
             edits.push((row.start + open..row.start + close + 2, link));
         }
     }
-    if edits.is_empty() {
-        return None;
-    }
+    edits
+}
+
+/// `body` with the `edits` that each add exactly one edge applied, and how
+/// many: `None` when none does.
+fn keep_edge_adding_edits(body: &str, edits: &[(Range<usize>, String)]) -> Option<(String, usize)> {
     let before = edges_of_body(body).len();
     // Fast path, one parse: every rewrite at once, kept if together they add
     // exactly one edge each (the common case; edit-by-edit below re-parses the
     // body per edit, which is quadratic in a note with hundreds of table links).
     let mut all = String::with_capacity(body.len() + edits.len());
     let mut at = 0;
-    for (range, link) in &edits {
+    for (range, link) in edits {
         all.push_str(&body[at..range.start]);
         all.push_str(link);
         at = range.end;
@@ -699,6 +712,41 @@ pub struct Declared {
     pub appended: usize,
 }
 
+/// The link `raw` rewritten to carry `w`'s relation (and non-default weight
+/// and confidence) in its query, in the form it was written in. `None` for a
+/// link whose path already has a query, a fragment or a search option.
+fn with_relation(raw: &RawLink, w: &WantedEdge) -> Option<String> {
+    let (path, bar) = match raw.path.split_once('|') {
+        Some((p, d)) => (p, Some(d)),
+        None => (raw.path, None),
+    };
+    if path.contains(['?', '#']) || path.contains("::") {
+        return None;
+    }
+    let mut text = format!("[[{path}?{}", w.query());
+    if let Some(d) = bar {
+        text.push('|');
+        text.push_str(d);
+    }
+    if let Some(d) = raw.description {
+        text.push_str("][");
+        text.push_str(d);
+    }
+    text.push_str("]]");
+    Some(text)
+}
+
+/// Whether two edge lists are the same, weights and confidences bit for bit.
+fn same_edge_rows(a: &[EdgeRow], b: &[EdgeRow]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.0 == y.0
+                && x.1 == y.1
+                && x.2.to_bits() == y.2.to_bits()
+                && x.3.to_bits() == y.3.to_bits()
+        })
+}
+
 /// `body` changed so that it declares every edge of `wanted`, touching
 /// nothing else: an untyped bracket link to an edge's target (`[[id:X][L]]`,
 /// `[[X|L]]`, `[[X]]` -- one with no query, fragment or search option) is
@@ -741,23 +789,7 @@ pub fn declare_edges(body: &str, wanted: &[WantedEdge]) -> Option<Declared> {
             }
             let range = l.span.range();
             let raw = RawLink::read(links.get(&range.start), body.get(range.clone())?)?;
-            let (path, bar) = match raw.path.split_once('|') {
-                Some((p, d)) => (p, Some(d)),
-                None => (raw.path, None),
-            };
-            if path.contains(['?', '#']) || path.contains("::") {
-                return None;
-            }
-            let mut text = format!("[[{path}?{}", w.query());
-            if let Some(d) = bar {
-                text.push('|');
-                text.push_str(d);
-            }
-            if let Some(d) = raw.description {
-                text.push_str("][");
-                text.push_str(d);
-            }
-            text.push_str("]]");
+            let text = with_relation(&raw, w)?;
             Some((i, Edit { range, text }))
         });
         match slot {
@@ -789,15 +821,7 @@ pub fn declare_edges(body: &str, wanted: &[WantedEdge]) -> Option<Declared> {
         attrs: Vec::new(),
     }));
     let got = edges_of_body(&out);
-    let same = |a: &[EdgeRow], b: &[EdgeRow]| {
-        a.len() == b.len()
-            && a.iter().zip(b).all(|(x, y)| {
-                x.0 == y.0
-                    && x.1 == y.1
-                    && x.2.to_bits() == y.2.to_bits()
-                    && x.3.to_bits() == y.3.to_bits()
-            })
-    };
+    let same = same_edge_rows;
     same(&edge_rows(&got), &edge_rows(&want)).then_some(Declared {
         body: out,
         rewritten: edits.len(),
