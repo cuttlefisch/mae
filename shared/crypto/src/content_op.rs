@@ -102,8 +102,8 @@ impl ContentOp {
     }
 
     /// Whether every id field can be encoded unambiguously. A signer checks this
-    /// before signing; the verifier takes `kb_id` and `node_id` from its own
-    /// context, so a header that fails it can never match a real document.
+    /// before signing, and [`verify`](Self::verify) refuses a header that fails
+    /// it, whatever its signature.
     pub fn check(&self) -> Result<(), HeaderError> {
         for (name, v) in [("kb_id", &self.kb_id), ("node_id", &self.node_id)] {
             if v.is_empty() {
@@ -154,6 +154,12 @@ impl ContentOp {
     /// caller must *separately* confirm `author_pubkey`'s fingerprint equals
     /// `self.author`: see [`fingerprint_matches`](Self::fingerprint_matches).
     pub fn verify(&self, sig: &[u8], author_pubkey: &[u8; 32], payload: &[u8]) -> bool {
+        // A header the encoding cannot carry unambiguously never verifies: two
+        // NUL-split (kb_id, node_id) pairs encode to the same bytes, so one
+        // signature would cover both.
+        if self.check().is_err() {
+            return false;
+        }
         let Ok(vk) = VerifyingKey::from_bytes(author_pubkey) else {
             return false;
         };
@@ -288,6 +294,34 @@ mod tests {
             ..ok
         };
         assert_eq!(a.canonical_bytes(b""), b.canonical_bytes(b""));
+    }
+
+    #[test]
+    fn a_nul_split_header_never_verifies_even_with_a_valid_signature() {
+        // The editor's seed path signs without `check`: sign a NUL-bearing node
+        // id, then present the signature under the other split of the same bytes.
+        let seed = [0x5a; 32];
+        let k = MemberKey::from_seed(&seed);
+        let signed = ContentOp {
+            kb_id: "x".into(),
+            node_id: "y\0z".into(),
+            ..header(&k)
+        };
+        let other = ContentOp {
+            kb_id: "x\0y".into(),
+            node_id: "z".into(),
+            ..header(&k)
+        };
+        let sig = signed.sign(&seed, b"p");
+        assert_eq!(signed.canonical_bytes(b"p"), other.canonical_bytes(b"p"));
+        assert!(
+            !other.verify(&sig, &k.public_key(), b"p"),
+            "the other split"
+        );
+        assert!(
+            !signed.verify(&sig, &k.public_key(), b"p"),
+            "nor the one signed"
+        );
     }
 
     #[test]

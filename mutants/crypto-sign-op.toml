@@ -88,3 +88,17 @@ filter = "test(a_signed_header_passes_the_daemons_check_on_both_write_paths)"
 file = "shared/sync/src/content_ops.rs"
 find = '''            serde_json::Value::String(t) => {'''
 replace = '''            serde_json::Value::String(t) if false => {'''
+
+[[mutant]]
+id = "crypto-sign-op/verifier-skips-check"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(a_nul_split_header_never_verifies_even_with_a_valid_signature)"
+[[mutant.edit]]
+file = "shared/crypto/src/content_op.rs"
+find = '''        if self.check().is_err() {
+            return false;
+        }
+        let Ok(vk)'''
+replace = '''        let Ok(vk)'''
+

@@ -334,7 +334,9 @@ NUL separates the encoding's fields.
 `epoch` is **decimal text** in both the request and the result. An authorization epoch is a random u64
 (#72), which a JavaScript number cannot hold exactly. Only the canonical form is accepted: digits, no sign,
 no leading zero (`bad-request` otherwise, a JSON number included). The daemon reads the header's `epoch` as
-either a number or that same canonical text.
+either a number or that same canonical text. Native clients still send it as a number, so a JavaScript relay
+that re-reads such a header must parse `epoch` as text or BigInt, not as a Number. The verifier refuses a
+header whose `kb_id` or `node_id` is empty or contains NUL, whatever its signature.
 
 The result is the ADR-036 header, sent in one of two ways:
 - for `kb/node_update`, its fields go at the top level of the params, beside `kb_id`, `node_id` and
