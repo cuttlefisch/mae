@@ -1,0 +1,140 @@
+# Stored-edge derivation on mae-org (ADR-112 O4, #941 PR2): derived_links,
+# the Node::edges cache and the open-time re-derivation. Format:
+# tools/mutate/README.md.
+
+[[mutant]]
+id = "kb-edges/dedupe-first-wins"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(one_edge_per_target_and_relation_the_last_in_body_order)"
+ref = "one stored edge per (dst, rel_type), the LAST in body order, as the per-link :puts left it"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''            Some(existing) => *existing = row,'''
+replace = '''            Some(_) => {}'''
+
+[[mutant]]
+id = "kb-edges/external-links-kept"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(links_that_name_no_node_are_not_stored_edges)"
+ref = "a web, file, help: or local link is text, not an edge (#941)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    l.kind == LinkKind::Kb && !(l.target.is_empty() && l.fragment.is_none())'''
+replace = '''    !(l.target.is_empty() && l.fragment.is_none())'''
+
+[[mutant]]
+id = "kb-edges/weight-unclamped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(a_stored_weight_is_clamped_to_the_unit_interval)"
+ref = "ADR-030: weight and confidence are 0-1"
+[[mutant.edit]]
+file = "shared/org/src/link_grammar.rs"
+find = '''        .map(|f| f.clamp(0.0, 1.0) + 0.0)'''
+replace = '''        .map(|f| f + 0.0)'''
+
+[[mutant]]
+id = "kb-edges/projection-on-old-parser"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(raw_org_and_store_form_bodies_project_identical_link_rows)"
+ref = "#941 PR2: the projector's edges are mae-org's, through insert_node"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/links.rs"
+find = '''        crate::org_ingest::edge_rows(node.edges().iter())'''
+replace = '''        crate::org_ingest::edge_rows(crate::org::parse_typed_links(&node.body, &node.id).iter())'''
+
+[[mutant]]
+id = "kb-edges/cache-never-invalidated"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_edited_body_is_never_answered_from_the_cache)"
+ref = "#941 G3: an edited body is never answered from the cache"
+[[mutant.edit]]
+file = "shared/kb/src/edge_cache.rs"
+find = '''            if *k == key {'''
+replace = '''            if *k == key || k.len > 0 {'''
+
+[[mutant]]
+id = "kb-edges/cache-keyed-by-length"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_edited_body_is_never_answered_from_the_cache)"
+ref = "#941 G3: a same-length edit changes the key"
+[[mutant.edit]]
+file = "shared/kb/src/edge_cache.rs"
+find = '''        hash: SEED.get_or_init(RandomState::new).hash_one(body),'''
+replace = '''        hash: SEED.get_or_init(RandomState::new).hash_one(body.len()),'''
+
+[[mutant]]
+id = "kb-edges/cache-not-kept"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(a_repeated_call_returns_the_cached_derivation)"
+ref = "#941 G3: links() in a hot loop must not re-parse"
+[[mutant.edit]]
+file = "shared/kb/src/edge_cache.rs"
+find = '''        *self.lock() = Some((key, Arc::clone(&edges)));'''
+replace = '''        let _ = key;'''
+
+[[mutant]]
+id = "kb-edges/stamp-before-rederive"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(a_failed_rederive_does_not_block_open_and_retries_on_the_next)"
+ref = "the stamp is written only after every batch committed, so a failure retries"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''        match self.rederive_all_links() {'''
+replace = '''        self.set_meta(DERIVATION_VERSION_KEY, DERIVATION_VERSION)?;
+        match self.rederive_all_links() {'''
+
+[[mutant]]
+id = "kb-edges/rederive-failure-blocks-open"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(a_failed_rederive_does_not_block_open_and_retries_on_the_next)"
+ref = "a failed re-derive logs and does not block open (the FTS rebuild's rule)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''                     the old derivation until this succeeds on a later open"
+                );
+                return Ok(());'''
+replace = '''                     the old derivation until this succeeds on a later open"
+                );
+                return Err(e);'''
+
+[[mutant]]
+id = "kb-edges/rederive-first-batch-only"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(rederive_reaches_every_node_across_batches)"
+ref = "every node is re-derived, whatever the store's size"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''        for batch in ids.chunks(REDERIVE_BATCH) {'''
+replace = '''        for batch in ids.chunks(REDERIVE_BATCH).take(1) {'''
+
+[[mutant]]
+id = "kb-edges/rederive-skips-members"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(stale_edges_are_rederived_on_open_and_nothing_else_changes)"
+ref = "meta_members rows are a projection of the body too"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''        if members == old {'''
+replace = '''        if members == old || !members.is_empty() {'''
+
+[[mutant]]
+id = "kb-edges/rederive-resets-created-at"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(rederive_reaches_every_node_across_batches)"
+ref = "a row already right is not rewritten"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''if ow.to_bits() == w.to_bits() && oc.to_bits() == c.to_bits() =>'''
+replace = '''if ow.to_bits() == w.to_bits() && oc.to_bits() == c.to_bits() && false =>'''

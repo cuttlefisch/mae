@@ -663,7 +663,7 @@ impl Editor {
         rel_type: &str,
         weight: f64,
     ) -> Result<(), String> {
-        let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
+        let link_line = mae_kb::org_ingest::typed_link_line(dst, rel_type, weight, None);
         self.kb_update_node_with_target(kb, src, |node| node.body.push_str(&link_line))
     }
 

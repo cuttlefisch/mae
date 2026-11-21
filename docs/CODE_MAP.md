@@ -336,6 +336,7 @@ Source: `shared/kb/src/lib.rs`
 | `backup` | mod |
 | `capabilities` | mod |
 | `data_dir` | mod |
+| `edge_cache` | mod |
 | `embedding_client` | mod |
 | `enrichment` | mod |
 | `export` | mod |
@@ -361,6 +362,7 @@ Source: `shared/kb/src/lib.rs`
 | `query` | mod |
 | `query_off_thread` | mod |
 | `remote_hub` | mod |
+| `SEED_SOURCE_VERSION` | const |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphLink` | struct |
@@ -368,7 +370,6 @@ Source: `shared/kb/src/lib.rs`
 | `SubgraphResult` | struct |
 | `NodeSource` | enum |
 | `Node` | struct |
-| `parse_links` | fn |
 | `compute_code_block_ranges` | fn |
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |

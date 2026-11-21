@@ -1,0 +1,339 @@
+# Typed edges written back into the bodies that lost them (#854, #941):
+# the open-time typed-link repair, its ordering against the edge
+# re-derivation, and the shared link formatter. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "kb-typed-repair/rederive-drops-typed-rows"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(seeded_rows_and_seed_nodes_are_left_alone_and_kept)"
+ref = "the version pass never deletes a typed row no body declares"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''            if rel != mae_org::DEFAULT_REL {'''
+replace = '''            if false {'''
+
+[[mutant]]
+id = "kb-typed-repair/no-repair-before-rederive"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(typed_rows_no_body_declares_are_written_into_the_bodies_and_survive_a_write)"
+ref = "#854: the repair runs in the open-time pass, before anything can drop a row"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''        match self.repair_typed_links() {'''
+replace = '''        match Ok::<TypedRepairReport, KbStoreError>(TypedRepairReport::default()) {'''
+
+[[mutant]]
+id = "kb-typed-repair/stamp-despite-interrupted-repair"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(an_interrupted_repair_resumes_without_loss_or_duplicates)"
+ref = "an interrupted repair leaves the stamp stale so the next open resumes"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/rederive.rs"
+find = '''                     nothing was dropped, and this retries on the next open"
+                );
+                return Ok(());'''
+replace = '''                     nothing was dropped, and this retries on the next open"
+                );'''
+
+[[mutant]]
+id = "kb-typed-repair/already-declared-rows-redeclared"
+equivalent = "a work-saving guard: repair_node re-reads the node and filters what its fresh body already declares, so dropping the plan-time filter changes no outcome"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(an_interrupted_repair_resumes_without_loss_or_duplicates)"
+ref = "idempotent: a node already repaired is not repaired twice (no duplicate link)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''                .filter(|w| !declared.contains(&(w.dst.clone(), w.rel.clone())))'''
+replace = '''                .filter(|w| !declared.contains(&(w.dst.clone(), w.rel.clone())) || true)'''
+
+[[mutant]]
+id = "kb-typed-repair/seeded-rows-repaired"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(seeded_rows_and_seed_nodes_are_left_alone_and_kept)"
+ref = "rows the bootstrap re-seeds are not written into a body"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            if seeded {
+                continue;
+            }'''
+replace = '''            let _ = seeded;'''
+
+[[mutant]]
+id = "kb-typed-repair/seed-node-edited"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(seeded_rows_and_seed_nodes_are_left_alone_and_kept)"
+ref = "seed content is regenerated from the binary, never edited (ADR-104)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            if node.source != Some(crate::NodeSource::Seed) {'''
+replace = '''            if true {'''
+
+[[mutant]]
+id = "kb-typed-repair/no-history"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(typed_rows_no_body_declares_are_written_into_the_bodies_and_survive_a_write)"
+ref = "ADR-106: the repair is a node write, recorded in history"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        self.insert_node_with_history(&updated, TYPED_REPAIR_SUMMARY)?;'''
+replace = '''        self.insert_node(&updated)?;'''
+
+[[mutant]]
+id = "kb-typed-repair/no-backup"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_store_is_backed_up_once_before_its_first_repair)"
+ref = "a store the repair changes is copied beside it first"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        report.backup = self.backup_before_typed_repair()?;'''
+replace = '''        report.backup = None;'''
+
+[[mutant]]
+id = "kb-typed-repair/backup-every-pass"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(an_interrupted_repair_resumes_without_loss_or_duplicates) | test(a_store_is_backed_up_once_before_its_first_repair)"
+ref = "an earlier pass's copy is the pre-repair state; no second copy"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        if let Some(e) = earlier {
+            return Ok(Some(e.path()));
+        }'''
+replace = '''        let _ = earlier;'''
+
+[[mutant]]
+id = "kb-typed-repair/rewrite-unchecked"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(declare_edges_rewrites_the_link_in_place_in_either_form)"
+ref = "declare_edges' result is checked, not trusted"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    same(&edge_rows(&got), &edge_rows(&want)).then_some(Declared {'''
+replace = '''    let _ = (same, got, want);
+    Some(Declared {'''
+
+[[mutant]]
+id = "kb-typed-repair/always-append"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(typed_rows_no_body_declares_are_written_into_the_bodies_and_survive_a_write)"
+ref = "#854: the untyped link is given the relation, so no references duplicate is left"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''            if used[i] || !untyped {'''
+replace = '''            if used[i] || !untyped || true {'''
+
+[[mutant]]
+id = "kb-typed-repair/link-takes-two-relations"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(declare_edges_rewrites_the_link_in_place_in_either_form)"
+ref = "two relations to one target each survive"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''                used[i] = true;'''
+replace = '''                let _ = &mut used;'''
+
+[[mutant]]
+id = "kb-typed-repair/weight-dropped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(typed_rows_no_body_declares_are_written_into_the_bodies_and_survive_a_write)"
+ref = "a non-default weight survives the repair"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        if w != 1.0 {
+            q.push_str(&format!("&w={w}"));
+        }'''
+replace = '''        let _ = w;'''
+
+[[mutant]]
+id = "kb-typed-repair/add-link-own-format"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(the_appended_link_is_the_add_link_format)"
+ref = "one formatter for an appended typed link (kb_add_link's)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    format!("\n[[{dst}?{query}][{dst}]]")'''
+replace = '''    format!("\n[[id:{dst}?{query}][{dst}]]")'''
+
+[[mutant]]
+id = "kb-typed-repair/backup-dir-empty-parent"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(a_bare_file_name_backs_up_into_the_current_directory)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        Some(p) if !p.as_os_str().is_empty() => p,'''
+replace = '''        Some(p) => p,'''
+
+[[mutant]]
+id = "kb-typed-repair/table-links-not-rewritten"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_bar_form_link_in_a_table_row_is_rewritten_and_becomes_an_edge)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        .filter(|n| n.kind() == SyntaxKind::TABLE_ROW)'''
+replace = '''        .filter(|n| n.kind() == SyntaxKind::TABLE_ROW && false)'''
+
+[[mutant]]
+id = "kb-typed-repair/table-rewrite-outside-tables"
+equivalent = "a work-saving guard: every rewrite must add exactly one edge in context, and a bar-form link outside a table (already an edge) or in a block (never one) adds none"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_mixed_body_repairs_what_it_should_and_leaves_the_rest)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        .filter(|n| n.kind() == SyntaxKind::TABLE_ROW)'''
+replace = '''        .filter(|n| n.kind() == SyntaxKind::TABLE_ROW || n.kind() == SyntaxKind::DOCUMENT)'''
+
+[[mutant]]
+id = "kb-typed-repair/table-links-not-in-plan"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            if wanted.is_empty() && !tables {
+                continue;
+            }
+            // Seed content'''
+replace = '''            if wanted.is_empty() {
+                continue;
+            }
+            // Seed content'''
+
+[[mutant]]
+id = "kb-typed-repair/table-repair-edits-seed"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            let tables = node.source != Some(crate::NodeSource::Seed)
+                && org_ingest::repair_table_pipe_links(&node.body).is_some();'''
+replace = '''            let tables = org_ingest::repair_table_pipe_links(&node.body).is_some();'''
+
+[[mutant]]
+id = "kb-typed-repair/activity-legacy-hash-not-rebased"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(kb_record_modification_only_updates_the_node_whose_body_actually_changed)"
+[[mutant.edit]]
+file = "crates/core/src/editor/kb_ops/activity.rs"
+find = '''            if !rebase {
+                entry.modified = Some(today.clone());
+            }'''
+replace = '''            let _ = rebase;
+            entry.modified = Some(today.clone());'''
+
+[[mutant]]
+id = "kb-typed-repair/crdt-node-edited"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(typed_rows_no_body_declares_are_written_into_the_bodies_and_survive_a_write)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        if node.crdt_doc.is_some() {
+            report.rows_left += wanted.len();'''
+replace = '''        if false {
+            report.rows_left += wanted.len();'''
+
+[[mutant]]
+id = "kb-typed-repair/stale-plan-written"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_node_written_after_the_plan_keeps_that_write)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        let Some(fresh) = self.get_node(&planned.id)? else {'''
+replace = '''        let Some(fresh) = Some(planned.clone()) else {'''
+
+[[mutant]]
+id = "kb-typed-repair/fresh-declarations-redeclared"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(an_edge_declared_after_the_plan_is_not_declared_twice)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            .filter(|w| !have.contains(&(w.dst.clone(), w.rel.clone())))'''
+replace = '''            .filter(|_| !have.is_empty() || true)'''
+
+[[mutant]]
+id = "kb-typed-repair/backup-prefix-unversioned"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_partial_or_older_backup_is_never_taken_for_the_pre_repair_copy)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        let prefix = format!(
+            "{name}{BACKUP_INFIX}v{}-",
+            super::rederive::DERIVATION_VERSION
+        );'''
+replace = '''        let prefix = format!("{name}{BACKUP_INFIX}");'''
+
+[[mutant]]
+id = "kb-typed-repair/backup-written-in-place"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_partial_or_older_backup_is_never_taken_for_the_pre_repair_copy)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''        let _ = std::fs::remove_file(&partial);
+        if let Err(e) = backup_file(&self.path, &partial) {'''
+replace = '''        let partial = dst.clone();
+        if let Err(e) = backup_file(&self.path, &partial) {'''
+
+[[mutant]]
+id = "kb-typed-repair/table-fixes-all-or-nothing"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_cell_link_that_cannot_be_rewritten_does_not_block_the_others)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        if n == edges + 1 {'''
+replace = '''        if n >= edges {'''
+
+[[mutant]]
+id = "kb-typed-repair/table-repair-reports-empty-rewrite"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_bar_form_link_in_a_table_row_is_rewritten_and_becomes_an_edge)"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    if edits.is_empty() {
+        return None;
+    }
+    let before = edges_of_body(body).len();'''
+replace = '''    let before = edges_of_body(body).len();'''
+
+[[mutant]]
+id = "kb-typed-repair/no-derivation-lock"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(a_second_opener_is_not_locked_out_while_a_long_pass_runs)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/schema.rs"
+find = '''    let target = derivation_lock_target(path);'''
+replace = '''    let target = derivation_lock_target(path).with_extension(format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));'''
+
+[[mutant]]
+id = "kb-typed-repair/crdt-skip-uncounted"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib", "--features", "crdt"]
+filter = "test(opening_a_native_store_repairs_its_table_links_and_keeps_typed_rows)"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/typed_repair.rs"
+find = '''            report.crdt_nodes_skipped += 1;'''
+replace = ''''''

@@ -76,6 +76,53 @@ const FTS_VERSION_KEY: &str = "fts_extractor_version";
 /// by the editor. See [`CozoKbStore::collection_body_format`].
 const COLLECTION_BODY_FORMAT_KEY: &str = "collection_body_format";
 
+/// Attempts at 200 ms for the derivation lock: 30 minutes, far above any
+/// measured pass.
+const DERIVATION_LOCK_ATTEMPTS: u32 = 9_000;
+
+/// The file whose OS lock serializes opens of the store at `path` while its
+/// derivation pass may run: a hidden sibling, never the store or the creation
+/// lock's file.
+fn derivation_lock_target(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{name}.derive.lock"))
+}
+
+/// Take the derivation lock for the store at `path`, waiting up to
+/// [`DERIVATION_LOCK_ATTEMPTS`]. The lock lives as long as the returned handle.
+/// Where a lock cannot be taken at all (an unwritable directory, a filesystem
+/// without file locks) the open proceeds without one, as the creation lock
+/// does.
+fn lock_for_derivation(path: &Path) -> Result<Option<std::fs::File>, KbStoreError> {
+    let target = derivation_lock_target(path);
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&target)
+    else {
+        return Ok(None);
+    };
+    for _ in 0..DERIVATION_LOCK_ATTEMPTS {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(200))
+            }
+            Err(std::fs::TryLockError::Error(_)) => return Ok(None),
+        }
+    }
+    Err(KbStoreError::Storage(format!(
+        "timed out waiting for the derivation lock on {} (another process held it for over \
+         30 minutes)",
+        path.display()
+    )))
+}
+
 impl CozoKbStore {
     /// Open (or create) a CozoDB at the given path using the default backend.
     ///
@@ -141,6 +188,29 @@ impl CozoKbStore {
         // failed acquisition would silently reintroduce the exact race this
         // fix exists to close, so a still-unacquired guard after the full
         // budget is a hard error, not a warning.
+        // @ai-caution: [kb-links] The derivation lock, held for the WHOLE open
+        // including the one-time edge-derivation pass (and the body repair in
+        // it), which can take many seconds on a large store (tens of seconds
+        // measured on a large store). It serializes passes across processes (the editor and
+        // mae-daemon open the same stores), so two never run at once, and a
+        // second opener waits here, with a long budget, and then loads the
+        // repaired store: it never holds pre-repair bodies in memory, and never
+        // trips the creation lock's 5 s limit below. Acquired BEFORE that lock
+        // and before the database is opened, so no other opener's bootstrap
+        // runs during the pass's writes. An ordinary open (stamp current) holds
+        // it for milliseconds. It is an OS file lock on an open handle (flock;
+        // LockFileEx on Windows), so the kernel releases it when the holder
+        // exits or is killed: no PID to go stale or be reused (a restarted
+        // container daemon is PID 1 again), and no lock-file content to tear.
+        // Only an existing store can need the pass's repair: a new one is empty,
+        // and its creation is serialized by the creation lock below. So a new
+        // store (a staging build, a test) gets no lock file at all.
+        let _derive_lock =
+            if !path.as_os_str().is_empty() && path != Path::new(":memory:") && path.exists() {
+                lock_for_derivation(&path)?
+            } else {
+                None
+            };
         let _create_guard = if !path.as_os_str().is_empty() && path != Path::new(":memory:") {
             let guard = mae_mcp::file_lock::LockGuard::try_acquire_with_retry(
                 &path,
@@ -227,6 +297,10 @@ impl CozoKbStore {
             checkpointer,
         };
         store.ensure_schema()?;
+        // The pass runs after the creation lock is released (other openers
+        // are held by the derivation lock above, with its longer budget).
+        drop(_create_guard);
+        store.ensure_derivation_current()?;
         Ok(store)
     }
     /// Open an in-memory CozoDB store (for tests). No storage backend needed.
@@ -240,6 +314,7 @@ impl CozoKbStore {
             checkpointer: None,
         };
         store.ensure_schema()?;
+        store.ensure_derivation_current()?;
         Ok(store)
     }
     /// Create schema relations if they don't exist.
