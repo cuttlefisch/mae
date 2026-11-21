@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.179] - 2026-11-21
+
+
+
+
+### Features
+
+- *(crypto)* Sign_op, so a browser signs its KB content ops (ADR-036 F5, #727) ([de3c302](https://github.com/cuttlefisch/mae/commit/de3c30219dacd1d10adf8204b649902390431e01))
+
+### Bug Fixes
+
+- *(crypto)* A content-op header with an empty or NUL id never verifies ([3076c1f](https://github.com/cuttlefisch/mae/commit/3076c1f3c08b31594a200361baac0943a760a6b7))
+- *(crypto)* Daemon lockfile records mae-crypto 0.2.0 ([46facfc](https://github.com/cuttlefisch/mae/commit/46facfce038b6f40274f6ea4525d018333436240))
+
+### Testing
+
+- *(shell)* Quarantine a login-shell PTY test that flaked in CI (#965) ([d410a35](https://github.com/cuttlefisch/mae/commit/d410a35e127ba0451f406d43eddc08ece76b01dc))
+
+### CI
+
+- *(macos)* Build and test in debug on PRs, release on main ([4f9ee01](https://github.com/cuttlefisch/mae/commit/4f9ee01907491f00151b85a6599cb7323da472ed))
+- Update a PR from main just in time, not every PR on every push ([dbfb914](https://github.com/cuttlefisch/mae/commit/dbfb9140e56e26150fcd737ecf4b7b9a8115bdba))
+- *(macos)* Fix the profile expression; quarantine a Windows tempfile flake ([f421573](https://github.com/cuttlefisch/mae/commit/f4215736b6edc3219f5a7569b72a59c82fad7945))
+
+### Miscellaneous
+
+- *(make)* A pre-commit gate that fits in seconds ([1cd9ab4](https://github.com/cuttlefisch/mae/commit/1cd9ab4f96cc8b258bc4f0dfcefad2cb3cafd1f1))
+
 ## [0.14.178] - 2026-11-20
 
 
@@ -18,6 +46,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - Timing tests no longer gate a merge; they run daily in perf.yml ([72e9bac](https://github.com/cuttlefisch/mae/commit/72e9baccc8474268856e886b020667f211b69ae3))
+
+### Miscellaneous
+
+- Bump version to 0.14.178 ([9e29e22](https://github.com/cuttlefisch/mae/commit/9e29e229d1ef534a6efd87b8fb2dc7a968a23025))
 
 ## [0.14.177] - 2026-11-20
 
