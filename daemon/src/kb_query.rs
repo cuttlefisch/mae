@@ -193,7 +193,7 @@ async fn dispatch_scanning(
 /// `DocStore` reads of `kbc:{kb_id}` (one inside the gate, one here) rather
 /// than a `_with_coll` variant threaded through the public wrapper — this
 /// isn't a hot path, and simplicity wins over saving one cheap read.
-async fn load_gated(
+pub(crate) async fn load_gated(
     doc_store: &DocStore,
     kb_id: &str,
     principal: Option<&str>,

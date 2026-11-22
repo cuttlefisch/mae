@@ -127,6 +127,8 @@ mod tests {
             jwks_ca_file: None,
             issuer: Some("https://idp.example.com".to_string()),
             kb_query_enabled: false,
+            site_enabled: false,
+            site_locale: "en-US".to_string(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
@@ -656,5 +658,50 @@ mod tests {
             let body = route_authenticated_request(None, &c, None, &self_issued, &q).await;
             assert!(body["sign_in"].is_null(), "{body}");
         }
+    }
+
+    /// ADR-119 L1a: the site's path is exactly `/kb/<kb>/<id>`, the id one
+    /// percent-decoded segment; nothing else is a site path.
+    #[test]
+    fn a_site_path_is_one_kb_and_one_decoded_id() {
+        assert_eq!(site_path("/kb/k/n1"), Some(("k".into(), "n1".into())));
+        assert_eq!(
+            site_path("/kb/k/concept%3Abuffer"),
+            Some(("k".into(), "concept:buffer".into()))
+        );
+        for bad in [
+            "/kb/k",
+            "/kb/k/",
+            "/kb//n",
+            "/kb/k/a/b",
+            "/kbx/k/n",
+            "/x/kb/k/n",
+            "/kb/k/%zz",
+            "/kb/k/%ff",
+            "/kb/k/%+f",
+            "/kb/k/%-1",
+        ] {
+            assert_eq!(site_path(bad), None, "{bad}");
+        }
+    }
+
+    /// Every site response carries the CSP and the no-sniff, no-referrer,
+    /// no-store headers, a refusal included.
+    #[test]
+    fn site_responses_carry_their_security_headers() {
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            let r = site_response(status, "x".into());
+            let h = r.headers();
+            assert_eq!(h["content-security-policy"], mae_daemon::site::CSP);
+            assert_eq!(h["x-content-type-options"], "nosniff");
+            assert_eq!(h["referrer-policy"], "no-referrer");
+            assert_eq!(h["cache-control"], "private, no-store");
+        }
+        assert!(mae_daemon::site::CSP.contains("script-src 'self'"));
+        assert!(!mae_daemon::site::CSP.contains("unsafe-inline"));
     }
 }
