@@ -337,3 +337,67 @@ fn an_addressing_cannot_be_built_from_a_bad_base_or_kb_id() {
     assert!(Addressing::export("//evil").is_err());
     assert!(Addressing::live("Not-Valid").is_err());
 }
+
+/// P-36: every published page that links to a page, and nothing else.
+#[test]
+fn backlinks_are_the_published_pages_that_link_here_and_nothing_else() {
+    let src = |id: &str, body: &str| SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n"),
+    };
+    let site = derive(
+        &[
+            src(
+                "a",
+                "To [[id:b-head][B's heading]] and to [[id:a][myself]].",
+            ),
+            src("b", "* Head\n:PROPERTIES:\n:ID: b-head\n:END:\nB."),
+            src("c", "To [[id:a][A]]."),
+            src("d", "To [[id:a][A]], with a note[fn:missing]."),
+            src("e", "* Private :noexport:\nTo [[id:a][A]]."),
+        ],
+        &export(),
+    );
+    assert!(!site.pages.contains_key("d"), "d is withheld");
+    let ids = |p: &str| {
+        site.pages[p]
+            .backlinks
+            .iter()
+            .map(|b| b.id.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids("b"),
+        vec!["a"],
+        "a link to a page's node is a link to the page"
+    );
+    assert_eq!(
+        ids("a"),
+        vec!["c"],
+        "not d (withheld), not e (noexport), not a itself"
+    );
+    assert_eq!(ids("c"), Vec::<&str>::new());
+    assert_eq!(site.pages["b"].backlinks[0].href, site.pages["a"].href);
+}
+
+#[test]
+fn every_fixture_backlink_is_a_published_page_that_really_links_there() {
+    let site = bundle();
+    let mut total = 0;
+    for (id, page) in &site.pages {
+        for b in &page.backlinks {
+            total += 1;
+            let from = site
+                .pages
+                .get(&b.id)
+                .unwrap_or_else(|| panic!("{} backlinks unpublished {}", id, b.id));
+            assert!(
+                from.html.contains(&format!("href=\"{}", page.href)),
+                "{} lists {} without a link",
+                id,
+                b.id
+            );
+        }
+    }
+    assert!(total > 0, "the fixture has links");
+}

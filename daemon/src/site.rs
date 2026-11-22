@@ -36,7 +36,11 @@ use mae_sync::kb::{Encryption, KbNodeDoc};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SitePage {
     /// A page: its title (raw text) and its sanitised article HTML.
-    Found { title: String, html: String },
+    Found {
+        title: String,
+        html: String,
+        backlinks: Vec<mae_site::Backlink>,
+    },
     /// Every refusal and every absence, alike.
     NotFound,
     /// The KB has more nodes than this listener derives per request.
@@ -101,6 +105,7 @@ pub async fn page(
         Ok(Some(p)) => SitePage::Found {
             title: p.title,
             html: p.html,
+            backlinks: p.backlinks,
         },
         Ok(None) | Err(_) => SitePage::NotFound,
     }
@@ -124,17 +129,47 @@ fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
 
 /// The HTML document for a found page: the core's fixed chrome around the
 /// sanitised article (added after sanitising, D19). `title` is escaped here.
-pub fn document(lang: &str, title: &str, article: &str) -> String {
+pub fn document(
+    lang: &str,
+    title: &str,
+    article: &str,
+    backlinks: &[mae_site::Backlink],
+) -> String {
+    let words = mae_site::strings::for_locale(lang);
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <link rel=\"stylesheet\" href=\"{}\">\
          <title>{}</title></head><body><main id=\"mae-main\"><article id=\"mae-article\">\
-         <h1>{}</h1>{article}</article></main></body></html>\n",
+         <h1>{}</h1>{article}</article>{}</main></body></html>\n",
         escape(lang),
         mae_site::assets::href(mae_site::assets::PALETTE),
         escape(title),
-        escape(title)
+        escape(title),
+        backlinks_nav(words.backlinks, backlinks),
+    )
+}
+
+/// The page's backlinks (P-36), named by the locale's words; nothing when
+/// no published page links here.
+fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
+    if backlinks.is_empty() {
+        return String::new();
+    }
+    let items: String = backlinks
+        .iter()
+        .map(|b| {
+            format!(
+                "<li><a href=\"{}\">{}</a></li>",
+                escape(&b.href),
+                escape(&b.title)
+            )
+        })
+        .collect();
+    format!(
+        "<nav id=\"mae-backlinks\" aria-labelledby=\"mae-backlinks-h\">\
+         <h2 id=\"mae-backlinks-h\">{}</h2><ul>{items}</ul></nav>",
+        escape(label)
     )
 }
 
@@ -165,7 +200,12 @@ mod tests {
 
     #[test]
     fn a_title_cannot_break_out_of_its_element_or_its_keyword_line() {
-        let html = document("en-US", "</title><script>alert(1)</script>", "<p>x</p>");
+        let html = document(
+            "en-US",
+            "</title><script>alert(1)</script>",
+            "<p>x</p>",
+            &[],
+        );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/title&gt;"), "{html}");
         let src = page_source("n", "T\n#+title: evil\n:END:", "b").unwrap();

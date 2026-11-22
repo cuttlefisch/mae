@@ -1397,6 +1397,10 @@
         {
           "name": "sanitize",
           "kind": "mod"
+        },
+        {
+          "name": "strings",
+          "kind": "mod"
         }
       ]
     },

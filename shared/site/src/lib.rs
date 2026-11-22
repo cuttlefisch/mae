@@ -11,6 +11,7 @@
 //!   against it with mae-org.
 //! - [`assets`]: the browser runtime's committed build, embedded and
 //!   served under content-addressed names (D2, D17).
+//! - [`strings`]: every string the engine writes, by locale (P-164).
 //! - [`sanitize`]: the final allow-list every content-derived fragment
 //!   passes (D18, D19).
 
@@ -18,6 +19,7 @@ pub mod address;
 pub mod assets;
 pub mod derive;
 pub mod sanitize;
+pub mod strings;
 
 pub use address::{AddressError, Addressing};
-pub use derive::{derive, DerivedPage, Site, SourcePage, Withheld};
+pub use derive::{derive, Backlink, DerivedPage, Site, SourcePage, Withheld};

@@ -35,6 +35,16 @@ pub struct DerivedPage {
     pub href: String,
     /// The sanitised article body.
     pub html: String,
+    /// Every published page that links to this one (P-36), by title then ID.
+    pub backlinks: Vec<Backlink>,
+}
+
+/// A page that links to another. `title` is raw text: the chrome escapes it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Backlink {
+    pub title: String,
+    pub id: String,
+    pub href: String,
 }
 
 /// Why a page was withheld (P-147, P-15). A withheld page publishes nothing,
@@ -105,6 +115,7 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
         }
     }
     let resolver = resolver(&parsed, &first, addressing);
+    let backlinks = backlinks(&parsed, &first, addressing);
 
     // Pass 2: every faithful page against the one resolver.
     for (i, _) in &first {
@@ -118,11 +129,61 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
             title: p.title.clone().unwrap_or_else(|| id.clone()),
             href,
             html: sanitize_fragment(&mae_org::to_html(&r.body)),
+            backlinks: backlinks.get(&id).cloned().unwrap_or_default(),
             id: id.clone(),
         };
         site.pages.insert(id, page);
     }
     site
+}
+
+/// Who links to whom, over the pages that publish only (P-36): a link to any
+/// node of page Q is a link to Q, a page never backlinks itself, and a link
+/// from a withheld page counts for nothing. mae-org lists only the links in
+/// rendered regions, so a `:noexport:` subtree's links do not count either.
+fn backlinks(
+    parsed: &[Parsed],
+    first: &[(usize, Rendered)],
+    addressing: &Addressing,
+) -> BTreeMap<String, Vec<Backlink>> {
+    let mut page_of: HashMap<&str, &str> = HashMap::new();
+    for (i, _) in first {
+        let p = &parsed[*i];
+        let Some(id) = p.id.as_deref() else { continue };
+        for n in &p.sem.nodes {
+            page_of.insert(n.id.as_str(), id);
+        }
+    }
+    let mut out: BTreeMap<String, std::collections::BTreeSet<Backlink>> = BTreeMap::new();
+    for (i, _) in first {
+        let p = &parsed[*i];
+        let Some(from) = p.id.as_deref() else {
+            continue;
+        };
+        let Some(href) = addressing.page_href(from) else {
+            continue;
+        };
+        let me = Backlink {
+            title: p.title.clone().unwrap_or_else(|| from.to_string()),
+            id: from.to_string(),
+            href,
+        };
+        for l in p
+            .sem
+            .links
+            .iter()
+            .filter(|l| l.kind == mae_org::LinkKind::Kb)
+        {
+            if let Some(&to) = page_of.get(l.target.as_str()) {
+                if to != from {
+                    out.entry(to.to_string()).or_default().insert(me.clone());
+                }
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect()
 }
 
 fn parse_page(source: &SourcePage) -> Parsed<'_> {

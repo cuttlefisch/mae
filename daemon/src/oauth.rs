@@ -788,9 +788,13 @@ async fn site_route(
     )
     .await
     {
-        SitePage::Found { title, html } => site_response(
+        SitePage::Found {
+            title,
+            html,
+            backlinks,
+        } => site_response(
             StatusCode::OK,
-            site::document(&config.site_locale, &title, &html),
+            site::document(&config.site_locale, &title, &html, &backlinks),
         ),
         SitePage::NotFound => not_found(),
         SitePage::TooLarge => site_response(

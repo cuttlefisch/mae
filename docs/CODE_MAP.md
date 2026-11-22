@@ -544,6 +544,7 @@ Source: `shared/site/src/lib.rs`
 | `assets` | mod |
 | `derive` | mod |
 | `sanitize` | mod |
+| `strings` | mod |
 
 ## mae-snippets
 

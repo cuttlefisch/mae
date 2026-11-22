@@ -75,7 +75,7 @@ async fn kb() -> Arc<DocStore> {
 #[tokio::test]
 async fn a_reader_gets_the_page_with_its_links_resolved_to_live_addresses() {
     let store = kb().await;
-    let SitePage::Found { title, html } =
+    let SitePage::Found { title, html, .. } =
         site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await
     else {
         panic!("the reader must get the page");
@@ -151,12 +151,12 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
         )],
     )
     .await;
-    let SitePage::Found { title, html } =
+    let SitePage::Found { title, html, .. } =
         site::page(&store, "kb-hostile", "h", Some(READER), LIMITS).await
     else {
         panic!("the page publishes, inert");
     };
-    let doc = site::document("en-US", &title, &html).to_lowercase();
+    let doc = site::document("en-US", &title, &html, &[]).to_lowercase();
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
@@ -218,11 +218,47 @@ async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
 
 #[test]
 fn a_page_links_the_palette_by_its_content_addressed_name() {
-    let html = site::document("en-US", "T", "<p>x</p>");
+    let html = site::document("en-US", "T", "<p>x</p>", &[]);
     let href = mae_site::assets::href(mae_site::assets::PALETTE);
     assert!(
         html.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
         "{html}"
     );
     assert_eq!(mae_site::assets::at(&href), Some(mae_site::assets::PALETTE));
+}
+
+#[tokio::test]
+async fn a_page_lists_its_backlinks_in_the_configured_locale_and_escapes_them() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-bl",
+        &[
+            ("target", "Target", "The page linked to.\n"),
+            (
+                "from",
+                "<b>From</b> & co",
+                "Links to [[id:target][the target]].\n",
+            ),
+        ],
+    )
+    .await;
+    let SitePage::Found {
+        title,
+        html,
+        backlinks,
+    } = site::page(&store, "kb-bl", "target", Some(READER), LIMITS).await
+    else {
+        panic!("target publishes");
+    };
+    assert_eq!(backlinks.len(), 1);
+    let en = site::document("en-US", &title, &html, &backlinks);
+    assert!(
+        en.contains(r#"<a href="/kb/kb-bl/from">&lt;b&gt;From&lt;/b&gt; &amp; co</a>"#),
+        "{en}"
+    );
+    assert!(en.contains(mae_site::strings::for_locale("en-US").backlinks));
+    let fr = site::document("fr-FR", &title, &html, &backlinks);
+    assert!(fr.contains(mae_site::strings::for_locale("fr-FR").backlinks));
+    assert!(!fr.contains(mae_site::strings::for_locale("en-US").backlinks));
 }
