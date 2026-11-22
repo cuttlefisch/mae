@@ -1,5 +1,6 @@
 {
  "requirement": "P-15",
  "exit": 1,
- "why": "two files whose names normalise to one URL"
+ "why": "two files whose names normalise to one URL",
+ "applies_when": "the engine addresses pages by file path; case-folded-ids is the same requirement for an engine addressing pages by ID"
 }

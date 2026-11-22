@@ -1,0 +1,35 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000045
+:UPDATED: 2026-02-27
+:END:
+#+title: Special blocks
+#+filetags: :reference:
+
+One block of each name an engine may style as an admonition, and one name
+no engine styles specially. Each links to a page, so a link preview can be
+opened from inside it (P-52).
+
+#+begin_note
+A note, linking to [[id:1a000000-0000-4000-8000-000000000010][getting started]].
+#+end_note
+
+#+begin_tip
+A tip, linking to [[id:1a000000-0000-4000-8000-000000000020][the long page]].
+#+end_tip
+
+#+begin_important
+Something important, linking to [[id:1a000000-0000-4000-8000-000000000030][code blocks]].
+#+end_important
+
+#+begin_warning
+A warning, linking to [[id:1a000000-0000-4000-8000-000000000040][diagrams]].
+#+end_warning
+
+#+begin_caution
+A caution, linking to [[id:1a000000-0000-4000-8000-000000000002][what's new]].
+#+end_caution
+
+#+begin_aside
+An aside, a block name no engine styles specially, linking to
+[[id:1a000000-0000-4000-8000-000000000001][the home page]].
+#+end_aside

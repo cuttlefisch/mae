@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: Case-Folded
+:END:
+#+title: Upper
+
+One of two IDs equal under case-folding.
