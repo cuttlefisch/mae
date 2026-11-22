@@ -42,6 +42,7 @@ pub enum SitePage {
         html: String,
         backlinks: Vec<mae_site::Backlink>,
         tags: Vec<(String, String)>,
+        toc: Vec<mae_site::TocEntry>,
     },
     /// A listing the engine generates: the tag index or one tag's pages, as
     /// `(text, href)` entries.
@@ -180,6 +181,7 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
                     .iter()
                     .map(|t| (t.clone(), addressing.tag_href(t)))
                     .collect(),
+                toc: p.toc.clone(),
             },
             None => SitePage::NotFound,
         },
@@ -228,17 +230,42 @@ pub fn document(
     article: &str,
     backlinks: &[mae_site::Backlink],
     tags: &[(String, String)],
+    toc: &[mae_site::TocEntry],
 ) -> String {
     let words = mae_site::strings::for_locale(lang);
     shell(
         lang,
         title,
         &format!(
-            "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>{}",
+            "{}<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>{}",
+            toc_nav(words.contents, toc),
             escape(title),
             tags_list(words.tags, tags),
             backlinks_nav(words.backlinks, backlinks),
         ),
+    )
+}
+
+/// The page's table of contents (P-79): one link per heading, to the id the
+/// heading carries on this page; nothing for a page with fewer than two.
+fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
+    if toc.len() < 2 {
+        return String::new();
+    }
+    let items: String = toc
+        .iter()
+        .map(|e| {
+            format!(
+                "<li class=\"mae-toc-l{}\"><a href=\"#{}\">{}</a></li>",
+                e.level,
+                escape(&e.anchor),
+                escape(&e.text)
+            )
+        })
+        .collect();
+    format!(
+        "<nav id=\"mae-toc\" aria-labelledby=\"mae-toc-h\"><h2 id=\"mae-toc-h\">{}</h2><ol>{items}</ol></nav>",
+        escape(label)
     )
 }
 
@@ -347,6 +374,7 @@ mod tests {
             "en-US",
             "</title><script>alert(1)</script>",
             "<p>x</p>",
+            &[],
             &[],
             &[],
         );

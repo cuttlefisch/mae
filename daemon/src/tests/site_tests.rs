@@ -156,7 +156,7 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
     else {
         panic!("the page publishes, inert");
     };
-    let doc = site::document("en-US", &title, &html, &[], &[]).to_lowercase();
+    let doc = site::document("en-US", &title, &html, &[], &[], &[]).to_lowercase();
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
@@ -218,7 +218,7 @@ async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
 
 #[test]
 fn a_page_links_the_palette_by_its_content_addressed_name() {
-    let html = site::document("en-US", "T", "<p>x</p>", &[], &[]);
+    let html = site::document("en-US", "T", "<p>x</p>", &[], &[], &[]);
     let href = mae_site::assets::href(mae_site::assets::PALETTE);
     assert!(
         html.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
@@ -253,13 +253,13 @@ async fn a_page_lists_its_backlinks_in_the_configured_locale_and_escapes_them() 
         panic!("target publishes");
     };
     assert_eq!(backlinks.len(), 1);
-    let en = site::document("en-US", &title, &html, &backlinks, &[]);
+    let en = site::document("en-US", &title, &html, &backlinks, &[], &[]);
     assert!(
         en.contains(r#"<a href="/kb/kb-bl/from">&lt;b&gt;From&lt;/b&gt; &amp; co</a>"#),
         "{en}"
     );
     assert!(en.contains(mae_site::strings::for_locale("en-US").backlinks));
-    let fr = site::document("fr-FR", &title, &html, &backlinks, &[]);
+    let fr = site::document("fr-FR", &title, &html, &backlinks, &[], &[]);
     assert!(fr.contains(mae_site::strings::for_locale("fr-FR").backlinks));
     assert!(!fr.contains(mae_site::strings::for_locale("en-US").backlinks));
 }
@@ -310,7 +310,7 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     else {
         panic!("page a");
     };
-    let doc = site::document("en-US", &title, &html, &[], &tags);
+    let doc = site::document("en-US", &title, &html, &[], &tags, &[]);
     assert!(
         doc.contains(r#"<a href="/kb/kb-tags/tags/only_a">only_a</a>"#),
         "{doc}"
@@ -320,4 +320,55 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
         listing.contains("lang=\"fr-FR\"") && listing.contains("shared"),
         "{listing}"
     );
+}
+
+#[tokio::test]
+async fn a_page_with_two_headings_has_a_toc_linking_to_their_anchors() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-toc",
+        &[
+            ("two", "Two", "* First & <one>\ntext\n* Second\nmore\n"),
+            ("one", "One", "* Only\ntext\n"),
+        ],
+    )
+    .await;
+    let page = |id: &'static str| {
+        let s = store.clone();
+        async move { site::page(&s, "kb-toc", id, Some(READER), LIMITS).await }
+    };
+    let SitePage::Found {
+        title, html, toc, ..
+    } = page("two").await
+    else {
+        panic!("two");
+    };
+    assert_eq!(toc.len(), 2);
+    let doc = site::document("en-US", &title, &html, &[], &[], &toc);
+    assert!(
+        doc.contains(r#"<nav id="mae-toc" aria-labelledby="mae-toc-h">"#),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(&format!(
+            r##"<a href="#{}">First &amp; &lt;one&gt;</a>"##,
+            toc[0].anchor
+        )),
+        "{doc}"
+    );
+    for e in &toc {
+        assert!(
+            doc.contains(&format!("id=\"{}\"", e.anchor)),
+            "{} has no target",
+            e.anchor
+        );
+    }
+    let SitePage::Found {
+        title, html, toc, ..
+    } = page("one").await
+    else {
+        panic!("one");
+    };
+    assert!(!site::document("en-US", &title, &html, &[], &[], &toc).contains("mae-toc"));
 }

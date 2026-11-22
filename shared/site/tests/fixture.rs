@@ -521,3 +521,47 @@ fn tag_addresses_sit_below_the_tag_index() {
         assert!(!mae_site::address::valid_tag(bad), "{bad}");
     }
 }
+
+/// P-79: a page's TOC lists its rendered headings in order, each anchor an id
+/// the page's HTML really carries.
+#[test]
+fn the_toc_lists_every_rendered_heading_with_a_real_anchor() {
+    let site = bundle();
+    let mut pages_with_toc = 0;
+    for p in site.pages.values() {
+        for e in &p.toc {
+            assert!((1..=6).contains(&e.level));
+            assert!(
+                p.html.contains(&format!("id=\"{}\"", e.anchor)),
+                "{}: {} not on the page",
+                p.id,
+                e.anchor
+            );
+        }
+        let headings = (1..=6)
+            .map(|l| p.html.matches(&format!("<h{l} ")).count())
+            .sum::<usize>();
+        assert_eq!(
+            p.toc.len(),
+            headings,
+            "{}: one entry per rendered heading",
+            p.id
+        );
+        pages_with_toc += usize::from(p.toc.len() >= 2);
+    }
+    assert!(pages_with_toc >= 1, "the long page at least");
+    let pg = |body: &str| SourcePage {
+        origin: "t.org".into(),
+        text: format!(":PROPERTIES:\n:ID: t\n:END:\n#+title: T\n\n{body}\n"),
+    };
+    let site = derive(
+        &[pg("* One\n** Two\n* Hidden :noexport:\n* Three")],
+        &export(),
+    );
+    let texts: Vec<(u8, &str)> = site.pages["t"]
+        .toc
+        .iter()
+        .map(|e| (e.level, e.text.as_str()))
+        .collect();
+    assert_eq!(texts, vec![(1, "One"), (2, "Two"), (1, "Three")]);
+}

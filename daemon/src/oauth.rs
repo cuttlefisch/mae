@@ -803,9 +803,10 @@ async fn site_route(
             html,
             backlinks,
             tags,
+            toc,
         } => site_response(
             StatusCode::OK,
-            site::document(&config.site_locale, &title, &html, &backlinks, &tags),
+            site::document(&config.site_locale, &title, &html, &backlinks, &tags, &toc),
         ),
         SitePage::Listing { kind, items } => site_response(
             StatusCode::OK,

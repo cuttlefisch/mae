@@ -39,6 +39,19 @@ pub struct DerivedPage {
     pub backlinks: Vec<Backlink>,
     /// Its valid Org file tags (P-73), each once, in written order.
     pub tags: Vec<String>,
+    /// Its headings in order, each with the anchor the page gives it (P-79).
+    pub toc: Vec<TocEntry>,
+}
+
+/// One heading of a page's table of contents. `text` is raw text: the
+/// chrome escapes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TocEntry {
+    /// 1 to 6, as rendered.
+    pub level: u8,
+    pub text: String,
+    /// The heading's own id on the page: every heading mae-org renders has one.
+    pub anchor: String,
 }
 
 /// A page another page refers to: a backlink, a tag page's entry. `title` is
@@ -143,6 +156,7 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
             html: sanitize_fragment(&mae_org::to_html(&r.body)),
             backlinks: backlinks.get(&id).cloned().unwrap_or_default(),
             tags: page_tags(&p.sem),
+            toc: toc(&r.body),
             id: id.clone(),
         };
         for t in &page.tags {
@@ -207,6 +221,41 @@ fn backlinks(
     out.into_iter()
         .map(|(k, v)| (k, v.into_iter().collect()))
         .collect()
+}
+
+/// A page's headings in document order, from the rendered tree, so every
+/// anchor is an id the page really has (P-79). A heading inside an unrendered
+/// subtree is not in the tree, so not in the TOC.
+fn toc(body: &[mae_org::Node]) -> Vec<TocEntry> {
+    fn walk(nodes: &[mae_org::Node], out: &mut Vec<TocEntry>) {
+        for n in nodes {
+            let mae_org::Node::Element(e) = n else {
+                continue;
+            };
+            let level = match e.tag {
+                mae_org::Tag::H1 => 1,
+                mae_org::Tag::H2 => 2,
+                mae_org::Tag::H3 => 3,
+                mae_org::Tag::H4 => 4,
+                mae_org::Tag::H5 => 5,
+                mae_org::Tag::H6 => 6,
+                _ => {
+                    walk(&e.children, out);
+                    continue;
+                }
+            };
+            if let Some(anchor) = e.get(mae_org::Attr::Id) {
+                out.push(TocEntry {
+                    level,
+                    text: mae_org::text_of(&e.children),
+                    anchor: anchor.to_string(),
+                });
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, &mut out);
+    out
 }
 
 /// A page's valid file tags (P-73), each once, in written order.

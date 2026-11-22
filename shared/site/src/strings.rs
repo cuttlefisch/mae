@@ -12,6 +12,8 @@ pub struct Strings {
     pub locale: &'static str,
     /// The heading and accessible name of a page's backlinks.
     pub backlinks: &'static str,
+    /// The heading and accessible name of a page's table of contents.
+    pub contents: &'static str,
     /// The tag index's heading, and the accessible name of a page's tags.
     pub tags: &'static str,
     /// One tag's page heading, around the tag: `open` + tag + `close`.
@@ -22,6 +24,7 @@ pub struct Strings {
 const EN_US: Strings = Strings {
     locale: "en-US",
     backlinks: "Links to this page",
+    contents: "Contents",
     tags: "Tags",
     tag_page_open: "Pages tagged \u{201c}",
     tag_page_close: "\u{201d}",
@@ -29,6 +32,7 @@ const EN_US: Strings = Strings {
 const FR_FR: Strings = Strings {
     locale: "fr-FR",
     backlinks: "Liens vers cette page",
+    contents: "Sommaire",
     tags: "\u{c9}tiquettes",
     tag_page_open: "Pages \u{e9}tiquet\u{e9}es \u{ab}\u{a0}",
     tag_page_close: "\u{a0}\u{bb}",
@@ -51,6 +55,7 @@ mod tests {
         let (en, fr) = (for_locale("en-US"), for_locale("fr-FR"));
         assert_ne!(en.backlinks, fr.backlinks);
         assert_ne!(en.tags, fr.tags);
+        assert_ne!(en.contents, fr.contents);
         assert_ne!(en.tag_page_open, fr.tag_page_open);
         assert_ne!(en.tag_page_close, fr.tag_page_close);
         assert_eq!(
