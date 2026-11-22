@@ -288,7 +288,7 @@ Conventions for acceptance tests:
 | P-141 | MUST exit 0 only when the output holds exactly the site (and the address manifest); 1 when the content or engine fails; 2 when the input breaks the contract; 3 when the environment cannot render (retryable). | Each negative fixture below yields its code; the clean fixture yields 0 and exactly the expected top-level entries. |
 | P-142 | MUST refuse a bundle containing any symbolic link (exit 2), without following it. | Bundle with a link to a system file: exit 2; the target's content is absent. |
 | P-143 | MUST refuse a non-empty output directory (exit 2). | Second run into the same output: exit 2. |
-| P-144 | MUST NOT write outside the output directory, including through aliases or permalinks with `..`; such an attempt fails (exit 1). | Fixture with an escaping alias: exit 1; nothing beside the site directory. |
+| P-144 | MUST NOT write outside the output directory, including through aliases *(new: not guaranteed by today's site, which publishes no alias pages from an org bundle)* or permalinks with `..`; such an attempt fails (exit 1). | Fixture with an escaping alias: exit 1; nothing beside the site directory. |
 | P-145 | MUST fail (exit 1) when any extension, plugin or component fails to load or start, or any emitter fails. | Remove or break one extension module: exit 1. |
 | P-146 | MUST fail (exit 1) on any log line outside the documented allow-list of clean-build lines. | Inject an unknown warning: exit 1; the line is echoed to stderr. |
 | P-147 | MUST fail (exit 1) when a node is withheld: no file ID, emptied by macros, macro call (while macros are unsupported), undefined footnote, duplicate ID. | One fixture per reason: exit 1; summary line names the count. |
