@@ -1,0 +1,49 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000040
+:END:
+#+title: Diagrams
+#+filetags: :reference:diagrams:
+
+Diagrams drawn at build time. Each case is its own block.
+
+* Default colours
+#+CAPTION: A diagram in default colours
+#+begin_src dot
+digraph { a -> b -> c }
+#+end_src
+
+* An author fill under text
+#+CAPTION: Text on an author fill
+#+begin_src dot
+digraph { node [style=filled, fillcolor="#3366cc", fontcolor="#ffffff"]; a -> b }
+#+end_src
+
+* A role map
+#+CAPTION: Colours that are palette roles
+#+begin_src dot
+digraph G { edge [color="#555555"]; subgraph cluster_1 { style="rounded,filled"; fillcolor="#e8f0fb"; color="#878787"; a [shape=box, style="rounded,filled", fillcolor=white]; b [shape=box, style="rounded,filled", fillcolor=white] } c [shape=box, style="rounded,filled", fillcolor=white]; a -> b; b -> c [color="#e65100", style=bold]; c -> a [color="#c62828", fontcolor="#c62828", style=dashed, arrowhead=tee, xlabel="blocks"] }
+#+end_src
+
+* Linked nodes
+#+CAPTION: A diagram whose nodes link to pages
+#+begin_src dot
+digraph { home [URL="id:1a000000-0000-4000-8000-000000000001"]; guide [URL="id:1a000000-0000-4000-8000-000000000010"]; home -> guide }
+#+end_src
+
+* A tall diagram
+#+CAPTION: A tall chain
+#+begin_src dot
+digraph { n0 -> n1 -> n2 -> n3 -> n4 -> n5 -> n6 -> n7 -> n8 -> n9 -> n10 -> n11 -> n12 -> n13 -> n14 -> n15 -> n16 -> n17 -> n18 -> n19 -> n20 -> n21 -> n22 -> n23 }
+#+end_src
+
+* A small diagram
+#+CAPTION: A single node
+#+begin_src dot
+digraph { only }
+#+end_src
+
+* A broken diagram
+#+CAPTION: A DOT syntax error
+#+begin_src dot
+digraph { a -> }
+#+end_src

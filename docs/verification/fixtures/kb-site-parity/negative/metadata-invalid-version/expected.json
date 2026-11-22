@@ -1,0 +1,7 @@
+{
+ "requirement": "P-150",
+ "exit": 0,
+ "log": "invalid version data",
+ "feature": "no version footer, no site-changes page",
+ "data": "version.json is not schema 1"
+}

@@ -1,0 +1,6 @@
+{
+ "requirement": "P-150",
+ "exit": 0,
+ "log": "what's-new target is not a published page",
+ "feature": "no what's-new link"
+}

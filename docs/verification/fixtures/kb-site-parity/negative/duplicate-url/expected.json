@@ -1,0 +1,5 @@
+{
+ "requirement": "P-15",
+ "exit": 1,
+ "why": "two files whose names normalise to one URL"
+}

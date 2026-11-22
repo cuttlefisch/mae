@@ -1,0 +1,15 @@
+# The site configuration both engines build with (kb-site-parity, §4.2).
+locale: en-US
+title: Parity fixture
+base_path: /
+kb_id: parity-fixture
+palette: neutral
+hidden_namespaces: [internal]
+descending_folders: [journal]
+whats_new: 1a000000-0000-4000-8000-000000000002
+version_data: data/version
+route_history: data/route-history.json
+slots:
+  before_body: [state-badge, last-updated]
+  header_row: [copy-link]
+  left_panel_footer: [version-footer]

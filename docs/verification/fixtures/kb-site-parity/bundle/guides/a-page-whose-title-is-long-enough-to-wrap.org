@@ -1,0 +1,7 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000013
+:END:
+#+title: A page whose title is long enough to wrap in the explorer, the header and every graph label that shows it
+#+filetags: :guides:
+
+Its title tests wrapping. It links to [[id:1a000000-0000-4000-8000-000000000010][Getting started]].

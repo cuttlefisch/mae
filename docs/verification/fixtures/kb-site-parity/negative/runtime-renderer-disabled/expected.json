@@ -1,0 +1,5 @@
+{
+ "requirement": "P-118",
+ "exit": 3,
+ "runtime": "the runner disables the diagram renderer in the sandbox; nothing is published"
+}

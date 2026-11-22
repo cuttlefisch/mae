@@ -1,0 +1,13 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000002
+:END:
+#+title: What's new
+#+filetags: :fixture:
+
+The page the "what's new" link points to. Its entries are invented.
+
+* Version 2
+Two pages were added and one was renamed.
+
+* Version 1
+The first version of the fixture.
