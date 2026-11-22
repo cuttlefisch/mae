@@ -1,4 +1,4 @@
-name: Perf (growth ratios, non-gating)
+name: Perf (growth ratios and idle CPU, non-gating)
 
 # The tests that measure time: each checks that a cost grows linearly, not
 # quadratically, by comparing a small and a 16x larger input in equal-length
@@ -8,6 +8,9 @@ name: Perf (growth ratios, non-gating)
 # normal suites and run here daily and on demand. A failure here is a
 # regression to investigate (GitHub notifies the owner of a failed scheduled
 # run); it blocks nothing.
+#
+# The headless idle-CPU budget (#968) runs here too: a CPU percentage over a
+# wall-clock window is the same kind of measurement.
 
 on:
   schedule:
@@ -43,3 +46,7 @@ jobs:
           grows_linearly scan_the_corpus
         env:
           MAE_KB_LIFECYCLE: "1"
+      - name: Headless idle CPU (after boot settles, issue #968)
+        run: >-
+          cargo nextest run -p mae --test headless_idle_cpu_e2e --no-capture
+          --run-ignored only

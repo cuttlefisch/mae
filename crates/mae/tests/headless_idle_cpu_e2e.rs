@@ -10,6 +10,13 @@
 //! short idle window (no MCP session ever connects) and computes CPU% from
 //! the delta. Linux-only (matches `headless_e2e.rs`'s own
 //! `#![cfg(target_os = "linux")]` precedent -- `/proc` is Linux-specific).
+//!
+//! The sample starts once boot has finished, not after a fixed delay (#968).
+//! The instance is a first run (fresh `HOME`, no cache), so it ingests the
+//! manual, seeds its store and builds the practices KBs first: 10 s or more of
+//! a full core on a laptop's debug build. A fixed 2 s settle sampled that boot.
+//! It is a CPU budget, so it is non-gating: `#[ignore]`d here and run daily by
+//! `.github/workflows/perf.yml`.
 
 #![cfg(target_os = "linux")]
 
@@ -36,7 +43,29 @@ fn read_cpu_ticks(pid: u32) -> (u64, u64) {
     (utime, stime)
 }
 
+/// Wait until `pid` has used at most `quiet` ticks in each of `seconds`
+/// consecutive one-second windows: boot is over. Panics after `limit`.
+async fn wait_until_settled(pid: u32, quiet: u64, seconds: u32, limit: Duration) {
+    let start = Instant::now();
+    let total = |p| {
+        let (u, s) = read_cpu_ticks(p);
+        u + s
+    };
+    let (mut prev, mut calm) = (total(pid), 0);
+    while calm < seconds {
+        assert!(
+            start.elapsed() < limit,
+            "headless instance never settled within {limit:?} of boot"
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let now = total(pid);
+        calm = if now - prev <= quiet { calm + 1 } else { 0 };
+        prev = now;
+    }
+}
+
 #[tokio::test]
+#[ignore = "CPU budget: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
 async fn idle_headless_instance_uses_bounded_near_zero_cpu() {
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path().join("project");
@@ -50,10 +79,11 @@ async fn idle_headless_instance_uses_bounded_near_zero_cpu() {
         spawn_isolated_headless(&project_root, &xdg_config, &xdg_data, tmp.path(), None);
     let pid = guard.pid();
 
-    // Let post-boot initialization settle (LSP/KB federation background
-    // work, any startup-only bursts) before starting the idle-CPU sample --
-    // this test measures STEADY-STATE idle, not boot cost.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Let boot finish (corpus ingest, store seeding, KB builds, LSP/KB
+    // federation background work) before the sample: this test measures
+    // STEADY-STATE idle, not boot cost. Settled = at most 2 ticks (20 ms of CPU)
+    // in each of 2 consecutive seconds, well under the 5 % bar sampled below.
+    wait_until_settled(pid, 2, 2, Duration::from_secs(120)).await;
 
     let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     assert!(clk_tck > 0, "sysconf(_SC_CLK_TCK) returned {clk_tck}");

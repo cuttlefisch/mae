@@ -802,6 +802,10 @@
           "kind": "mod"
         },
         {
+          "name": "edge_cache",
+          "kind": "mod"
+        },
+        {
           "name": "embedding_client",
           "kind": "mod"
         },
@@ -902,6 +906,10 @@
           "kind": "mod"
         },
         {
+          "name": "SEED_SOURCE_VERSION",
+          "kind": "const"
+        },
+        {
           "name": "NodeKind",
           "kind": "enum"
         },
@@ -928,10 +936,6 @@
         {
           "name": "Node",
           "kind": "struct"
-        },
-        {
-          "name": "parse_links",
-          "kind": "fn"
         },
         {
           "name": "compute_code_block_ranges",

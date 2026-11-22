@@ -331,7 +331,9 @@ fn disposition_for(path: &Path, bytes: Vec<u8>) -> FileDisposition {
             }
         }
     };
-    let nodes = crate::org::parse_org_multi(&content);
+    // The parse ingest uses (`org_ingest`), so a dry run cannot disagree
+    // with the import it plans (#941 R4).
+    let nodes = crate::org_ingest::parse_nodes(&content);
     if nodes.is_empty() {
         return FileDisposition::Skipped {
             reason: "no node with an :ID: property".to_string(),
@@ -952,11 +954,13 @@ mod tests {
         write(d.path(), "none.org", &node_file("b1", "None"));
         // A genuinely multi-node file needs HEADINGS: a second file-level
         // drawer does not make a second node, it makes one node with a
-        // confused header. Verified against `parse_org_multi`, not assumed.
+        // confused header. An INDENTED star is not a heading either (mae-org,
+        // as Org; the old parser read one): this fixture once had one by
+        // accident of a string continuation.
         write(
             d.path(),
             "part.org",
-            "* C1\n:PROPERTIES:\n:ID: c1\n:END:\nbody\n\n             * C2\n:PROPERTIES:\n:ID: c2\n:END:\nbody\n",
+            "* C1\n:PROPERTIES:\n:ID: c1\n:END:\nbody\n\n* C2\n:PROPERTIES:\n:ID: c2\n:END:\nbody\n",
         );
 
         let present = ["a1", "c1"];

@@ -288,7 +288,15 @@ weeks.*
   - the O3 renderers and highlights;
   - a conformance harness (`shared/org/conformance`, including the divergence register).
 - **`shared/org-wasm`** is its WASM facade.
-- **Its consumers today** are the daemon (`daemon/Cargo.toml`, used in `daemon/src/seed/split.rs`) and
-  the WASM facade.
-- **O4 is not done.** No editor crate depends on `mae-org`. KB ingest, node-buffer saves, agenda,
-  export, the highlighter and read mode still use their own parsers.
+- **Its consumers today** are the daemon (`daemon/Cargo.toml`, used in `daemon/src/seed/split.rs`), the
+  WASM facade and `mae-kb` (`shared/kb/src/org_ingest.rs`).
+- **O4 is in progress (#941).** KB ingest (every `.org` → node path) and stored-edge derivation run on
+  `mae-org`; a stored body keeps each link's ADR-030 query, so typed edges are a projection of the body
+  on every write path (#854). Export moved earlier (#942). The node-buffer save's segmentation, the
+  highlighter and read mode still use their own parsers, and `shared/kb/src/org.rs` is not yet deleted.
+- **The switch repairs what the old ingest stored.** A store's first open with the new derivation writes
+  each typed edge that survived only as a `links` row back into its node's body, and rewrites the old
+  store form `[[TARGET|DESCRIPTION]]` inside table rows (where the bar splits the cell) to Org's
+  `[[TARGET][DESCRIPTION]]`. Both go through the node write, with history and a backup. A file-backed KB
+  is not force-re-ingested at upgrade: measured in minutes for a large KB, on the editor's startup
+  path. Its files move to the new ingest as they change, or at once with a full `kb_reimport`.

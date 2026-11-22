@@ -2456,7 +2456,7 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                             editor.kb.primary.stamp_source_for(
                                 &report.ingested_ids,
                                 mae_kb::NodeSource::Seed,
-                                1,
+                                mae_kb::SEED_SOURCE_VERSION,
                             );
                             info!(
                                 nodes = report.indexed,

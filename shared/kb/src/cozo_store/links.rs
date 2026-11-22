@@ -6,35 +6,26 @@ use super::util::{btree_params, cozo_err, dv_str, parse_link_row};
 use super::*;
 
 impl CozoKbStore {
-    /// Links are parsed from the body with the same typed parser the daemon
-    /// projector uses (`daemon/src/projector.rs::project_node`): ADR-030 text is
-    /// truth and the `links` rows are its projection, `?rel=&w=&c=` honoured
-    /// rather than every edge hardcoded to `related_to`.
-    ///
-    /// The graph edges a node's body declares — the ONE derivation every write
-    /// path stores (the editor's `insert_node` and the daemon projector, which
-    /// used to filter differently, principle #8):
-    /// - typed links parsed per ADR-030 (`?rel=&w=&c=`);
-    /// - external URLs dropped: a link in the TEXT, not an edge in the GRAPH (an
-    ///   edge to a node that cannot exist is a permanent "broken link" in
-    ///   kb_health);
-    /// - one edge per `(dst, rel_type)`, the LAST in body order — what the old
-    ///   per-link `:put`s left behind, kept so stored graphs do not change.
+    /// The graph edges a node's body declares -- the ONE derivation every
+    /// write path stores (the editor's `insert_node` and the daemon projector,
+    /// which goes through it, principle #8), and what
+    /// [`Self::rederive_all_links`] re-applies when [`super::DERIVATION_VERSION`]
+    /// moves:
+    /// - [`Node::edges`]: `mae-org`'s KB links (ADR-112 O4), `?rel=&w=&c=`
+    ///   honoured (ADR-030). A web, mail, file, `help:` or citation link, a
+    ///   local `[[#c]]`/`[[*h]]`/`[[(r)]]`, and a link in a comment, an
+    ///   excluded subtree or verbatim text is text, not an edge;
+    /// - one edge per `(dst, rel_type)`, the LAST in body order -- what the
+    ///   old per-link `:put`s left behind, kept so stored graphs do not
+    ///   change.
     pub fn derived_links(node: &Node) -> Vec<(String, String, f64, f64)> {
-        let mut out: Vec<(String, String, f64, f64)> = Vec::new();
-        for l in crate::org::parse_typed_links(&node.body, &node.id) {
-            if crate::org::is_external_link_target(&l.target) {
-                continue;
-            }
-            match out
-                .iter_mut()
-                .find(|(d, r, _, _)| *d == l.target && *r == l.rel_type)
-            {
-                Some(existing) => *existing = (l.target, l.rel_type, l.weight, l.confidence),
-                None => out.push((l.target, l.rel_type, l.weight, l.confidence)),
-            }
-        }
-        out
+        crate::org_ingest::edge_rows(node.edges().iter())
+    }
+
+    /// The `meta_members` rows a node's body declares: its `#+TRANSCLUDE:`
+    /// members `(member, role)`, in document order (ADR-112 O4).
+    pub fn derived_members(node: &Node) -> Vec<(String, String)> {
+        crate::org_ingest::transclusions_of_body(&node.body)
     }
 
     /// The body of [`KbStore::insert_node`]: the node row, its link
@@ -59,7 +50,7 @@ impl CozoKbStore {
                 ])
             })
             .collect();
-        let member_rows: Vec<DataValue> = crate::org::parse_transclusion_directives(&node.body)
+        let member_rows: Vec<DataValue> = Self::derived_members(node)
             .into_iter()
             .enumerate()
             .map(|(position, (member_id, role))| {
@@ -199,6 +190,23 @@ impl CozoKbStore {
             .filter_map(|row| parse_link_row(row))
             .collect())
     }
+    /// The relationships [`Self::seed_typed_relationships`] writes, `(src,
+    /// dst, rel_type, weight)`. Only code-generated ones remain here: content
+    /// relationships (lesson↔concept, concept↔concept, tutorial chains) are
+    /// inline typed links in `assets/manual/*.org`. A row of this set is
+    /// re-seeded on every open of a primary store, so no body declares it and
+    /// the typed-link repair leaves it alone (`typed_repair`).
+    pub const SEEDED_RELATIONSHIPS: &'static [(&'static str, &'static str, &'static str, f64)] = &[
+        // Index categorizes — kept because index.org links are plain links
+        // and these establish the top-level graph structure.
+        ("index", "concept:buffer", "categorizes", 1.0),
+        ("index", "concept:mode", "categorizes", 1.0),
+        ("index", "concept:ai-as-peer", "categorizes", 1.0),
+        ("index", "concept:knowledge-base", "categorizes", 1.0),
+        ("index", "concept:scheme-api", "categorizes", 1.0),
+        ("index", "concept:debugging", "categorizes", 1.0),
+    ];
+
     /// Seed typed relationships between known seed nodes.
     ///
     /// Since v0.13.0, content relationships (lesson→concept, concept→concept)
@@ -209,22 +217,9 @@ impl CozoKbStore {
     /// Idempotent — uses :put (upsert) so re-running is safe.
     pub fn seed_typed_relationships(&self) -> Result<usize, KbStoreError> {
         let now = self.now_epoch();
-        // Only code-generated relationships remain here.
-        // Content relationships (lesson↔concept, concept↔concept, tutorial chains)
-        // are now inline typed links in assets/manual/*.org files.
-        let relationships: Vec<(&str, &str, &str, f64)> = vec![
-            // Index categorizes — kept because index.org links are plain links
-            // and these establish the top-level graph structure.
-            ("index", "concept:buffer", "categorizes", 1.0),
-            ("index", "concept:mode", "categorizes", 1.0),
-            ("index", "concept:ai-as-peer", "categorizes", 1.0),
-            ("index", "concept:knowledge-base", "categorizes", 1.0),
-            ("index", "concept:scheme-api", "categorizes", 1.0),
-            ("index", "concept:debugging", "categorizes", 1.0),
-        ];
-
+        let relationships = Self::SEEDED_RELATIONSHIPS;
         let count = relationships.len();
-        for (src, dst, rel_type, weight) in &relationships {
+        for (src, dst, rel_type, weight) in relationships {
             self.run_mut_params(
                 r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- [[$src, $dst, $rel_type, "", $weight, 1.0, $now]]
                 :put links {src, dst, rel_type => display, weight, confidence, created_at}"#,
