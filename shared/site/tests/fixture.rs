@@ -337,3 +337,282 @@ fn an_addressing_cannot_be_built_from_a_bad_base_or_kb_id() {
     assert!(Addressing::export("//evil").is_err());
     assert!(Addressing::live("Not-Valid").is_err());
 }
+
+/// P-36: every published page that links to a page, and nothing else.
+#[test]
+fn backlinks_are_the_published_pages_that_link_here_and_nothing_else() {
+    let src = |id: &str, body: &str| SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n"),
+    };
+    let site = derive(
+        &[
+            src(
+                "a",
+                "To [[id:b-head][B's heading]] and to [[id:a][myself]].",
+            ),
+            src("b", "* Head\n:PROPERTIES:\n:ID: b-head\n:END:\nB."),
+            src("c", "To [[id:a][A]]."),
+            src("d", "To [[id:a][A]], with a note[fn:missing]."),
+            src("e", "* Private :noexport:\nTo [[id:a][A]]."),
+        ],
+        &export(),
+    );
+    assert!(!site.pages.contains_key("d"), "d is withheld");
+    let ids = |p: &str| {
+        site.pages[p]
+            .backlinks
+            .iter()
+            .map(|b| b.id.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids("b"),
+        vec!["a"],
+        "a link to a page's node is a link to the page"
+    );
+    assert_eq!(
+        ids("a"),
+        vec!["c"],
+        "not d (withheld), not e (noexport), not a itself"
+    );
+    assert_eq!(ids("c"), Vec::<&str>::new());
+    assert_eq!(site.pages["b"].backlinks[0].href, site.pages["a"].href);
+}
+
+#[test]
+fn every_fixture_backlink_is_a_published_page_that_really_links_there() {
+    let site = bundle();
+    let mut total = 0;
+    for (id, page) in &site.pages {
+        for b in &page.backlinks {
+            total += 1;
+            let from = site
+                .pages
+                .get(&b.id)
+                .unwrap_or_else(|| panic!("{} backlinks unpublished {}", id, b.id));
+            assert!(
+                from.html.contains(&format!("href=\"{}", page.href)),
+                "{} lists {} without a link",
+                id,
+                b.id
+            );
+        }
+    }
+    assert!(total > 0, "the fixture has links");
+}
+
+/// The backlink count of every fixture page, as the parity suite computes it
+/// independently from the bundle's links (P-36).
+#[test]
+fn each_fixture_page_has_the_backlinks_the_parity_suite_counts() {
+    let expected: &[(&str, usize)] = &[
+        ("index.org", 3),
+        ("reference/code.org", 2),
+        ("reference/diagrams.org", 2),
+        ("reference/long-page.org", 2),
+        ("whats-new.org", 2),
+        ("guides/getting-started.org", 4),
+        ("guides/advanced/configuration.org", 1),
+        ("guides/advanced/deep/deeper/deepest-page.org", 1),
+        ("guides/a-page-whose-title-is-long-enough-to-wrap.org", 0),
+        ("journal/2026-01-15.org", 0),
+        ("journal/2026-02-15.org", 0),
+        ("journal/2026-03-15.org", 0),
+        ("reference/special-blocks.org", 0),
+        ("reference/wide-table.org", 0),
+        ("status/draft.org", 0),
+        ("status/malformed-date.org", 0),
+        ("tagging/malformed-tags.org", 0),
+    ];
+    let sources = sources(&fixture().join("bundle"));
+    assert_eq!(
+        sources.len(),
+        expected.len(),
+        "every page has an expectation"
+    );
+    let site = derive(&sources, &export());
+    for (origin, want) in expected {
+        let s = sources
+            .iter()
+            .find(|s| &s.origin == origin)
+            .unwrap_or_else(|| panic!("no {origin}"));
+        let id = mae_org::semantics(&mae_org::parse(&s.text, &mae_org::ParseOptions::default()))
+            .nodes
+            .iter()
+            .find(|n| n.origin == mae_org::NodeOrigin::File)
+            .map(|n| n.id.clone())
+            .unwrap();
+        assert_eq!(site.pages[&id].backlinks.len(), *want, "{origin}");
+    }
+}
+
+/// P-70, P-71, P-73: the fixture's tags are exactly its valid file tags, each
+/// listing the pages that carry it; the malformed line yields only its one
+/// valid tag.
+#[test]
+fn tags_are_the_valid_file_tags_each_listing_its_pages() {
+    let site = bundle();
+    let tags: Vec<&str> = site.tags.keys().map(String::as_str).collect();
+    assert_eq!(
+        tags,
+        vec![
+            "advanced",
+            "code",
+            "diagrams",
+            "fixture",
+            "guides",
+            "home",
+            "journal",
+            "reference",
+            "status",
+            "valid_tag"
+        ]
+    );
+    assert_eq!(site.tags["journal"].len(), 3);
+    assert_eq!(site.tags["valid_tag"].len(), 1);
+    for (tag, pages) in &site.tags {
+        for p in pages {
+            assert!(
+                site.pages[&p.id].tags.contains(tag),
+                "{} listed under {tag} without it",
+                p.id
+            );
+        }
+    }
+    for p in site.pages.values() {
+        for t in &p.tags {
+            assert!(
+                site.tags[t].iter().any(|r| r.id == p.id),
+                "{} missing from {t}",
+                p.id
+            );
+        }
+    }
+}
+
+#[test]
+fn a_page_cannot_hold_the_tag_index_address() {
+    let pg = |id: &str| SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nx\n"),
+    };
+    for id in ["tags", "Tags"] {
+        let site = derive(&[pg(id), pg("ok")], &export());
+        assert!(!site.pages.contains_key(id), "{id}");
+        assert!(
+            matches!(site.withheld.as_slice(), [Withheld::Reserved { .. }]),
+            "{id}: {:?}",
+            site.withheld
+        );
+    }
+}
+
+#[test]
+fn tag_addresses_sit_below_the_tag_index() {
+    let live = Addressing::live("k").unwrap();
+    assert_eq!(live.tags_href(), "/kb/k/tags");
+    assert_eq!(live.tag_href("a#b"), "/kb/k/tags/a%23b");
+    let exp = export();
+    assert_eq!(exp.tags_href(), "/tags/");
+    assert_eq!(exp.tag_href("journal"), "/tags/journal/");
+    assert!(mae_site::address::valid_tag("valid_tag") && mae_site::address::valid_tag("a@b#c%d"));
+    for bad in ["path/like", "*bold*", "", "a b", "a:b"] {
+        assert!(!mae_site::address::valid_tag(bad), "{bad}");
+    }
+}
+
+/// P-79: a page's TOC lists its rendered headings in order, each anchor an id
+/// the page's HTML really carries.
+#[test]
+fn the_toc_lists_every_rendered_heading_with_a_real_anchor() {
+    let site = bundle();
+    let mut pages_with_toc = 0;
+    for p in site.pages.values() {
+        for e in &p.toc {
+            assert!((1..=6).contains(&e.level));
+            assert!(
+                p.html.contains(&format!("id=\"{}\"", e.anchor)),
+                "{}: {} not on the page",
+                p.id,
+                e.anchor
+            );
+        }
+        let headings = (1..=6)
+            .map(|l| p.html.matches(&format!("<h{l} ")).count())
+            .sum::<usize>();
+        assert_eq!(
+            p.toc.len(),
+            headings,
+            "{}: one entry per rendered heading",
+            p.id
+        );
+        pages_with_toc += usize::from(p.toc.len() >= 2);
+    }
+    assert!(pages_with_toc >= 1, "the long page at least");
+    let pg = |body: &str| SourcePage {
+        origin: "t.org".into(),
+        text: format!(":PROPERTIES:\n:ID: t\n:END:\n#+title: T\n\n{body}\n"),
+    };
+    let site = derive(
+        &[pg("* One\n** Two\n* Hidden :noexport:\n* Three")],
+        &export(),
+    );
+    let texts: Vec<(u8, &str)> = site.pages["t"]
+        .toc
+        .iter()
+        .map(|e| (e.level, e.text.as_str()))
+        .collect();
+    assert_eq!(texts, vec![(1, "One"), (2, "Two"), (1, "Three")]);
+}
+
+/// P-13, P-78: a hidden namespace's references are absent from every output,
+/// a shown one's stay; the content index names published pages only.
+#[test]
+fn hidden_namespace_references_leave_every_output_and_the_index_is_published_only() {
+    let opts = mae_site::SiteOptions {
+        hidden_namespaces: vec!["internal".into()],
+    };
+    let site = mae_site::derive_with(&sources(&fixture().join("bundle")), &export(), &opts);
+    let all = |s: &str| {
+        site.pages
+            .values()
+            .any(|p| p.html.contains(s) || p.title.contains(s))
+            || site
+                .index
+                .iter()
+                .any(|e| e.text.contains(s) || e.title.contains(s))
+    };
+    assert!(!all("internal:runbook-12"), "the hidden reference leaked");
+    assert!(all("public:glossary-7"), "the shown reference must stay");
+    assert_eq!(site.index.len(), site.pages.len(), "one entry per page");
+    for e in &site.index {
+        for l in &e.links {
+            assert!(site.pages.contains_key(l), "{} links unpublished {l}", e.id);
+        }
+        assert_eq!(e.href, site.pages[&e.id].href);
+    }
+    // Links and backlinks are one relation.
+    for p in site.pages.values() {
+        for b in &p.backlinks {
+            let from = site.index.iter().find(|e| e.id == b.id).unwrap();
+            assert!(from.links.contains(&p.id), "{} -> {} missing", b.id, p.id);
+        }
+    }
+}
+
+#[test]
+fn scrub_removes_only_whole_hidden_references_and_keeps_punctuation() {
+    let h = vec!["internal".to_string()];
+    let s = |t: &str| mae_site::scrub(t, &h);
+    assert_eq!(s("see internal:a-1, then").as_deref(), Some("see , then"));
+    assert_eq!(s("(internal:x) ok").as_deref(), Some("() ok"));
+    assert_eq!(s("internal: alone"), None, "no rest, no reference");
+    assert_eq!(
+        s("notinternal:x and xinternal:y"),
+        None,
+        "a namespace is a whole word"
+    );
+    assert_eq!(s("public:x"), None);
+    assert_eq!(mae_site::scrub("internal:x", &[]), None);
+}

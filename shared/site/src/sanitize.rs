@@ -151,3 +151,44 @@ fn builder() -> ammonia::Builder<'static> {
 pub fn sanitize_fragment(html: &str) -> String {
     builder().clean(html).to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// The allow-list is exactly mae-org's vocabulary, both ways: a tag or an
+    /// attribute mae-org adds later fails here rather than being stripped
+    /// silently, and nothing mae-org never writes is admitted.
+    #[test]
+    fn the_allow_list_is_mae_orgs_vocabulary() {
+        let ours: BTreeSet<&str> = TAGS.iter().copied().collect();
+        let theirs: BTreeSet<&str> = mae_org::TAGS.iter().map(|t| t.as_str()).collect();
+        assert_eq!(ours, theirs, "tags");
+
+        let ours: BTreeSet<(&str, &str)> = TAG_ATTRS
+            .iter()
+            .flat_map(|(t, attrs)| attrs.iter().map(move |a| (*t, *a)))
+            .collect();
+        let theirs: BTreeSet<(&str, &str)> = mae_org::ATTRIBUTES
+            .iter()
+            .filter_map(|(t, a)| t.map(|t| (t.as_str(), a.as_str())))
+            .collect();
+        assert_eq!(ours, theirs, "per-tag attributes");
+
+        // The generic ones (any tag) are exactly class and id.
+        let generic: BTreeSet<&str> = mae_org::ATTRIBUTES
+            .iter()
+            .filter(|(t, _)| t.is_none())
+            .map(|(_, a)| a.as_str())
+            .collect();
+        assert_eq!(generic, BTreeSet::from(["class", "id"]));
+        // Every class mae-org writes passes the class filter.
+        for c in mae_org::CLASSES {
+            assert!(
+                is_content_class(c) || c.ends_with('-'),
+                "{c} would be stripped"
+            );
+        }
+    }
+}
