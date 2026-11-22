@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "mae-site"
-version = "0.14.179"
+version = "0.1.0"
 dependencies = [
  "ammonia",
  "mae-org",
