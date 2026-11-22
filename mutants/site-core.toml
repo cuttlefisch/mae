@@ -9,7 +9,7 @@ targets = ["-p", "mae-site", "--test", "fixture"]
 filter = "test(a_dot_segment_id_is_withheld_and_never_becomes_an_href)"
 [[mutant.edit]]
 file = "shared/site/src/address.rs"
-find = '''    !id.is_empty() && id != "." && id != ".."'''
+find = '''    !id.is_empty() && !id.bytes().all(|b| b == b'.')'''
 replace = '''    !id.is_empty()'''
 
 [[mutant]]

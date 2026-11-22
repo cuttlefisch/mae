@@ -80,7 +80,9 @@ impl Addressing {
 /// `.` or `..`: a browser collapses those as dot segments, and percent-
 /// encoding does not stop it (the URL standard reads `%2e` as `.`).
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id != "." && id != ".."
+    // All dots: `.` and `..` are dot segments, and no longer run of dots can
+    // be an export directory (Windows drops trailing dots, leaving nothing).
+    !id.is_empty() && !id.bytes().all(|b| b == b'.')
 }
 
 /// A KB identifier: `^[a-z0-9][a-z0-9-]{0,62}$` (P-04).
@@ -153,8 +155,9 @@ mod tests {
             assert_eq!(export.page_href(bad), None, "{bad:?}");
             assert_eq!(live.page_href(bad), None, "{bad:?}");
         }
+        assert_eq!(export.page_href("..."), None);
         // Dots inside an ID are ordinary characters.
-        assert_eq!(export.page_href("...").unwrap(), "/.../");
+        assert_eq!(export.page_href("a..b").unwrap(), "/a..b/");
     }
 
     #[test]

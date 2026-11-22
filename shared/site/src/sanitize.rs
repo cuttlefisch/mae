@@ -93,7 +93,14 @@ pub fn is_content_class(c: &str) -> bool {
 /// http(s) URLs, any backslash. ammonia checks schemes, but passes relative
 /// URLs through.
 fn is_protocol_relative(url: &str) -> bool {
-    let u = url.trim_start_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
+    // As a browser reads it: tab, LF and CR are deleted from ANYWHERE in a
+    // URL (`/<TAB>/host` is `//host`), and leading C0 controls and spaces
+    // are trimmed.
+    let read: String = url
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let u = read.trim_start_matches(|c: char| c == ' ' || c.is_ascii_control());
     u.starts_with("//") || u.contains('\\')
 }
 
