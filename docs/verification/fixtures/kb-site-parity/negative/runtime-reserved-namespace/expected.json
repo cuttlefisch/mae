@@ -1,0 +1,14 @@
+{
+ "requirement": "P-166",
+ "exit": 1,
+ "runtime": "the runner copies the bundle and moves one page into a content folder named like the engine's own tag namespace (the path its tag pages are served under, which each engine declares), then builds",
+ "assert": [
+  "exit code 1",
+  "the log names the page and the namespace it collides with",
+  "no tag page and no content page is written at the colliding address"
+ ],
+ "reference": {
+  "exit": 0,
+  "why": "today's site treats such a page as one of its tag pages and drops it from the graph; failing the build is new"
+ }
+}
