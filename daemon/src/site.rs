@@ -222,7 +222,9 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
 /// node ID that could not be one property value (whitespace, nothing) has no
 /// page; a title's line breaks are folded so it stays one keyword line.
 fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
-    if node_id.is_empty() || node_id.chars().any(char::is_whitespace) {
+    // The core's own rule for an address (controls, White_Space, bidi
+    // controls, U+FEFF): one rule on every side.
+    if node_id.is_empty() || node_id.chars().any(mae_site::address::refused_in_id) {
         return None;
     }
     let title: String = title

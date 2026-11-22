@@ -117,7 +117,21 @@ pub fn valid_tag(t: &str) -> bool {
 pub fn valid_id(id: &str) -> bool {
     // All dots: `.` and `..` are dot segments, and no longer run of dots can
     // be an export directory (Windows drops trailing dots, leaving nothing).
-    !id.is_empty() && !id.bytes().all(|b| b == b'.')
+    !id.is_empty() && !id.bytes().all(|b| b == b'.') && !id.chars().any(refused_in_id)
+}
+
+/// Characters no address may hold: controls (Cc), Unicode White_Space, the
+/// bidirectional controls (an ID that reorders how it displays can pass for
+/// another), and U+FEFF. The joiners (U+200C, U+200D) are allowed: real
+/// scripts need them. The browser client's backend refuses exactly this set,
+/// so every page the daemon publishes is reachable through it.
+pub fn refused_in_id(c: char) -> bool {
+    c.is_control()
+        || c.is_whitespace()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+        )
 }
 
 /// A KB identifier: `^[a-z0-9][a-z0-9-]{0,62}$` (P-04).
@@ -191,6 +205,26 @@ mod tests {
             assert_eq!(live.page_href(bad), None, "{bad:?}");
         }
         assert_eq!(export.page_href("..."), None);
+        for bad in [
+            "a\u{0}b",
+            "a b",
+            "a\u{85}b",
+            "a\u{a0}b",
+            "a\u{2028}b",
+            "a\u{3000}b",
+            "a\u{61c}b",
+            "a\u{200e}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{feff}b",
+            "a\tb",
+        ] {
+            assert_eq!(export.page_href(bad), None, "{bad:?}");
+        }
+        // The joiners stay: real scripts need them.
+        assert!(
+            export.page_href("a\u{200c}b").is_some() && export.page_href("a\u{200d}b").is_some()
+        );
         // Dots inside an ID are ordinary characters.
         assert_eq!(export.page_href("a..b").unwrap(), "/a..b/");
     }
