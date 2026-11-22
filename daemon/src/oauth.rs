@@ -66,6 +66,8 @@ pub struct ResourceServerConfig {
     pub site_enabled: bool,
     /// `config::OAuthConfig::site_locale`.
     pub site_locale: String,
+    /// `config::OAuthConfig::site_hidden_namespaces`.
+    pub site_hidden_namespaces: Vec<String>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -723,6 +725,8 @@ pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> 
     let view = match rest.split_once('/') {
         // `tags` is reserved (a page cannot hold it, P-166): the tag index.
         None if rest == "tags" => View::Tags,
+        // Also reserved: the content index (P-77).
+        None if rest == "index.json" => View::Index,
         None => View::Page(percent_decode(rest)?),
         Some(("tags", tag)) if !tag.is_empty() && !tag.contains('/') => {
             View::Tag(percent_decode(tag)?)
@@ -795,6 +799,9 @@ async fn site_route(
             max_scan_nodes: config.kb_query_max_scan_nodes,
             max_body_bytes: config.kb_query_max_body_bytes,
         },
+        &mae_site::SiteOptions {
+            hidden_namespaces: config.site_hidden_namespaces.clone(),
+        },
     )
     .await
     {
@@ -808,6 +815,26 @@ async fn site_route(
             StatusCode::OK,
             site::document(&config.site_locale, &title, &html, &backlinks, &tags, &toc),
         ),
+        SitePage::Index(entries) => {
+            let pages: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.id, "title": e.title, "href": e.href,
+                        "tags": e.tags, "links": e.links, "text": e.text,
+                    })
+                })
+                .collect();
+            let mut r = site_response(
+                StatusCode::OK,
+                serde_json::json!({ "pages": pages }).to_string(),
+            );
+            r.headers_mut().insert(
+                "content-type",
+                hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            r
+        }
         SitePage::Listing { kind, items } => site_response(
             StatusCode::OK,
             site::listing_document(&config.site_locale, &kind, &items),

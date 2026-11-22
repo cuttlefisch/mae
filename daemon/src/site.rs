@@ -29,7 +29,7 @@
 
 use crate::doc_store::DocStore;
 use crate::kb_query;
-use mae_site::{derive, Addressing, SourcePage};
+use mae_site::{derive_with, Addressing, SourcePage};
 use mae_sync::kb::{Encryption, KbNodeDoc};
 
 /// What the route answers.
@@ -44,6 +44,8 @@ pub enum SitePage {
         tags: Vec<(String, String)>,
         toc: Vec<mae_site::TocEntry>,
     },
+    /// The content index (P-77): one entry per published page.
+    Index(Vec<mae_site::IndexEntry>),
     /// A listing the engine generates: the tag index or one tag's pages, as
     /// `(text, href)` entries.
     Listing {
@@ -74,6 +76,8 @@ pub enum View {
     Tags,
     /// `/kb/<kb-id>/tags/<tag>`.
     Tag(String),
+    /// `/kb/<kb-id>/index.json`.
+    Index,
 }
 
 /// What one page request may read (D21).
@@ -99,6 +103,7 @@ pub async fn page(
         &View::Page(id.to_string()),
         principal,
         limits,
+        &mae_site::SiteOptions::default(),
     )
     .await
 }
@@ -110,6 +115,7 @@ pub async fn view(
     view: &View,
     principal: Option<&str>,
     limits: SiteLimits,
+    opts: &mae_site::SiteOptions,
 ) -> SitePage {
     let (sources, addressing) = match readable_sources(doc_store, kb_id, principal, limits).await {
         Ok(v) => v,
@@ -117,8 +123,13 @@ pub async fn view(
     };
     // Rendering is CPU work: off the async workers.
     let view = view.clone();
+    let opts = opts.clone();
     let answered = tokio::task::spawn_blocking(move || {
-        answer(&derive(&sources, &addressing), &addressing, view)
+        answer(
+            &derive_with(&sources, &addressing, &opts),
+            &addressing,
+            view,
+        )
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)
@@ -193,6 +204,7 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
                 .map(|t| (t.clone(), addressing.tag_href(t)))
                 .collect(),
         },
+        View::Index => SitePage::Index(site.index.clone()),
         View::Tag(tag) => match site.tags.get(&tag) {
             Some(pages) => SitePage::Listing {
                 kind: Listing::Tag(tag),

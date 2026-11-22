@@ -565,3 +565,54 @@ fn the_toc_lists_every_rendered_heading_with_a_real_anchor() {
         .collect();
     assert_eq!(texts, vec![(1, "One"), (2, "Two"), (1, "Three")]);
 }
+
+/// P-13, P-78: a hidden namespace's references are absent from every output,
+/// a shown one's stay; the content index names published pages only.
+#[test]
+fn hidden_namespace_references_leave_every_output_and_the_index_is_published_only() {
+    let opts = mae_site::SiteOptions {
+        hidden_namespaces: vec!["internal".into()],
+    };
+    let site = mae_site::derive_with(&sources(&fixture().join("bundle")), &export(), &opts);
+    let all = |s: &str| {
+        site.pages
+            .values()
+            .any(|p| p.html.contains(s) || p.title.contains(s))
+            || site
+                .index
+                .iter()
+                .any(|e| e.text.contains(s) || e.title.contains(s))
+    };
+    assert!(!all("internal:runbook-12"), "the hidden reference leaked");
+    assert!(all("public:glossary-7"), "the shown reference must stay");
+    assert_eq!(site.index.len(), site.pages.len(), "one entry per page");
+    for e in &site.index {
+        for l in &e.links {
+            assert!(site.pages.contains_key(l), "{} links unpublished {l}", e.id);
+        }
+        assert_eq!(e.href, site.pages[&e.id].href);
+    }
+    // Links and backlinks are one relation.
+    for p in site.pages.values() {
+        for b in &p.backlinks {
+            let from = site.index.iter().find(|e| e.id == b.id).unwrap();
+            assert!(from.links.contains(&p.id), "{} -> {} missing", b.id, p.id);
+        }
+    }
+}
+
+#[test]
+fn scrub_removes_only_whole_hidden_references_and_keeps_punctuation() {
+    let h = vec!["internal".to_string()];
+    let s = |t: &str| mae_site::scrub(t, &h);
+    assert_eq!(s("see internal:a-1, then").as_deref(), Some("see , then"));
+    assert_eq!(s("(internal:x) ok").as_deref(), Some("() ok"));
+    assert_eq!(s("internal: alone"), None, "no rest, no reference");
+    assert_eq!(
+        s("notinternal:x and xinternal:y"),
+        None,
+        "a namespace is a whole word"
+    );
+    assert_eq!(s("public:x"), None);
+    assert_eq!(mae_site::scrub("internal:x", &[]), None);
+}

@@ -22,4 +22,7 @@ pub mod sanitize;
 pub mod strings;
 
 pub use address::{AddressError, Addressing};
-pub use derive::{derive, Backlink, DerivedPage, PageRef, Site, SourcePage, TocEntry, Withheld};
+pub use derive::{
+    derive, derive_with, scrub, Backlink, DerivedPage, IndexEntry, PageRef, Site, SiteOptions,
+    SourcePage, TocEntry, Withheld,
+};

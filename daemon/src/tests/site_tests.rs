@@ -279,7 +279,7 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     .await;
     let view = |v: site::View| {
         let s = store2.clone();
-        async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS).await }
+        async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS, &Default::default()).await }
     };
     let SitePage::Listing { kind, items } = view(site::View::Tags).await else {
         panic!("the tag index");
@@ -300,7 +300,15 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     // A stranger sees no tags either: the same not-found.
     let s = store2.clone();
     assert_eq!(
-        site::view(&s, "kb-tags", &site::View::Tags, Some(STRANGER), LIMITS).await,
+        site::view(
+            &s,
+            "kb-tags",
+            &site::View::Tags,
+            Some(STRANGER),
+            LIMITS,
+            &Default::default()
+        )
+        .await,
         SitePage::NotFound
     );
     // The page itself links its tags.
@@ -371,4 +379,59 @@ async fn a_page_with_two_headings_has_a_toc_linking_to_their_anchors() {
         panic!("one");
     };
     assert!(!site::document("en-US", &title, &html, &[], &[], &toc).contains("mae-toc"));
+}
+
+#[tokio::test]
+async fn the_content_index_lists_published_pages_without_hidden_references() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-idx",
+        &[
+            (
+                "a",
+                "Alpha",
+                "To [[id:b][Beta]] and internal:secret-7 and public:ok-1.\n",
+            ),
+            ("b", "Beta", "Beta's text.\n"),
+            ("c", "Gamma", "A note[fn:missing] to [[id:a][Alpha]].\n"),
+        ],
+    )
+    .await;
+    let opts = mae_site::SiteOptions {
+        hidden_namespaces: vec!["internal".into()],
+    };
+    let SitePage::Index(entries) = site::view(
+        &store,
+        "kb-idx",
+        &site::View::Index,
+        Some(READER),
+        LIMITS,
+        &opts,
+    )
+    .await
+    else {
+        panic!("the index");
+    };
+    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["a", "b"], "c is withheld (undefined footnote)");
+    assert_eq!(entries[0].links, vec!["b".to_string()]);
+    assert!(
+        !entries[0].text.contains("internal:secret-7"),
+        "{}",
+        entries[0].text
+    );
+    assert!(entries[0].text.contains("public:ok-1"));
+    assert_eq!(
+        site::view(
+            &store,
+            "kb-idx",
+            &site::View::Index,
+            Some(STRANGER),
+            LIMITS,
+            &opts
+        )
+        .await,
+        SitePage::NotFound
+    );
 }

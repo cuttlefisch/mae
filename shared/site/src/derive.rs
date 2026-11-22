@@ -97,6 +97,31 @@ pub struct Site {
     /// Every valid tag of a published page, with its pages by title then ID
     /// (P-70, P-71).
     pub tags: BTreeMap<String, Vec<PageRef>>,
+    /// The content index search and the graph read (P-77): one entry per
+    /// published page, by ID.
+    pub index: Vec<IndexEntry>,
+}
+
+/// One page in the content index (P-77). It names published pages only and
+/// holds no hidden-namespace reference (P-78).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub id: String,
+    pub title: String,
+    pub href: String,
+    pub tags: Vec<String>,
+    /// The published pages it links to, by ID, each once, sorted.
+    pub links: Vec<String>,
+    /// Its rendered text.
+    pub text: String,
+}
+
+/// What the site's operator configures (D3): never content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SiteOptions {
+    /// Namespaces whose references (`ns:rest`) are removed from every output
+    /// (P-13, P-78).
+    pub hidden_namespaces: Vec<String>,
 }
 
 /// The render diagnostics that withhold a page: its output would not be what
@@ -118,10 +143,15 @@ struct Parsed<'a> {
     title: Option<String>,
 }
 
-/// Derive every page of one KB.
+/// Derive every page of one KB, with no operator options.
 pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
+    derive_with(sources, addressing, &SiteOptions::default())
+}
+
+/// Derive every page of one KB under the operator's options.
+pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteOptions) -> Site {
     let mut site = Site::default();
-    let parsed: Vec<Parsed> = sources.iter().map(parse_page).collect();
+    let parsed: Vec<Parsed> = sources.iter().map(|s| parse_page(s, opts)).collect();
     let candidates = addressable(&parsed, addressing, &mut site.withheld);
 
     // Pass 1: where each page's nodes and CUSTOM_IDs land, and whether it
@@ -149,7 +179,16 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
         let Some(href) = addressing.page_href(&id) else {
             continue;
         };
-        let r = render(&p.doc, &p.sem, &options(), &resolver);
+        let mut r = render(&p.doc, &p.sem, &options(), &resolver);
+        scrub_nodes(&mut r.body, &opts.hidden_namespaces);
+        site.index.push(IndexEntry {
+            id: id.clone(),
+            title: p.title.clone().unwrap_or_else(|| id.clone()),
+            href: href.clone(),
+            tags: page_tags(&p.sem),
+            links: Vec::new(),
+            text: mae_org::text_of(&r.body),
+        });
         let page = DerivedPage {
             title: p.title.clone().unwrap_or_else(|| id.clone()),
             href,
@@ -171,7 +210,79 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
     for pages in site.tags.values_mut() {
         pages.sort();
     }
+    // Each page's outgoing links to published pages: the backlinks, inverted.
+    let mut out: BTreeMap<&str, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for page in site.pages.values() {
+        for b in &page.backlinks {
+            out.entry(b.id.as_str())
+                .or_default()
+                .insert(page.id.clone());
+        }
+    }
+    for e in &mut site.index {
+        e.links = out
+            .remove(e.id.as_str())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    }
+    site.index.sort_by(|a, b| a.id.cmp(&b.id));
     site
+}
+
+/// `s` with every reference in a hidden namespace removed: a word that starts
+/// `ns:` for a hidden `ns`, up to whitespace, keeping trailing punctuation so
+/// the sentence still reads (P-13). `None` when nothing was hidden.
+pub fn scrub(s: &str, hidden: &[String]) -> Option<String> {
+    if hidden.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut changed = false;
+    let mut rest = s;
+    while !rest.is_empty() {
+        let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (word, tail) = rest.split_at(word_end);
+        let lead = word.len() - word.trim_start_matches(|c: char| "([\"'".contains(c)).len();
+        let core = &word[lead..];
+        let trail_at = core
+            .trim_end_matches(|c: char| ".,;:!?)]\"'".contains(c))
+            .len();
+        let token = &core[..trail_at];
+        let is_hidden = token
+            .split_once(':')
+            .is_some_and(|(ns, r)| !r.is_empty() && hidden.iter().any(|h| h == ns));
+        if is_hidden {
+            out.push_str(&word[..lead]);
+            out.push_str(&core[trail_at..]);
+            changed = true;
+        } else {
+            out.push_str(word);
+        }
+        let ws_end = tail
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(tail.len());
+        out.push_str(&tail[..ws_end]);
+        rest = &tail[ws_end..];
+    }
+    changed.then_some(out)
+}
+
+fn scrub_nodes(nodes: &mut [mae_org::Node], hidden: &[String]) {
+    if hidden.is_empty() {
+        return;
+    }
+    for n in nodes {
+        match n {
+            mae_org::Node::Text(t) => {
+                if let Some(s) = scrub(t, hidden) {
+                    *t = s;
+                }
+            }
+            mae_org::Node::Element(e) => scrub_nodes(&mut e.children, hidden),
+            _ => {}
+        }
+    }
 }
 
 /// Who links to whom, over the pages that publish only (P-36): a link to any
@@ -269,12 +380,14 @@ fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
     out
 }
 
-fn parse_page(source: &SourcePage) -> Parsed<'_> {
+fn parse_page<'a>(source: &'a SourcePage, opts: &SiteOptions) -> Parsed<'a> {
     let doc = parse(&source.text, &ParseOptions::default());
     let sem = semantics(&doc);
     let file = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File);
     let id = file.map(|n| n.id.clone());
-    let title = file.and_then(|n| n.title.clone());
+    let title = file
+        .and_then(|n| n.title.clone())
+        .map(|t| scrub(&t, &opts.hidden_namespaces).unwrap_or(t));
     Parsed {
         source,
         doc,

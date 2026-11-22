@@ -129,6 +129,7 @@ mod tests {
             kb_query_enabled: false,
             site_enabled: false,
             site_locale: "en-US".to_string(),
+            site_hidden_namespaces: Vec::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
@@ -675,6 +676,10 @@ mod tests {
         );
         // The tag index and a tag's page (P-70, P-71); `tags` is reserved.
         assert_eq!(site_path("/kb/k/tags"), Some(("k".into(), View::Tags)));
+        assert_eq!(
+            site_path("/kb/k/index.json"),
+            Some(("k".into(), View::Index))
+        );
         assert_eq!(
             site_path("/kb/k/tags/a%23b"),
             Some(("k".into(), View::Tag("a#b".into())))
