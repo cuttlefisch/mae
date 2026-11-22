@@ -12,8 +12,12 @@
 //! (principle #8). The page itself comes from `mae_site::derive`, the core the
 //! static export shares.
 //!
-//! This first slice derives the KB per request, bounded by `max_scan_nodes`
-//! (D21). The derivation cache and incremental re-derivation (D6) come with the
+//! One timing difference remains by design: a member asking for a missing
+//! node waits for a derivation, while a non-member is refused at the gate. It
+//! tells a caller only whether THEY may read the KB, which they know anyway.
+//!
+//! This first slice derives the KB per request, bounded (D21) by
+//! [`SiteLimits`] and run off the async workers (`spawn_blocking`). The derivation cache and incremental re-derivation (D6) come with the
 //! change index (ADR-074 Amendment 1).
 
 use crate::doc_store::DocStore;
@@ -32,13 +36,22 @@ pub enum SitePage {
     TooLarge,
 }
 
+/// What one page request may read (D21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiteLimits {
+    /// Nodes in the KB: more, and the KB is [`SitePage::TooLarge`].
+    pub max_scan_nodes: usize,
+    /// Bytes of one node's title or body: more, and the KB is too large.
+    pub max_body_bytes: usize,
+}
+
 /// The page `id` of `kb_id`, as `principal` may read it.
 pub async fn page(
     doc_store: &DocStore,
     kb_id: &str,
     id: &str,
     principal: Option<&str>,
-    max_scan_nodes: usize,
+    limits: SiteLimits,
 ) -> SitePage {
     let Ok(addressing) = Addressing::live(kb_id) else {
         return SitePage::NotFound;
@@ -50,7 +63,7 @@ pub async fn page(
         return SitePage::NotFound;
     }
     let nodes = coll.list_nodes();
-    if nodes.len() > max_scan_nodes {
+    if nodes.len() > limits.max_scan_nodes {
         return SitePage::TooLarge;
     }
     let mut sources = Vec::with_capacity(nodes.len());
@@ -62,19 +75,27 @@ pub async fn page(
         let Ok(doc) = KbNodeDoc::from_bytes(&state) else {
             continue;
         };
-        if let Some(text) = page_source(&node_id, &doc.title(), &doc.body()) {
+        let (title, body) = (doc.title(), doc.body());
+        if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
+            return SitePage::TooLarge;
+        }
+        if let Some(text) = page_source(&node_id, &title, &body) {
             sources.push(SourcePage {
                 origin: node_id,
                 text,
             });
         }
     }
-    match derive(&sources, &addressing).pages.remove(id) {
-        Some(p) => SitePage::Found {
+    // Rendering is CPU work: off the async workers.
+    let id = id.to_string();
+    let derived =
+        tokio::task::spawn_blocking(move || derive(&sources, &addressing).pages.remove(&id)).await;
+    match derived {
+        Ok(Some(p)) => SitePage::Found {
             title: p.title,
             html: p.html,
         },
-        None => SitePage::NotFound,
+        Ok(None) | Err(_) => SitePage::NotFound,
     }
 }
 

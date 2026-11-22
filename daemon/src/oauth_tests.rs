@@ -678,6 +678,8 @@ mod tests {
             "/x/kb/k/n",
             "/kb/k/%zz",
             "/kb/k/%ff",
+            "/kb/k/%+f",
+            "/kb/k/%-1",
         ] {
             assert_eq!(site_path(bad), None, "{bad}");
         }

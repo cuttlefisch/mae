@@ -15,6 +15,17 @@ const BY: mae_daemon::doc_editors::Attribution<'static> =
     mae_daemon::doc_editors::Attribution::Principal("test-editor");
 const READER: &str = "oauth:reader@example.com";
 const STRANGER: &str = "oauth:stranger@example.com";
+const LIMITS: site::SiteLimits = site::SiteLimits {
+    max_scan_nodes: 500,
+    max_body_bytes: 65_536,
+};
+
+fn nodes(n: usize) -> site::SiteLimits {
+    site::SiteLimits {
+        max_scan_nodes: n,
+        ..LIMITS
+    }
+}
 
 /// A plaintext KB with `READER` as a viewer and these `(id, title, body)` nodes.
 async fn seed(doc_store: &DocStore, kb_id: &str, nodes: &[(&str, &str, &str)]) {
@@ -65,7 +76,7 @@ async fn kb() -> Arc<DocStore> {
 async fn a_reader_gets_the_page_with_its_links_resolved_to_live_addresses() {
     let store = kb().await;
     let SitePage::Found { title, html } =
-        site::page(&store, "kb-site", "alpha", Some(READER), 500).await
+        site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await
     else {
         panic!("the reader must get the page");
     };
@@ -86,7 +97,7 @@ async fn every_refusal_is_the_same_not_found() {
     ];
     for (kb_id, id, who) in cases {
         assert_eq!(
-            site::page(&store, kb_id, id, who, 500).await,
+            site::page(&store, kb_id, id, who, LIMITS).await,
             SitePage::NotFound,
             "{kb_id}/{id}"
         );
@@ -110,7 +121,7 @@ async fn an_end_to_end_encrypted_kb_is_not_found_even_for_a_member() {
         "secret body",
     )
     .await;
-    let got = site::page(&store, "kb-e2e", "n1", Some(&member_principal), 500).await;
+    let got = site::page(&store, "kb-e2e", "n1", Some(&member_principal), LIMITS).await;
     assert_eq!(got, SitePage::NotFound);
 }
 
@@ -118,11 +129,11 @@ async fn an_end_to_end_encrypted_kb_is_not_found_even_for_a_member() {
 async fn a_kb_larger_than_the_bound_is_refused_before_it_is_read() {
     let store = kb().await;
     assert_eq!(
-        site::page(&store, "kb-site", "alpha", Some(READER), 1).await,
+        site::page(&store, "kb-site", "alpha", Some(READER), nodes(1)).await,
         SitePage::TooLarge
     );
     assert!(matches!(
-        site::page(&store, "kb-site", "alpha", Some(READER), 2).await,
+        site::page(&store, "kb-site", "alpha", Some(READER), nodes(2)).await,
         SitePage::Found { .. }
     ));
 }
@@ -141,7 +152,7 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
     )
     .await;
     let SitePage::Found { title, html } =
-        site::page(&store, "kb-hostile", "h", Some(READER), 500).await
+        site::page(&store, "kb-hostile", "h", Some(READER), LIMITS).await
     else {
         panic!("the page publishes, inert");
     };
@@ -149,4 +160,58 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
+}
+
+#[tokio::test]
+async fn a_node_body_over_the_byte_bound_makes_the_kb_too_large() {
+    let store = fresh_doc_store().await;
+    let big = "x".repeat(2_000);
+    seed(&store, "kb-big", &[("a", "A", "small"), ("b", "B", &big)]).await;
+    let tight = site::SiteLimits {
+        max_scan_nodes: 500,
+        max_body_bytes: 1_000,
+    };
+    assert_eq!(
+        site::page(&store, "kb-big", "a", Some(READER), tight).await,
+        SitePage::TooLarge
+    );
+    assert!(matches!(
+        site::page(&store, "kb-big", "a", Some(READER), LIMITS).await,
+        SitePage::Found { .. }
+    ));
+}
+
+/// A body that declares another page's ID cannot take that page's address:
+/// the core withholds every holder of a duplicated ID, so no page serves
+/// the claimant's content at the victim's address.
+#[tokio::test]
+async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-claim",
+        &[
+            (
+                "alpha",
+                "Alpha",
+                "CLAIMANT-TEXT\n* Stolen\n:PROPERTIES:\n:ID: beta\n:END:\n",
+            ),
+            ("beta", "Beta", "VICTIM-TEXT\n"),
+        ],
+    )
+    .await;
+    for id in ["alpha", "beta"] {
+        if let SitePage::Found { html, .. } =
+            site::page(&store, "kb-claim", id, Some(READER), LIMITS).await
+        {
+            assert!(
+                !(id == "beta" && html.contains("CLAIMANT-TEXT")),
+                "beta served alpha: {html}"
+            );
+        }
+    }
+    assert_eq!(
+        site::page(&store, "kb-claim", "beta", Some(READER), LIMITS).await,
+        SitePage::NotFound
+    );
 }

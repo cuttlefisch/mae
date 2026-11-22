@@ -1,0 +1,44 @@
+# The live KB site (daemon/src/site.rs, the route in daemon/src/oauth.rs,
+# ADR-119 L1a): one mutant per guard. Tests: daemon/src/tests/site_tests.rs
+# and oauth_tests.rs.
+
+[[mutant]]
+id = "daemon-site/read-gate-bypassed"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(every_refusal_is_the_same_not_found)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''    let Ok((coll, encryption)) = kb_query::load_gated(doc_store, kb_id, principal).await else {'''
+replace = '''    let _ = principal;
+    let Ok((coll, encryption)) = kb_query::load_gated(doc_store, kb_id, None).await else {'''
+
+[[mutant]]
+id = "daemon-site/e2e-kb-served"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_end_to_end_encrypted_kb_is_not_found_even_for_a_member)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''    if !matches!(encryption, Encryption::None) {'''
+replace = '''    if false && !matches!(encryption, Encryption::None) {'''
+
+[[mutant]]
+id = "daemon-site/body-bound-dropped"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_node_body_over_the_byte_bound_makes_the_kb_too_large)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {'''
+replace = '''        if false && (title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes) {'''
+
+[[mutant]]
+id = "daemon-site/non-hex-escape-accepted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_site_path_is_one_kb_and_one_decoded_id)"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''            if !h.iter().all(u8::is_ascii_hexdigit) {'''
+replace = '''            if false && !h.iter().all(u8::is_ascii_hexdigit) {'''

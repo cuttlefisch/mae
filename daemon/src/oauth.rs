@@ -724,7 +724,11 @@ fn percent_decode(s: &str) -> Option<String> {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            let h = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            let h = b.get(i + 1..i + 3)?;
+            if !h.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            let h = std::str::from_utf8(h).ok()?;
             out.push(u8::from_str_radix(h, 16).ok()?);
             i += 3;
         } else {
@@ -757,22 +761,25 @@ async fn site_route(
         return not_found();
     }
     // A page derivation reads the whole KB: charged as a scan.
-    if mae_daemon::quota::charge_or_reject(
+    // Held for the whole request, like kb/query.*'s lease.
+    let _lease = match mae_daemon::quota::charge_or_reject(
         listener.quota.as_ref(),
         Some(&principal.principal),
         "kb/query.list",
         serde_json::Value::Null,
-    )
-    .is_err()
-    {
-        return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into());
-    }
+    ) {
+        Ok(lease) => lease,
+        Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
+    };
     match site::page(
         store,
         kb_id,
         id,
         Some(&principal.principal),
-        config.kb_query_max_scan_nodes,
+        site::SiteLimits {
+            max_scan_nodes: config.kb_query_max_scan_nodes,
+            max_body_bytes: config.kb_query_max_body_bytes,
+        },
     )
     .await
     {
