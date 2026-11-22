@@ -141,7 +141,7 @@ Conventions for acceptance tests:
 | P-49 | MUST open web links in a new tab without moving the current page, with `rel` that prevents opener access. | Browser: click opens a new page; original URL unchanged; `target=_blank`, `rel` contains `noopener`. |
 | P-50 | MUST mark web links with an icon and a visually hidden text saying they open in a new tab, in the configured locale. | Accessible name ends with the locale's "opens in a new tab" string; that text is not visible (clip/size). |
 | P-51 | MUST draw the new-tab icon at 3:1 against the page in light and dark, and keep it visible under forced colours. | Contrast ≥ 3:1 both modes; Chromium forced-colours emulation: icon pixels differ from background. |
-| P-52 | MUST keep text in previews at WCAG AA, including previews opened from inside each admonition/special-block type. | Contrast audit: one scenario per block type with a preview open; 0 violations. |
+| P-52 | MUST keep text in previews at WCAG AA, including previews opened from inside a special block of each name the engine styles distinctly (it declares the list) and of one name it does not. | Contrast audit on the fixture's special-blocks page: one scenario per block with a preview open; 0 violations. |
 
 ### 3.7 Graph
 
@@ -373,12 +373,17 @@ to the engine.
 - Run the automated text-contrast rule plus the 3:1 non-text checks (control borders, focus
   rings) on both sites, light and dark, over a scenario set covering at least: home page,
   folder listing, tag listing, a note, a diagram page, a code page, search open, a hovered
-  result, a focused result, tag search, a link preview opened from each admonition/special-
-  block type, the expanded graph, its open and close controls hovered and focused, the
+  result, a focused result, tag search, a link preview opened from inside each block of the
+  fixture's special-blocks page, the expanded graph, its open and close controls hovered and focused, the
   explorer with a folder open, and an unresolved link. The reference audit has 52 scenarios;
   the candidate's must cover at least the same states.
 - The audit itself is self-tested against pages with known verdicts (text over siblings,
   over SVG shapes, inside scaled or inner scrollers, clipped, covered, pseudo-elements).
+- Text covered by an overlay the scenario opened (search, a dialog, a menu) is not readable, so
+  it is not measured; it is counted and reported separately. Any other text whose contrast the
+  audit cannot decide fails, unless the scenario names it with a reason.
+- Focus rings are measured in keyboard modality: a key press precedes the focus, as a keyboard
+  user's would, so `:focus-visible` applies.
 
 ### 4.5 Test harness rules
 

@@ -26,6 +26,7 @@ against both.
 | =bundle/guides/a-page-…-long-title.org= | long titles (explorer, header, graph labels) |
 | =bundle/journal/= | a folder configured to list newest first |
 | =bundle/reference/long-page.org= | P-127 to P-132 (≥ 4 top sections, > 3000 characters, an author-folded section, a target inside a folded section), P-10 (section node), footnotes |
+| =bundle/reference/special-blocks.org= | P-52 (a link preview from inside each special block: note, tip, important, warning, caution, and the unstyled =aside=) |
 | =bundle/reference/wide-table.org= | P-133, P-134 (a 7-column table) |
 | =bundle/reference/code.org= | P-105 to P-110 (every supported language, a typo language, an undeclared block, exact text) |
 | =bundle/reference/diagrams.org= | P-111 to P-126 (default colours, author fill under text, role map, linked nodes, tall, small, broken) |

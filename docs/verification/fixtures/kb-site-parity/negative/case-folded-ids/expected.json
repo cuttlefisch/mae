@@ -4,7 +4,7 @@
  "why": "two IDs equal under case-folding: an engine addressing pages by ID writes them to one directory on a case-insensitive filesystem",
  "applies_when": "the engine addresses pages by ID (ADR-119 D4); duplicate-url is the same requirement for an engine addressing pages by file path",
  "reference": {
-  "exit": null,
-  "why": "to be recorded: today's site addresses pages by file path, so these two files have distinct URLs"
+  "exit": 0,
+  "why": "today's site addresses pages by file path, so the two files get distinct URLs and publish"
  }
 }
