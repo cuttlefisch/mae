@@ -77,7 +77,8 @@ Conventions for acceptance tests:
 | P-13 | MUST hide references in configured hidden namespaces (`ns:rest`) and show those in other namespaces. | Fixture with one hidden and one shown namespace reference: the first has 0 hits in output, the second is present. |
 | P-14 | MUST only make links of: published nodes, `http(s):`, `mailto:`, same-page anchors. | Every `<a href>` in the article matches one of those four forms. |
 | P-15 | MUST fail the build when two inputs map to the same URL. | Two files whose names normalise to one URL: exit 1. |
-| P-16 | MUST set `<html lang>` to the configured locale and the site title from configuration. | `lang` attribute and `<title>`/site heading match the configuration. |
+| P-16 | MUST set `<html lang>` to the configured locale, as its full BCP 47 tag (`en-US`, not `en`), and the site title from configuration. (new for the full tag: today's site sets the primary subtag only) | `lang` attribute equals the configured tag; `<title>`/site heading match the configuration. |
+| P-164 | MUST write every string the engine itself produces in the configured locale: control names, the headings and labels of the pages it generates (what's new, site changes, tag and folder listings), notices and dates. (new: not guaranteed by today's site, which writes some of its own labels in another language) | Build the fixture with `en-US`: no engine-written string outside the locale's catalogue; the same build with a second locale changes every one of them. |
 | P-17 | MUST use the node title as the page title and render body headings one level below it. | Page has one `h1` (the title); a top-level org heading is an `h2`. |
 | P-18 | MUST NOT load images from outside the site; a web image becomes a link. | Fixture with a remote image: no `<img>` with a remote `src`; an `<a>` to it exists. |
 | P-19 | MUST NOT render property drawers; their anchors remain. | No drawer text in output; the section anchor exists. |
@@ -169,9 +170,9 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
-| P-70 | MUST emit a page per tag listing every page with that tag, including org pages. (new: not guaranteed by today's site, for org pages) | Build output: each fixture tag page lists exactly the bundle's tagged nodes. |
+| P-70 | MUST emit a page per tag listing every page with that tag, including org pages. (new: not guaranteed by today's site, for org pages, whose tag index links to tag pages that do not exist) | Build output: each fixture tag page lists exactly the bundle's tagged nodes; every tag link resolves. |
 | P-71 | MUST emit a tag index listing all tags. | `tags/` index exists and lists every fixture tag. |
-| P-72 | MUST emit a listing page per folder with its pages and sub-folders. | Each fixture folder has a listing containing its children. |
+| P-72 | MUST emit a listing page per folder with its pages and sub-folders. (new: not guaranteed by today's site, for org pages) | Each fixture folder has a listing containing its children. |
 | P-73 | MUST take tags only from valid org-mode tags (letters, digits, `_ @ # %`); paths or markup in tag lines are not tags. | Fixture with a malformed tag line: no tag page for it. |
 | P-74 | MUST pass the contrast audit on tag and folder listing pages. | Contrast scenarios "tag listing", "folder listing": 0 violations. |
 
@@ -179,7 +180,7 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
-| P-75 | MUST emit an RSS feed of recent pages, including org pages. (new: not guaranteed by today's site, for org pages) | Feed validates; contains each fixture org page. |
+| P-75 | MUST emit an RSS feed of the N most recent pages by date, including org pages, where N comes from the site configuration and its default is declared by the engine. (new: not guaranteed by today's site, for org pages) | Feed validates; holds exactly the min(N, page count) most recent fixture org pages, newest first, for the engine's N (today's site: a fixed N of 10). |
 | P-76 | MUST emit a sitemap listing every page URL (no redirects) under the configured base URL. | Sitemap URL set equals the page set. |
 | P-77 | MUST emit a content index (title, tags, links, text per page) used by search and graph. | JSON parses; one entry per page; links only to published pages. |
 | P-78 | MUST NOT include unpublished IDs or hidden-namespace references in any feed or index. | Grep feeds and index for fixture unpublished IDs: 0 hits. |
@@ -196,6 +197,7 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
+| P-165 | MUST give each page exactly one main landmark (`<main>`) holding the article, with the header, side panels and footer outside it. (new: not guaranteed by today's site, which has none) | DOM: exactly one `main` (or `role=main`); the article is its descendant; no panel or header is. |
 | P-82 | MUST show no horizontal page scroll at 320, 390, 1000, 1200 and 1920 px, with panels shown, hidden, or at their maximum stored width. | Browser at each width and state: no horizontal scroll. |
 | P-83 | MUST, on wide screens, put the side panels at the viewport edges and the text in a centred column of bounded measure (reference site: 104ch). | Browser 1920 px: panels touch the edges; article width ≤ the configured measure; centred ±2 px. |
 | P-84 | MUST align the header row (Back/Forward, slotted controls, graph title) with the panel toggles, without overlap; the second line (site title, page title, graph) at one height. | Browser 1440 px: box tops within 2 px; no two boxes intersect. |
