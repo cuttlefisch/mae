@@ -64,11 +64,16 @@ pub fn contained(root: &Path, path: &Path) -> Result<PathBuf, Escape> {
 /// not through a link at the path itself; otherwise why not, in words. The
 /// rule every write confined to the self-test sandbox shares: the tool guard
 /// (`mae_ai`'s `validate_write_path`) and the editor's own save, rename and
-/// copy effects (#969). A relative `path` is refused: where it lands depends
-/// on a working directory this function does not know.
+/// copy effects (#969). A relative `path` is refused: the effect resolves it
+/// against the process's working directory, not `root`, so a relative path
+/// judged as `<root>/x` was written to `<cwd>/x`. (The editor's refusal makes
+/// its paths absolute first, against that working directory.)
 pub fn confined_write(root: &Path, path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
-        return Err("a relative path is judged against no directory here".to_string());
+        return Err(format!(
+            "give an absolute path under {}; a relative path is written outside it",
+            root.display()
+        ));
     }
     match contained(root, path) {
         Ok(out) if is_symlink(&out) => Err("it is a symbolic link".to_string()),

@@ -61,6 +61,6 @@ runner = "editor"
 targets = ["-p", "mae-ai", "--lib"]
 filter = "test(/validate_path_relative_or_home_rejected|sandbox_guard_refuses_writes_the_effect_would_land_outside/)"
 [[mutant.edit]]
-file = "crates/ai/src/executor/sandbox.rs"
-find = '''    if !expanded.is_absolute() {'''
-replace = '''    if false && !expanded.is_absolute() {'''
+file = "crates/core/src/path_confine.rs"
+find = '''    if !path.is_absolute() {'''
+replace = '''    if false && !path.is_absolute() {'''
