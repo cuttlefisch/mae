@@ -1,8 +1,10 @@
 //! One KB, derived into pages (ADR-119 D5).
 //!
 //! Two renders per page, both by mae-org. The first, against an empty
-//! resolver, finds where every node and `CUSTOM_ID` of the page landed. Those
-//! go into ONE resolver for the KB. The second renders each page against it,
+//! resolver, finds where every node and `CUSTOM_ID` of the page landed, and
+//! whether the page can be rendered faithfully at all. The faithful pages'
+//! nodes go into ONE resolver for the KB, so a link never points at a page
+//! that does not publish. The second render is each such page against it,
 //! and its HTML passes the final sanitiser.
 
 use std::collections::{BTreeMap, HashMap};
@@ -12,7 +14,7 @@ use mae_org::{
     Resolved, Resolver,
 };
 
-use crate::address::{export_collision_key, Addressing};
+use crate::address::{export_collision_key, valid_id, Addressing};
 use crate::sanitize::sanitize_fragment;
 
 /// One page's source: an Org text with a file-level `:ID:`.
@@ -24,7 +26,7 @@ pub struct SourcePage {
     pub text: String,
 }
 
-/// A derived page.
+/// A derived page. `title` is raw text: the chrome escapes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedPage {
     /// The file-level `:ID:`.
@@ -35,16 +37,21 @@ pub struct DerivedPage {
     pub html: String,
 }
 
-/// Why a page was withheld (P-147, P-15). A withheld page publishes nothing.
+/// Why a page was withheld (P-147, P-15). A withheld page publishes nothing,
+/// and no other page links to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Withheld {
     /// No file-level `:ID:`.
     NoFileId { origin: String },
-    /// The same ID on several pages: none of them publishes.
+    /// A file ID that cannot be an address: `.` or `..` (see
+    /// [`crate::address::valid_id`]).
+    InvalidId { origin: String, id: String },
+    /// One node ID on several pages, or twice on one, file-level or not:
+    /// every page holding it is withheld, so no link is decided by order.
     DuplicateId { id: String, origins: Vec<String> },
-    /// IDs equal under case-folding: one directory on a case-insensitive
-    /// filesystem, so the export cannot hold both (P-15).
-    CaseCollision { ids: Vec<String> },
+    /// File IDs that are one directory in the export (case, trailing dots):
+    /// see [`crate::address::export_collision_key`] (P-15).
+    FsCollision { ids: Vec<String> },
     /// mae-org could not render it faithfully (`kind`: its diagnostic).
     Unfaithful { id: String, kind: &'static str },
 }
@@ -58,7 +65,8 @@ pub struct Site {
 }
 
 /// The render diagnostics that withhold a page: its output would not be what
-/// the author wrote (P-147).
+/// the author wrote (P-147). None depends on the resolver, so the first
+/// render decides them.
 fn withholds(kind: &str) -> bool {
     kind.starts_with("macro_") && kind != "fragment_macro" || kind == "footnote_undefined"
 }
@@ -78,55 +86,38 @@ struct Parsed<'a> {
 /// Derive every page of one KB.
 pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
     let mut site = Site::default();
-    let parsed: Vec<Parsed> = sources
-        .iter()
-        .map(|source| {
-            let doc = parse(&source.text, &ParseOptions::default());
-            let sem = semantics(&doc);
-            let file = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File);
-            let id = file.map(|n| n.id.clone());
-            let title = file.and_then(|n| n.title.clone());
-            Parsed {
-                source,
-                doc,
-                sem,
-                id,
-                title,
-            }
-        })
-        .collect();
-    let publishable = publishable(&parsed, addressing, &mut site.withheld);
+    let parsed: Vec<Parsed> = sources.iter().map(parse_page).collect();
+    let candidates = addressable(&parsed, addressing, &mut site.withheld);
 
-    // Pass 1: where each page's nodes and CUSTOM_IDs land.
+    // Pass 1: where each page's nodes and CUSTOM_IDs land, and whether it
+    // renders faithfully.
     let empty = Resolver::default();
-    let first: Vec<(usize, Rendered)> = publishable
-        .iter()
-        .map(|&i| {
-            (
-                i,
-                render(&parsed[i].doc, &parsed[i].sem, &options(), &empty),
-            )
-        })
-        .collect();
+    let mut first: Vec<(usize, Rendered)> = Vec::new();
+    for i in candidates {
+        let p = &parsed[i];
+        let r = render(&p.doc, &p.sem, &options(), &empty);
+        match r.diagnostics.iter().find(|d| withholds(d.kind_name())) {
+            Some(d) => site.withheld.push(Withheld::Unfaithful {
+                id: p.id.clone().unwrap_or_default(),
+                kind: d.kind_name(),
+            }),
+            None => first.push((i, r)),
+        }
+    }
     let resolver = resolver(&parsed, &first, addressing);
 
-    // Pass 2: every page against the one resolver.
+    // Pass 2: every faithful page against the one resolver.
     for (i, _) in &first {
         let p = &parsed[*i];
-        let id = p.id.clone().expect("publishable pages have an ID");
-        let r = render(&p.doc, &p.sem, &options(), &resolver);
-        if let Some(d) = r.diagnostics.iter().find(|d| withholds(d.kind_name())) {
-            site.withheld.push(Withheld::Unfaithful {
-                id,
-                kind: d.kind_name(),
-            });
+        let id = p.id.clone().unwrap_or_default();
+        let Some(href) = addressing.page_href(&id) else {
             continue;
-        }
-        let html = sanitize_fragment(&mae_org::to_html(&r.body));
+        };
+        let r = render(&p.doc, &p.sem, &options(), &resolver);
         let page = DerivedPage {
             title: p.title.clone().unwrap_or_else(|| id.clone()),
-            href: addressing.page_href(&id),
-            html,
+            href,
+            html: sanitize_fragment(&mae_org::to_html(&r.body)),
             id: id.clone(),
         };
         site.pages.insert(id, page);
@@ -134,25 +125,51 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
     site
 }
 
-/// The pages that may publish: each has a file ID that no other page shares,
-/// and (for the export) no other ID equal to it under case-folding.
-fn publishable(
+fn parse_page(source: &SourcePage) -> Parsed<'_> {
+    let doc = parse(&source.text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let file = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File);
+    let id = file.map(|n| n.id.clone());
+    let title = file.and_then(|n| n.title.clone());
+    Parsed {
+        source,
+        doc,
+        sem,
+        id,
+        title,
+    }
+}
+
+/// The pages that may publish, before rendering: a valid file ID, no node ID
+/// shared with any other node of the KB, and (in the export) no file ID in
+/// the same directory as another's.
+fn addressable(
     parsed: &[Parsed],
     addressing: &Addressing,
     withheld: &mut Vec<Withheld>,
 ) -> Vec<usize> {
-    let mut by_id: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut ok: Vec<usize> = Vec::new();
     for (i, p) in parsed.iter().enumerate() {
         match &p.id {
-            Some(id) => by_id.entry(id.as_str()).or_default().push(i),
             None => withheld.push(Withheld::NoFileId {
                 origin: p.source.origin.clone(),
             }),
+            Some(id) if !valid_id(id) => withheld.push(Withheld::InvalidId {
+                origin: p.source.origin.clone(),
+                id: id.clone(),
+            }),
+            Some(_) => ok.push(i),
         }
     }
-    let mut ok = Vec::new();
-    let mut folded: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-    for (id, at) in &by_id {
+    // Every node ID, file-level or not, once in the KB.
+    let mut holders: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for &i in &ok {
+        for n in &parsed[i].sem.nodes {
+            holders.entry(n.id.as_str()).or_default().push(i);
+        }
+    }
+    let mut out_dup = vec![false; parsed.len()];
+    for (id, at) in &holders {
         if at.len() > 1 {
             let origins = at
                 .iter()
@@ -162,40 +179,60 @@ fn publishable(
                 id: id.to_string(),
                 origins,
             });
-        } else {
-            folded.entry(export_collision_key(id)).or_default().push(id);
+            for &i in at {
+                out_dup[i] = true;
+            }
         }
     }
-    let export = matches!(addressing, Addressing::Export { .. });
-    for ids in folded.values() {
-        if export && ids.len() > 1 {
-            withheld.push(Withheld::CaseCollision {
-                ids: ids.iter().map(|s| s.to_string()).collect(),
-            });
-            continue;
+    ok.retain(|&i| !out_dup[i]);
+    if addressing.is_export() {
+        let mut dirs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for &i in &ok {
+            dirs.entry(export_collision_key(
+                parsed[i].id.as_deref().unwrap_or_default(),
+            ))
+            .or_default()
+            .push(i);
         }
-        ok.extend(ids.iter().map(|id| by_id[id][0]));
+        let mut out = vec![false; parsed.len()];
+        for at in dirs.values().filter(|at| at.len() > 1) {
+            let ids = at
+                .iter()
+                .map(|&i| parsed[i].id.clone().unwrap_or_default())
+                .collect();
+            withheld.push(Withheld::FsCollision { ids });
+            for &i in at {
+                out[i] = true;
+            }
+        }
+        ok.retain(|&i| !out[i]);
     }
-    ok.sort_unstable();
     ok
 }
 
-/// The KB's one resolver: every page, every node on it at its anchor, and
-/// each page's CUSTOM_IDs (S0). A heading's UUID `CUSTOM_ID` is an ID too
-/// (D5), unless a node already holds that ID.
+/// The KB's one resolver, over the pages that will publish: every page, every
+/// node on it at its anchor, and each page's CUSTOM_IDs (S0). A heading's
+/// UUID `CUSTOM_ID` is an ID too (D5), unless a node holds that ID or two
+/// pages share the UUID: then it resolves nowhere rather than by order.
 fn resolver(parsed: &[Parsed], first: &[(usize, Rendered)], addressing: &Addressing) -> Resolver {
     let mut r = Resolver::default();
-    let mut uuid_cids: HashMap<String, Resolved> = HashMap::new();
+    let mut uuid_cids: HashMap<String, Option<Resolved>> = HashMap::new();
     for (i, rendered) in first {
         let p = &parsed[*i];
         let Some(id) = &p.id else { continue };
-        let href = addressing.page_href(id);
+        let Some(href) = addressing.page_href(id) else {
+            continue;
+        };
         let mut page =
             Resolved::new(href.clone()).with_title(p.title.clone().unwrap_or_else(|| id.clone()));
         for (c, a) in &rendered.custom_ids {
             page = page.with_custom_id(c.clone(), a.clone());
             if is_uuid(c) {
-                uuid_cids.insert(c.clone(), Resolved::new(format!("{href}#{a}")));
+                let at = Resolved::new(format!("{href}#{a}"));
+                uuid_cids
+                    .entry(c.clone())
+                    .and_modify(|e| *e = None)
+                    .or_insert(Some(at));
             }
         }
         r = r.with_target(id.clone(), page);
@@ -221,8 +258,10 @@ fn resolver(parsed: &[Parsed], first: &[(usize, Rendered)], addressing: &Address
         }
     }
     for (c, t) in uuid_cids {
-        if !r.targets.contains_key(&c) {
-            r = r.with_target(c, t);
+        if let Some(t) = t {
+            if !r.targets.contains_key(&c) {
+                r = r.with_target(c, t);
+            }
         }
     }
     r

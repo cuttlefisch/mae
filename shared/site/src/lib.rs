@@ -16,5 +16,5 @@ pub mod address;
 pub mod derive;
 pub mod sanitize;
 
-pub use address::Addressing;
+pub use address::{AddressError, Addressing};
 pub use derive::{derive, DerivedPage, Site, SourcePage, Withheld};

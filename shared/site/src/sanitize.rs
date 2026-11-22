@@ -4,14 +4,19 @@
 //! The allow-list is mae-org's output vocabulary: its `Tag` and `Attr` are
 //! closed enums, so this admits exactly what the renderer can write and
 //! nothing a page could add (raw HTML, export blocks, event handlers). A
-//! test holds the two in step (`the_allow_list_is_mae_orgs_vocabulary`).
+//! test holds the two in step (every fixture page passes through unchanged).
 //!
 //! `id` is kept only in mae-org's anchor forms (`id-`, `cid-`, `h-`/`h`,
 //! `t-N`, `r-N`, `fn-N`, `fnr-N…`), so content can never spell an id the
 //! chrome uses: the chrome's ids start with [`CHROME_ID_PREFIX`], which is
-//! none of them.
+//! none of them. The bare `h` (a heading whose title has no letter or
+//! digit) is the one anchor without a prefix: chrome code never reads a
+//! global by bare name (`window.h`), so it cannot be clobbered through it.
+//!
+//! Titles and other text the core hands the chrome are raw text: the chrome
+//! escapes them where it writes them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Every id the core's chrome writes starts with this. No mae-org anchor
 /// does, so content cannot collide with or clobber one.
@@ -59,21 +64,38 @@ pub(crate) const TAGS: &[&str] = &[
     "ul",
 ];
 
-/// mae-org's attributes (`mae_org::render::Attr`), as HTML names.
-pub(crate) const ATTRS: &[&str] = &[
-    "class",
-    "id",
-    "href",
-    "src",
-    "alt",
-    "value",
-    "scope",
-    "data-org-rel",
-    "data-org-w",
-    "data-org-c",
-    "data-org-block",
-    "data-org-params",
+/// mae-org's attributes (`mae_org::render::Attr`), each on the tags mae-org
+/// writes it on. `class` and `id` go on any tag, each filtered by value.
+pub(crate) const TAG_ATTRS: &[(&str, &[&str])] = &[
+    ("a", &["href", "data-org-rel", "data-org-w", "data-org-c"]),
+    ("img", &["src", "alt"]),
+    ("li", &["value"]),
+    ("th", &["scope"]),
+    ("div", &["data-org-block", "data-org-params"]),
 ];
+
+/// Whether one class token is mae-org's: `org-…` or `language-…`. Any other
+/// is dropped, so content cannot wear a class the chrome styles or scripts
+/// key on.
+pub fn is_content_class(c: &str) -> bool {
+    ["org-", "language-"].iter().any(|p| {
+        c.strip_prefix(p).is_some_and(|r| {
+            !r.is_empty()
+                && r.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'+' | b'#' | b'.')
+                })
+        })
+    })
+}
+
+/// A URL whose target host the browser would take from the URL itself
+/// without a scheme: `//host` and, since browsers read `\` as `//` in
+/// http(s) URLs, any backslash. ammonia checks schemes, but passes relative
+/// URLs through.
+fn is_protocol_relative(url: &str) -> bool {
+    let u = url.trim_start_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
+    u.starts_with("//") || u.contains('\\')
+}
 
 /// Whether `id` is one of mae-org's anchor forms.
 pub fn is_content_anchor(id: &str) -> bool {
@@ -92,14 +114,27 @@ pub fn is_content_anchor(id: &str) -> bool {
 
 fn builder() -> ammonia::Builder<'static> {
     let mut b = ammonia::Builder::empty();
+    let tag_attrs: HashMap<&'static str, HashSet<&'static str>> = TAG_ATTRS
+        .iter()
+        .map(|(t, a)| (*t, a.iter().copied().collect()))
+        .collect();
     b.tags(TAGS.iter().copied().collect::<HashSet<_>>())
-        .generic_attributes(ATTRS.iter().copied().collect::<HashSet<_>>())
+        .generic_attributes(["class", "id"].into_iter().collect())
+        .tag_attributes(tag_attrs)
         .url_schemes(["http", "https", "mailto"].into_iter().collect())
         .url_relative(ammonia::UrlRelative::PassThrough)
         .link_rel(None)
         .strip_comments(true)
         .attribute_filter(|_, attr, value| match attr {
             "id" if !is_content_anchor(value) => None,
+            "class" => {
+                let kept: Vec<&str> = value
+                    .split_ascii_whitespace()
+                    .filter(|c| is_content_class(c))
+                    .collect();
+                (!kept.is_empty()).then(|| kept.join(" ").into())
+            }
+            "href" | "src" if is_protocol_relative(value) => None,
             _ => Some(value.into()),
         });
     b

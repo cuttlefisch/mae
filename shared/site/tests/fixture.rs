@@ -32,8 +32,13 @@ fn sources(dir: &Path) -> Vec<SourcePage> {
 }
 
 fn export() -> Addressing {
-    Addressing::Export {
-        base: String::new(),
+    Addressing::export("").unwrap()
+}
+
+fn page(id: &str, extra: &str) -> SourcePage {
+    SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{extra}\n"),
     }
 }
 
@@ -149,10 +154,8 @@ fn the_export_refuses_ids_equal_under_case_folding_and_the_live_app_does_not() {
     let both = [page("Abc"), page("abc")];
     let site = derive(&both, &export());
     assert!(site.pages.is_empty());
-    assert!(
-        matches!(site.withheld.as_slice(), [Withheld::CaseCollision { ids }] if ids.len() == 2)
-    );
-    let live = derive(&both, &Addressing::Live { kb_id: "k".into() });
+    assert!(matches!(site.withheld.as_slice(), [Withheld::FsCollision { ids }] if ids.len() == 2));
+    let live = derive(&both, &Addressing::live("k").unwrap());
     assert_eq!(live.pages.len(), 2);
 }
 
@@ -202,8 +205,130 @@ fn the_sanitiser_strips_what_a_template_or_renderer_could_inject() {
     // And what is allowed still comes through.
     assert_eq!(
         sanitize_fragment(
-            r#"<p class="x"><a href="https://e.example/a" data-org-rel="cites">l</a></p>"#
+            r#"<p class="org-x"><a href="https://e.example/a" data-org-rel="cites">l</a></p>"#
         ),
-        r#"<p class="x"><a href="https://e.example/a" data-org-rel="cites">l</a></p>"#
+        r#"<p class="org-x"><a href="https://e.example/a" data-org-rel="cites">l</a></p>"#
     );
+}
+
+/// Each defect the first review found, as the input that triggered it.
+#[test]
+fn a_dot_segment_id_is_withheld_and_never_becomes_an_href() {
+    let site = derive(
+        &[page(".", ""), page("..", ""), page("ok", "[[id:..][up]]")],
+        &export(),
+    );
+    assert_eq!(site.pages.keys().collect::<Vec<_>>(), vec!["ok"]);
+    assert_eq!(
+        site.withheld
+            .iter()
+            .filter(|w| matches!(w, Withheld::InvalidId { .. }))
+            .count(),
+        2
+    );
+    let ok = &site.pages["ok"].html;
+    assert!(
+        !ok.contains("href=\"/../\"") && !ok.contains("href=\"/./\""),
+        "{ok}"
+    );
+}
+
+#[test]
+fn a_node_claiming_another_pages_id_withholds_both_and_links_resolve_nowhere() {
+    let thief = SourcePage {
+        origin: "b.org".into(),
+        text: ":PROPERTIES:\n:ID: b\n:END:\n#+title: B\n* Stolen\n:PROPERTIES:\n:ID: a\n:END:\n"
+            .into(),
+    };
+    let site = derive(
+        &[page("a", ""), thief, page("c", "[[id:a][to a]]")],
+        &export(),
+    );
+    assert!(
+        !site.pages.contains_key("a") && !site.pages.contains_key("b"),
+        "{:?}",
+        site.pages.keys()
+    );
+    assert!(
+        matches!(site.withheld.as_slice(), [Withheld::DuplicateId { id, origins }] if id == "a" && origins.len() == 2)
+    );
+    let c = &site.pages["c"].html;
+    assert!(c.contains("org-unresolved") && !c.contains("href="), "{c}");
+}
+
+#[test]
+fn a_page_withheld_as_unfaithful_is_not_a_link_target() {
+    let bad = page("u", "A note[fn:missing].");
+    let site = derive(&[bad, page("c", "[[id:u][to u]]")], &export());
+    assert!(matches!(
+        site.withheld.as_slice(),
+        [Withheld::Unfaithful {
+            kind: "footnote_undefined",
+            ..
+        }]
+    ));
+    let c = &site.pages["c"].html;
+    assert!(!c.contains("/u/"), "a link to an unpublished page: {c}");
+}
+
+#[test]
+fn a_uuid_custom_id_on_two_pages_resolves_nowhere() {
+    let uuid = "0a1b2c3d-0000-4000-8000-000000000abc";
+    let holder = |id: &str| {
+        SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n* S\n:PROPERTIES:\n:CUSTOM_ID: {uuid}\n:END:\n"),
+    }
+    };
+    let one = derive(
+        &[holder("p"), page("c", &format!("[[id:{uuid}][to it]]"))],
+        &export(),
+    );
+    assert!(
+        one.pages["c"].html.contains("href=\"/p/#cid-"),
+        "{}",
+        one.pages["c"].html
+    );
+    let two = derive(
+        &[
+            holder("p"),
+            holder("q"),
+            page("c", &format!("[[id:{uuid}][to it]]")),
+        ],
+        &export(),
+    );
+    assert!(
+        two.pages["c"].html.contains("org-unresolved"),
+        "{}",
+        two.pages["c"].html
+    );
+}
+
+#[test]
+fn the_sanitiser_refuses_protocol_relative_urls_spoofed_classes_and_misplaced_attributes() {
+    for (html, bad) in [
+        (r#"<a href="//evil.example/x">a</a>"#, "evil"),
+        (r#"<a href="\\evil.example/x">a</a>"#, "evil"),
+        (r#"<a href=" //evil.example/x">a</a>"#, "evil"),
+        (r#"<a href="/\evil.example/x">a</a>"#, "evil"),
+        (r#"<span href="/x" src="/y" value="1">s</span>"#, "href"),
+        (r#"<p class="mae-panel org-link">p</p>"#, "mae-panel"),
+    ] {
+        let out = sanitize_fragment(html);
+        assert!(!out.contains(bad), "{html} -> {out}");
+    }
+    assert_eq!(
+        sanitize_fragment(r#"<p class="mae-panel org-link">p</p>"#),
+        r#"<p class="org-link">p</p>"#
+    );
+    assert_eq!(
+        sanitize_fragment(r#"<p class="mae-panel">p</p>"#),
+        "<p>p</p>"
+    );
+}
+
+#[test]
+fn an_addressing_cannot_be_built_from_a_bad_base_or_kb_id() {
+    assert!(Addressing::export("//evil").is_err());
+    assert!(Addressing::live("Not-Valid").is_err());
 }
