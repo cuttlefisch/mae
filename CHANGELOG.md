@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.180] - 2026-11-22
+## [0.14.181] - 2026-11-22
 
 
 
@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 
 - *(kb)* Two tests that relied on the old ingest's header-in-body; fn-length ratchet (#941) ([662078e](https://github.com/cuttlefisch/mae/commit/662078e9f36776e5719914d5a04dbc24b464468d))
 - *(ai)* Guidance states the KB index's title, now that bodies hold content only (#941) ([b852595](https://github.com/cuttlefisch/mae/commit/b852595fbd84a9a905f4371014b4cd1518767f78))
+- *(ai)* Confine sandboxed writes on the resolved path (#967); idle-CPU waits for boot (#968) ([2778181](https://github.com/cuttlefisch/mae/commit/27781811e5c2b05d5f7dc729b0c9afd53036c838))
+- *(ai)* The test sandbox refuses relative write paths (#967 review) ([a9beb79](https://github.com/cuttlefisch/mae/commit/a9beb79e198922d82875a6bff5d8492dd351486b))
 
 ### Documentation
 
@@ -24,6 +26,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Url 2.5.9 in both workspaces (RUSTSEC-2026-0592) ([700f800](https://github.com/cuttlefisch/mae/commit/700f8005ed11fb03714225ce55c04ef8f6482460))
+- Bump version to 0.14.180 ([402f744](https://github.com/cuttlefisch/mae/commit/402f744e868349f5bd011ed0201141c1e4ccfb16))
 
 ## [0.14.179] - 2026-11-21
 
