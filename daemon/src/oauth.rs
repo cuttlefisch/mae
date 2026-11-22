@@ -677,8 +677,8 @@ async fn handle_request(
     // ADR-119 L1a: the live KB site, read-only, when enabled. Authenticated
     // like every route here; the KB's read gate decides the rest.
     if config.site_enabled {
-        if let Some((kb_id, id)) = site_path(req.uri().path()) {
-            return Ok(site_route(&req, &listener, &principal, &kb_id, &id).await);
+        if let Some((kb_id, view)) = site_path(req.uri().path()) {
+            return Ok(site_route(&req, &listener, &principal, &kb_id, &view).await);
         }
     }
 
@@ -713,13 +713,23 @@ async fn handle_request(
 
 /// `/kb/<kb-id>/<id>`, with `<id>` percent-decoded. One segment each: any
 /// other shape is not a site path.
-pub(crate) fn site_path(path: &str) -> Option<(String, String)> {
+pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> {
+    use mae_daemon::site::View;
     let rest = path.strip_prefix("/kb/")?;
-    let (kb, id) = rest.split_once('/')?;
-    if kb.is_empty() || id.is_empty() || id.contains('/') {
+    let (kb, rest) = rest.split_once('/')?;
+    if kb.is_empty() || rest.is_empty() {
         return None;
     }
-    Some((kb.to_string(), percent_decode(id)?))
+    let view = match rest.split_once('/') {
+        // `tags` is reserved (a page cannot hold it, P-166): the tag index.
+        None if rest == "tags" => View::Tags,
+        None => View::Page(percent_decode(rest)?),
+        Some(("tags", tag)) if !tag.is_empty() && !tag.contains('/') => {
+            View::Tag(percent_decode(tag)?)
+        }
+        Some(_) => return None,
+    };
+    Some((kb.to_string(), view))
 }
 
 /// `%XX` decoded; `None` for a bad escape or text that is not UTF-8.
@@ -751,7 +761,7 @@ async fn site_route(
     listener: &Listener,
     principal: &ValidatedPrincipal,
     kb_id: &str,
-    id: &str,
+    view: &mae_daemon::site::View,
 ) -> Response<Full<Bytes>> {
     use mae_daemon::site::{self, SitePage};
     let config = &listener.config;
@@ -776,10 +786,10 @@ async fn site_route(
         Ok(lease) => lease,
         Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
     };
-    match site::page(
+    match site::view(
         store,
         kb_id,
-        id,
+        view,
         Some(&principal.principal),
         site::SiteLimits {
             max_scan_nodes: config.kb_query_max_scan_nodes,
@@ -792,9 +802,14 @@ async fn site_route(
             title,
             html,
             backlinks,
+            tags,
         } => site_response(
             StatusCode::OK,
-            site::document(&config.site_locale, &title, &html, &backlinks),
+            site::document(&config.site_locale, &title, &html, &backlinks, &tags),
+        ),
+        SitePage::Listing { kind, items } => site_response(
+            StatusCode::OK,
+            site::listing_document(&config.site_locale, &kind, &items),
         ),
         SitePage::NotFound => not_found(),
         SitePage::TooLarge => site_response(

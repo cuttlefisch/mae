@@ -63,6 +63,23 @@ impl Addressing {
         matches!(self.0, Kind::Export { .. })
     }
 
+    /// The tag index (P-71): `/kb/<kb-id>/tags` live, `<base>/tags/` in the
+    /// export. [`RESERVED_IDS`] keeps a page from holding this address.
+    pub fn tags_href(&self) -> String {
+        match &self.0 {
+            Kind::Live { kb_id } => format!("/kb/{kb_id}/tags"),
+            Kind::Export { base } => format!("{base}/tags/"),
+        }
+    }
+
+    /// The page of one tag (P-70), below the tag index.
+    pub fn tag_href(&self, tag: &str) -> String {
+        match &self.0 {
+            Kind::Live { kb_id } => format!("/kb/{kb_id}/tags/{}", segment(tag)),
+            Kind::Export { base } => format!("{base}/tags/{}/", segment(tag)),
+        }
+    }
+
     /// The URL of the page whose file-level ID is `id`, if `id` can be an
     /// address ([`valid_id`]).
     pub fn page_href(&self, id: &str) -> Option<String> {
@@ -74,6 +91,24 @@ impl Addressing {
             Kind::Export { base } => format!("{base}/{}/", segment(id)),
         })
     }
+}
+
+/// IDs a page may not hold, because the engine generates that address: the
+/// tag index (P-166). Compared as the export compares directories, so `Tags`
+/// is reserved too.
+pub const RESERVED_IDS: &[&str] = &["tags"];
+
+/// Whether `id` names an address the engine generates (P-166).
+pub fn is_reserved(id: &str) -> bool {
+    RESERVED_IDS.iter().any(|r| export_collision_key(id) == *r)
+}
+
+/// Whether `t` is an Org tag: letters, digits, `_`, `@`, `#`, `%` (P-73). A
+/// path or markup in a tag line is not a tag.
+pub fn valid_tag(t: &str) -> bool {
+    !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '@' | '#' | '%'))
 }
 
 /// Whether `id` can be an address. Not empty (that would give `//`), and not

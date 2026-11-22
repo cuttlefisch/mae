@@ -664,10 +664,20 @@ mod tests {
     /// percent-decoded segment; nothing else is a site path.
     #[test]
     fn a_site_path_is_one_kb_and_one_decoded_id() {
-        assert_eq!(site_path("/kb/k/n1"), Some(("k".into(), "n1".into())));
+        use mae_daemon::site::View;
+        assert_eq!(
+            site_path("/kb/k/n1"),
+            Some(("k".into(), View::Page("n1".into())))
+        );
         assert_eq!(
             site_path("/kb/k/concept%3Abuffer"),
-            Some(("k".into(), "concept:buffer".into()))
+            Some(("k".into(), View::Page("concept:buffer".into())))
+        );
+        // The tag index and a tag's page (P-70, P-71); `tags` is reserved.
+        assert_eq!(site_path("/kb/k/tags"), Some(("k".into(), View::Tags)));
+        assert_eq!(
+            site_path("/kb/k/tags/a%23b"),
+            Some(("k".into(), View::Tag("a#b".into())))
         );
         for bad in [
             "/kb/k",
@@ -680,6 +690,9 @@ mod tests {
             "/kb/k/%ff",
             "/kb/k/%+f",
             "/kb/k/%-1",
+            "/kb/k/tags/",
+            "/kb/k/tags/a/b",
+            "/kb/k/other/a",
         ] {
             assert_eq!(site_path(bad), None, "{bad}");
         }

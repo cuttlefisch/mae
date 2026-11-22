@@ -14,7 +14,7 @@ use mae_org::{
     Resolved, Resolver,
 };
 
-use crate::address::{export_collision_key, valid_id, Addressing};
+use crate::address::{export_collision_key, is_reserved, valid_id, valid_tag, Addressing};
 use crate::sanitize::sanitize_fragment;
 
 /// One page's source: an Org text with a file-level `:ID:`.
@@ -37,11 +37,17 @@ pub struct DerivedPage {
     pub html: String,
     /// Every published page that links to this one (P-36), by title then ID.
     pub backlinks: Vec<Backlink>,
+    /// Its valid Org file tags (P-73), each once, in written order.
+    pub tags: Vec<String>,
 }
 
-/// A page that links to another. `title` is raw text: the chrome escapes it.
+/// A page another page refers to: a backlink, a tag page's entry. `title` is
+/// raw text: the chrome escapes it.
+pub type Backlink = PageRef;
+
+/// A reference to a published page.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Backlink {
+pub struct PageRef {
     pub title: String,
     pub id: String,
     pub href: String,
@@ -56,6 +62,9 @@ pub enum Withheld {
     /// A file ID that cannot be an address: `.` or `..` (see
     /// [`crate::address::valid_id`]).
     InvalidId { origin: String, id: String },
+    /// A file ID that names an address the engine generates (P-166): see
+    /// [`crate::address::RESERVED_IDS`].
+    Reserved { origin: String, id: String },
     /// One node ID on several pages, or twice on one, file-level or not:
     /// every page holding it is withheld, so no link is decided by order.
     DuplicateId { id: String, origins: Vec<String> },
@@ -72,6 +81,9 @@ pub struct Site {
     /// By file-level ID.
     pub pages: BTreeMap<String, DerivedPage>,
     pub withheld: Vec<Withheld>,
+    /// Every valid tag of a published page, with its pages by title then ID
+    /// (P-70, P-71).
+    pub tags: BTreeMap<String, Vec<PageRef>>,
 }
 
 /// The render diagnostics that withhold a page: its output would not be what
@@ -130,9 +142,20 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
             href,
             html: sanitize_fragment(&mae_org::to_html(&r.body)),
             backlinks: backlinks.get(&id).cloned().unwrap_or_default(),
+            tags: page_tags(&p.sem),
             id: id.clone(),
         };
+        for t in &page.tags {
+            site.tags.entry(t.clone()).or_default().push(PageRef {
+                title: page.title.clone(),
+                id: page.id.clone(),
+                href: page.href.clone(),
+            });
+        }
         site.pages.insert(id, page);
+    }
+    for pages in site.tags.values_mut() {
+        pages.sort();
     }
     site
 }
@@ -186,6 +209,17 @@ fn backlinks(
         .collect()
 }
 
+/// A page's valid file tags (P-73), each once, in written order.
+fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in &sem.file_tags {
+        if valid_tag(t) && !out.contains(t) {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
 fn parse_page(source: &SourcePage) -> Parsed<'_> {
     let doc = parse(&source.text, &ParseOptions::default());
     let sem = semantics(&doc);
@@ -216,6 +250,10 @@ fn addressable(
                 origin: p.source.origin.clone(),
             }),
             Some(id) if !valid_id(id) => withheld.push(Withheld::InvalidId {
+                origin: p.source.origin.clone(),
+                id: id.clone(),
+            }),
+            Some(id) if is_reserved(id) => withheld.push(Withheld::Reserved {
                 origin: p.source.origin.clone(),
                 id: id.clone(),
             }),

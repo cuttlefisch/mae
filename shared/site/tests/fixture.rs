@@ -446,3 +446,78 @@ fn each_fixture_page_has_the_backlinks_the_parity_suite_counts() {
         assert_eq!(site.pages[&id].backlinks.len(), *want, "{origin}");
     }
 }
+
+/// P-70, P-71, P-73: the fixture's tags are exactly its valid file tags, each
+/// listing the pages that carry it; the malformed line yields only its one
+/// valid tag.
+#[test]
+fn tags_are_the_valid_file_tags_each_listing_its_pages() {
+    let site = bundle();
+    let tags: Vec<&str> = site.tags.keys().map(String::as_str).collect();
+    assert_eq!(
+        tags,
+        vec![
+            "advanced",
+            "code",
+            "diagrams",
+            "fixture",
+            "guides",
+            "home",
+            "journal",
+            "reference",
+            "status",
+            "valid_tag"
+        ]
+    );
+    assert_eq!(site.tags["journal"].len(), 3);
+    assert_eq!(site.tags["valid_tag"].len(), 1);
+    for (tag, pages) in &site.tags {
+        for p in pages {
+            assert!(
+                site.pages[&p.id].tags.contains(tag),
+                "{} listed under {tag} without it",
+                p.id
+            );
+        }
+    }
+    for p in site.pages.values() {
+        for t in &p.tags {
+            assert!(
+                site.tags[t].iter().any(|r| r.id == p.id),
+                "{} missing from {t}",
+                p.id
+            );
+        }
+    }
+}
+
+#[test]
+fn a_page_cannot_hold_the_tag_index_address() {
+    let pg = |id: &str| SourcePage {
+        origin: format!("{id}.org"),
+        text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nx\n"),
+    };
+    for id in ["tags", "Tags"] {
+        let site = derive(&[pg(id), pg("ok")], &export());
+        assert!(!site.pages.contains_key(id), "{id}");
+        assert!(
+            matches!(site.withheld.as_slice(), [Withheld::Reserved { .. }]),
+            "{id}: {:?}",
+            site.withheld
+        );
+    }
+}
+
+#[test]
+fn tag_addresses_sit_below_the_tag_index() {
+    let live = Addressing::live("k").unwrap();
+    assert_eq!(live.tags_href(), "/kb/k/tags");
+    assert_eq!(live.tag_href("a#b"), "/kb/k/tags/a%23b");
+    let exp = export();
+    assert_eq!(exp.tags_href(), "/tags/");
+    assert_eq!(exp.tag_href("journal"), "/tags/journal/");
+    assert!(mae_site::address::valid_tag("valid_tag") && mae_site::address::valid_tag("a@b#c%d"));
+    for bad in ["path/like", "*bold*", "", "a b", "a:b"] {
+        assert!(!mae_site::address::valid_tag(bad), "{bad}");
+    }
+}
