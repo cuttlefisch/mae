@@ -73,6 +73,7 @@ graph TD
     mae_scheme --> mae_sync
     mae_scheme_extra --> mae_scheme
     mae_shell --> mae_mcp
+    mae_site --> mae_org
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
     mae_sync --> mae_crypto
@@ -532,6 +533,16 @@ Source: `crates/shell/src/lib.rs`
 | `path` | mod |
 | `shell_invocation` | mod |
 | `grid_types` | mod |
+
+## mae-site
+
+Source: `shared/site/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `address` | mod |
+| `derive` | mod |
+| `sanitize` | mod |
 
 ## mae-snippets
 

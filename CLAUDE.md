@@ -92,6 +92,7 @@ direction **backwards** for five leaf crates.
 | `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `ndarray`, `notify`; intra-repo `mae-sync`, `mae-mcp` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
+| `mae-site` | The web core (ADR-119): one derivation of a KB into sanitised pages, for the daemon's live app and the static export | `mae-org`, `ammonia` |
 | `mae-org` | Org parser — lossless tree, semantics, renderers (ADR-112); its own version line | `rowan` |
 | `mae-org-wasm` | WASM facade over `mae-org` for browser clients | `mae-org` |
 | `mae-crypto` | Content-key and identity crypto shared by the editor, daemon and WASM | `chacha20poly1305`, `x25519-dalek`, `ed25519-dalek`, `argon2` |

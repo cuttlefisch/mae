@@ -1,0 +1,20 @@
+//! mae-site: MAE's web core (ADR-119), the one derivation of a KB into pages
+//! shared by the live app (in the daemon) and the static export.
+//! @stability: experimental
+//!
+//! Callers hand it page sources (one Org text per page, from the store or a
+//! bundle) and an [`Addressing`]; it returns sanitised pages. No I/O, no
+//! clock, no configuration from content (D3).
+//!
+//! - [`address`]: where a page lives (D4): IDs only, never titles or paths.
+//! - [`derive`]: the resolver built once per KB (D5) and each page rendered
+//!   against it with mae-org.
+//! - [`sanitize`]: the final allow-list every content-derived fragment
+//!   passes (D18, D19).
+
+pub mod address;
+pub mod derive;
+pub mod sanitize;
+
+pub use address::{AddressError, Addressing};
+pub use derive::{derive, DerivedPage, Site, SourcePage, Withheld};

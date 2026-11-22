@@ -1,0 +1,66 @@
+# The web core's derivation and addresses (shared/site, ADR-119 L1a): one
+# mutant per defect the first review found. Tests: shared/site/tests/fixture.rs
+# and address.rs's unit tests.
+
+[[mutant]]
+id = "site-core/dot-segment-id-allowed"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(a_dot_segment_id_is_withheld_and_never_becomes_an_href)"
+[[mutant.edit]]
+file = "shared/site/src/address.rs"
+find = '''    !id.is_empty() && !id.bytes().all(|b| b == b'.')'''
+replace = '''    !id.is_empty()'''
+
+[[mutant]]
+id = "site-core/only-file-ids-checked"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(a_node_claiming_another_pages_id_withholds_both_and_links_resolve_nowhere)"
+[[mutant.edit]]
+file = "shared/site/src/derive.rs"
+find = '''        for n in &parsed[i].sem.nodes {'''
+replace = '''        for n in parsed[i].sem.nodes.iter().filter(|n| n.origin == NodeOrigin::File) {'''
+
+[[mutant]]
+id = "site-core/withheld-page-still-a-target"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(a_page_withheld_as_unfaithful_is_not_a_link_target)"
+[[mutant.edit]]
+file = "shared/site/src/derive.rs"
+find = '''            None => first.push((i, r)),
+        }'''
+replace = '''            None => {}
+        }
+        first.push((i, r));'''
+
+[[mutant]]
+id = "site-core/shared-uuid-cid-resolves-by-order"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(a_uuid_custom_id_on_two_pages_resolves_nowhere)"
+[[mutant.edit]]
+file = "shared/site/src/derive.rs"
+find = '''                    .and_modify(|e| *e = None)'''
+replace = '''                    .and_modify(|_| {})'''
+
+[[mutant]]
+id = "site-core/protocol-relative-kept"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(the_sanitiser_refuses_protocol_relative_urls_spoofed_classes_and_misplaced_attributes)"
+[[mutant.edit]]
+file = "shared/site/src/sanitize.rs"
+find = '''            "href" | "src" if is_protocol_relative(value) => None,'''
+replace = '''            "href" | "src" if false && is_protocol_relative(value) => None,'''
+
+[[mutant]]
+id = "site-core/any-class-kept"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(the_sanitiser_refuses_protocol_relative_urls_spoofed_classes_and_misplaced_attributes)"
+[[mutant.edit]]
+file = "shared/site/src/sanitize.rs"
+find = '''                    .filter(|c| is_content_class(c))'''
+replace = '''                    .filter(|c| !c.is_empty())'''

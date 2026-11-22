@@ -1,0 +1,19 @@
+[package]
+name = "mae-site"
+description = "MAE's web core (ADR-119): one derivation of a KB into pages, for the live app and the static export"
+# Its own version, not the workspace's: a crate new to the workspace would
+# otherwise go stale in Cargo.lock at every release bump made before it lands
+# on main (the bump's `cargo update -w` cannot see a crate main lacks), and the
+# next build would rewrite the lock. Bump it by hand when its API changes.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# ADR-119 D2: the core is a library the daemon uses and the static export
+# (mae-site, its own small workspace) links. No I/O here: callers hand it page
+# sources and get pages back.
+[dependencies]
+mae-org = { path = "../org" }
+# ADR-119 D18/D19: the one allow-list sanitiser for content and components.
+ammonia = "4"
