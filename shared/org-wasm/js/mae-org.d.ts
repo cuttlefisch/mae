@@ -32,7 +32,8 @@ export interface Request {
    * An `href` must be an http(s)/mailto URL or a scheme-less reference, already URL-encoded;
    * one holding a character reference (`&#…`, `&name;`) is refused like any unsafe href.
    */
-  resolver?: { targets?: Record<string, { href: string; title?: string | null }>; placeholder?: string };
+  /** `custom_ids`: the target page's CUSTOM_ID -> anchor (its `Rendered.custom_ids`); `[[id:X::#C]]` goes to `href#anchor` when C is there, else to `href` alone. */
+  resolver?: { targets?: Record<string, { href: string; title?: string | null; custom_ids?: Record<string, string> }>; placeholder?: string };
   /** For `text`: the KB node whose title and body to read. */
   node?: string;
   /** For `classifyLink`: the link path. */
@@ -196,6 +197,8 @@ export interface Rendered<T> {
    *   as nothing in `nodes` and in the drawer. The span is the drawer's.
    */
   diagnostics: { kind: string; start: number; end: number }[];
+  /** Each CUSTOM_ID of a rendered headline and the anchor its section landed on, sorted by CUSTOM_ID. */
+  custom_ids: { custom_id: string; anchor: string }[];
 }
 
 /**

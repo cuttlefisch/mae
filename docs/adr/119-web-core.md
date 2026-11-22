@@ -166,10 +166,12 @@ Resolving links into another KB needs a KB-qualified link form (ADR-105 addressi
 an ADR-030 amendment, and an identical answer for "missing" and "forbidden". That is future work, not
 L1.
 
-**Prerequisite (S0):** mae-org must honour Org's search option `id:X::#CUSTOM_ID`. It parses the option
-(`LinkClass::search`), but renders the link without the anchor, which breaks P-10. The rule: use the
-anchor only when that `CUSTOM_ID` is on the page X resolves to; otherwise link to X's page. It is never
-a placeholder and never a failure.
+**Prerequisite (S0, built in mae-org 0.10.0):** mae-org honours Org's search option
+`id:X::#CUSTOM_ID` (P-10). The rule: use the anchor only when that `CUSTOM_ID` is on the page X resolves
+to; otherwise link to X's page. It is never a placeholder and never a failure. A page's render reports
+where each of its CUSTOM_IDs landed (`Rendered::custom_ids`; not always `cid-…`, since a headline that is
+also a node is anchored at its `id-…`), and the resolver carries that map for each target
+(`Resolved::custom_ids`), so the resolver (D5) is built from the pages' own renders.
 
 The core renders with mae-org. KB ingest in the editor still uses mae-kb's older parser, because
 ADR-112's switchover (O4) is not done. Until it is, the two can disagree on edge cases. The core's
@@ -568,7 +570,7 @@ path is C13.
 Each phase carries its parity requirements' tests and their declared mutants (principle #14), and it
 grows D6's property test.
 
-- **S0.** mae-org: `id:X::#CUSTOM_ID` (D5), with tests and mutants.
+- **S0.** mae-org: `id:X::#CUSTOM_ID` (D5), with tests and mutants. *Done: mae-org 0.10.0.*
 - **L1 (first deliverable *(owner, 2026-11-18)*): the read-only live app in the daemon.** It covers
   plaintext KBs with review off (D8), and comes in three steps.
   - **L1a.** The core library: resolver, derivation, cache, sanitiser, CSP, Trusted Types, per-request

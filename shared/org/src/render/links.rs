@@ -317,17 +317,24 @@ impl Builder<'_> {
             Some(f) => self.fragment_anchor(f),
             None => None,
         };
-        if let Some(href) = self
-            .resolver
-            .targets
-            .get(&l.target)
-            .and_then(|r| safe_resolver_href(&r.href))
-        {
-            let href = match &heading {
-                Some(h) if !href.contains('#') => format!("{href}#{}", percent_encode(h)),
-                _ => href,
-            };
-            return Target::Href(href, Some(Box::new(l)));
+        // Org's `::#CUSTOM_ID` search option (ADR-119 D5): the anchor that
+        // CUSTOM_ID has on the page the link resolves to, when it is there;
+        // otherwise the page alone. It wins over a `#fragment`.
+        let custom = l
+            .search
+            .as_deref()
+            .and_then(|s| s.strip_prefix('#'))
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
+        if let Some(r) = self.resolver.targets.get(&l.target) {
+            if let Some(href) = safe_resolver_href(&r.href) {
+                let anchor = custom.as_ref().and_then(|c| r.custom_ids.get(c));
+                let href = match anchor.or(heading.as_ref()) {
+                    Some(a) if !href.contains('#') => format!("{href}#{}", percent_encode(a)),
+                    _ => href,
+                };
+                return Target::Href(href, Some(Box::new(l)));
+            }
         }
         // Unresolved: a node on this page, or (Org's fuzzy search, for a
         // link without `id:`) a target or headline of this page.
@@ -336,8 +343,10 @@ impl Builder<'_> {
         match self
             .local(|t| {
                 let node = t.nodes.get(&target)?;
-                Some(match &heading {
-                    Some(h) if t.headings.contains(h) => h.clone(),
+                let anchor = custom.as_ref().and_then(|c| t.custom_ids.get(c));
+                Some(match (anchor, &heading) {
+                    (Some(a), _) => a.clone(),
+                    (None, Some(h)) if t.headings.contains(h) => h.clone(),
                     _ => node.clone(),
                 })
             })

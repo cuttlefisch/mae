@@ -755,10 +755,14 @@ pub(crate) fn rendering_outside(
             (second.run(&root), second.found)
         };
         let (nodes, _) = super::meta::nodes(p, cx.clone(), sem, &opts, resolver, &found);
+        // Only what renders OUTSIDE the span is compared: the page's
+        // CUSTOM_ID map (`Rendered::custom_ids`) covers the whole page,
+        // the edited body included, so it is not part of this rendering.
         let rendered = super::Rendered {
             body: built,
             nodes,
             diagnostics: Vec::new(),
+            custom_ids: Vec::new(),
         };
         out.push_str(&super::hast::rendered_json(
             &rendered,

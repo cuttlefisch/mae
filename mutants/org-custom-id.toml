@@ -1,0 +1,24 @@
+# [[id:X::#CUSTOM_ID]] (ADR-119 S0, D5): the renderer's two lookups of a
+# link's ::#CUSTOM_ID, in shared/org/src/render/links.rs. Tests:
+# shared/org/tests/custom_id_links.rs.
+
+[[mutant]]
+id = "org-custom-id/resolver-anchor-ignored"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "custom_id_links"]
+filter = "test(a_link_to_another_page_lands_on_the_custom_id_or_on_the_page)"
+[[mutant.edit]]
+file = "shared/org/src/render/links.rs"
+find = '''                let anchor = custom.as_ref().and_then(|c| r.custom_ids.get(c));'''
+replace = '''                let anchor: Option<&String> = None;
+                let _ = (&custom, &r.custom_ids);'''
+
+[[mutant]]
+id = "org-custom-id/page-anchor-ignored"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "custom_id_links"]
+filter = "test(a_link_on_the_target_page_itself_uses_the_page_s_own_anchors)"
+[[mutant.edit]]
+file = "shared/org/src/render/links.rs"
+find = '''                let anchor = custom.as_ref().and_then(|c| t.custom_ids.get(c));'''
+replace = '''                let anchor: Option<&String> = None;'''
