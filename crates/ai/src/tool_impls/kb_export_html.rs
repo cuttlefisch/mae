@@ -557,6 +557,7 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
+    editor.refuse_untrusted_write(&out_path, mae_core::editor::WriteOrigin::Agent)?;
     write_export(&out_path, &html)?;
 
     Ok(format!(

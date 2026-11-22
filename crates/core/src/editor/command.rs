@@ -390,6 +390,16 @@ impl Editor {
                     let idx = self.active_buffer_idx();
                     if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                         let new = std::path::PathBuf::from(new_path);
+                        // An AI-originated rename is a write at both ends (#969).
+                        if let Err(e) = self
+                            .refuse_untrusted_write(&old_path, super::WriteOrigin::Command)
+                            .and_then(|()| {
+                                self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
+                            })
+                        {
+                            self.set_status(e);
+                            return true;
+                        }
                         match std::fs::rename(&old_path, &new) {
                             Ok(()) => {
                                 self.buffers[idx].set_file_path(new.clone());
@@ -419,6 +429,12 @@ impl Editor {
                     let idx = self.active_buffer_idx();
                     if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                         let new = std::path::PathBuf::from(new_path);
+                        if let Err(e) =
+                            self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
+                        {
+                            self.set_status(e);
+                            return true;
+                        }
                         match std::fs::copy(&old_path, &new) {
                             Ok(_) => {
                                 self.open_file(new.display().to_string());

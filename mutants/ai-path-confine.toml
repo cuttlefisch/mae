@@ -1,14 +1,14 @@
-# Path confinement for AI writes (crates/ai/src/path_confine.rs, #967): the
+# Path confinement for AI writes (crates/core/src/path_confine.rs, #967): the
 # self-test sandbox (executor/sandbox.rs) and the guidance export share it.
 # Each mutant removes one guard; the named test must catch it.
 
 [[mutant]]
 id = "ai-path-confine/parent-dir-allowed"
 runner = "editor"
-targets = ["-p", "mae-ai", "--lib"]
+targets = ["-p", "mae-core", "--lib"]
 filter = "test(a_traversal_through_a_missing_directory_is_refused_relative_and_absolute)"
 [[mutant.edit]]
-file = "crates/ai/src/path_confine.rs"
+file = "crates/core/src/path_confine.rs"
 find = '''    if !plain {
         return Err(Escape::ParentDir);
     }'''
@@ -17,20 +17,20 @@ replace = '''    let _ = plain;'''
 [[mutant]]
 id = "ai-path-confine/lexical-compare"
 runner = "editor"
-targets = ["-p", "mae-ai", "--lib"]
+targets = ["-p", "mae-core", "--lib"]
 filter = "test(a_link_inside_the_root_that_points_out_is_followed_before_judging)"
 [[mutant.edit]]
-file = "crates/ai/src/path_confine.rs"
+file = "crates/core/src/path_confine.rs"
 find = '''    if !existing_real.starts_with(&root_real) || out_is_root(&out, &existing_real, &root_real) {'''
 replace = '''    if !out.starts_with(root) || out_is_root(&out, &existing_real, &root_real) {'''
 
 [[mutant]]
 id = "ai-path-confine/root-accepted"
 runner = "editor"
-targets = ["-p", "mae-ai", "--lib"]
+targets = ["-p", "mae-core", "--lib"]
 filter = "test(the_root_itself_and_a_sibling_sharing_its_name_prefix_are_outside)"
 [[mutant.edit]]
-file = "crates/ai/src/path_confine.rs"
+file = "crates/core/src/path_confine.rs"
 find = '''    existing_real == root_real && out.symlink_metadata().is_ok()'''
 replace = '''    let _ = (out, existing_real, root_real);
     false'''
@@ -38,10 +38,10 @@ replace = '''    let _ = (out, existing_real, root_real);
 [[mutant]]
 id = "ai-path-confine/dangling-link-skipped"
 runner = "editor"
-targets = ["-p", "mae-ai", "--lib"]
+targets = ["-p", "mae-core", "--lib"]
 filter = "test(a_dangling_link_is_refused_and_a_final_link_is_reported)"
 [[mutant.edit]]
-file = "crates/ai/src/path_confine.rs"
+file = "crates/core/src/path_confine.rs"
 find = '''        .find(|a| a.symlink_metadata().is_ok())'''
 replace = '''        .find(|a| a.exists())'''
 
@@ -51,9 +51,9 @@ runner = "editor"
 targets = ["-p", "mae-ai", "--lib"]
 filter = "test(validate_path_through_a_final_symlink_rejected)"
 [[mutant.edit]]
-file = "crates/ai/src/executor/sandbox.rs"
-find = '''        Ok(out) if is_symlink(&out) => outside("it is a symbolic link".to_string()),'''
-replace = '''        Ok(out) if false && is_symlink(&out) => outside("it is a symbolic link".to_string()),'''
+file = "crates/core/src/path_confine.rs"
+find = '''        Ok(out) if is_symlink(&out) => Err("it is a symbolic link".to_string()),'''
+replace = '''        Ok(out) if false && is_symlink(&out) => Err("it is a symbolic link".to_string()),'''
 
 [[mutant]]
 id = "ai-path-confine/sandbox-relative-allowed"

@@ -3291,6 +3291,7 @@ dependencies = [
  "tree-sitter-yaml",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "uuid",
 ]
 
 [[package]]

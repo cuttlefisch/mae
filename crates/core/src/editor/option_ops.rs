@@ -1790,7 +1790,7 @@ impl super::Editor {
     /// replicated at each of them (principle #15: one owner, not N copies).
     ///
     /// The condition is AI-origin, not tier, matching
-    /// `Editor::refuse_ai_save_of_protected_config`: a human's `:set-save`
+    /// `Editor::refuse_untrusted_write`: a human's `:set-save`
     /// must keep working, since init.scm is *their* primary config surface.
     /// Gating on tier instead would break the human path and still leave a
     /// Privileged agent able to make its own authority permanent.

@@ -17,9 +17,9 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
     let result = match call.name.as_str() {
         "ai_save" => execute_ai_save(editor, &call.arguments),
         "ai_load" => execute_ai_load(editor, &call.arguments),
-        "save_memory" => execute_save_memory(&call.arguments),
-        "create_plan" => execute_create_plan(&call.arguments),
-        "update_plan" => execute_update_plan(&call.arguments),
+        "save_memory" => execute_save_memory(editor, &call.arguments),
+        "create_plan" => execute_create_plan(editor, &call.arguments),
+        "update_plan" => execute_update_plan(editor, &call.arguments),
         "mouse_event" => execute_mouse_event(editor, &call.arguments),
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
         "introspect" => execute_introspect(editor, &call.arguments),

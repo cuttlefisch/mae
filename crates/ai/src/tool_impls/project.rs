@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use mae_core::Editor;
 
 pub fn execute_project_info(editor: &Editor) -> Result<String, String> {
@@ -144,7 +146,7 @@ pub fn execute_switch_project(
     Ok(format!("Switched to project '{}' at {}", name, path_str))
 }
 
-pub fn execute_save_memory(args: &serde_json::Value) -> Result<String, String> {
+pub fn execute_save_memory(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let fact = args
         .get("fact")
         .and_then(|v| v.as_str())
@@ -154,6 +156,7 @@ pub fn execute_save_memory(args: &serde_json::Value) -> Result<String, String> {
         .map_err(|e| format!("failed to get current dir: {}", e))?
         .join(".mae/memory");
 
+    editor.refuse_write_outside_test_sandbox(&mae_dir)?;
     if !mae_dir.exists() {
         std::fs::create_dir_all(&mae_dir)
             .map_err(|e| format!("failed to create memory dir: {}", e))?;
@@ -165,13 +168,44 @@ pub fn execute_save_memory(args: &serde_json::Value) -> Result<String, String> {
         .as_secs();
     let filename = format!("memory_{}.txt", timestamp);
     let path = mae_dir.join(filename);
+    editor.refuse_write_outside_test_sandbox(&path)?;
 
     std::fs::write(&path, fact).map_err(|e| format!("failed to write memory: {}", e))?;
 
     Ok(format!("Fact remembered in {}", path.display()))
 }
 
-pub fn execute_create_plan(args: &serde_json::Value) -> Result<String, String> {
+/// The file a plan called `name` lives in: `<cwd>/.mae/plans/<name>.md`.
+///
+/// `name` must be one plain file name. It was joined onto the plans directory
+/// unchecked, so `../../x` or an absolute `/elsewhere/CLAUDE.md` wrote a
+/// Markdown file anywhere, past every check `create_file` applies (#969). And
+/// while a test sandbox is active the plan must land inside it.
+fn plan_file(editor: &Editor, name: &str) -> Result<PathBuf, String> {
+    let mut parts = Path::new(name).components();
+    let plain = matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    );
+    if !plain {
+        return Err(format!(
+            "invalid plan name '{name}': give a file name, not a path"
+        ));
+    }
+    let filename = if name.ends_with(".md") {
+        name.to_string()
+    } else {
+        format!("{}.md", name)
+    };
+    let path = std::env::current_dir()
+        .map_err(|e| format!("failed to get current dir: {}", e))?
+        .join(".mae/plans")
+        .join(filename);
+    editor.refuse_write_outside_test_sandbox(&path)?;
+    Ok(path)
+}
+
+pub fn execute_create_plan(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -181,28 +215,18 @@ pub fn execute_create_plan(args: &serde_json::Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing 'content' argument".to_string())?;
 
-    let plan_dir = std::env::current_dir()
-        .map_err(|e| format!("failed to get current dir: {}", e))?
-        .join(".mae/plans");
-
-    if !plan_dir.exists() {
-        std::fs::create_dir_all(&plan_dir)
+    let path = plan_file(editor, name)?;
+    if let Some(plan_dir) = path.parent() {
+        std::fs::create_dir_all(plan_dir)
             .map_err(|e| format!("failed to create plans dir: {}", e))?;
     }
-
-    let filename = if name.ends_with(".md") {
-        name.to_string()
-    } else {
-        format!("{}.md", name)
-    };
-    let path = plan_dir.join(filename);
 
     std::fs::write(&path, content).map_err(|e| format!("failed to write plan: {}", e))?;
 
     Ok(format!("Plan created: {}", path.display()))
 }
 
-pub fn execute_update_plan(args: &serde_json::Value) -> Result<String, String> {
+pub fn execute_update_plan(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -212,16 +236,7 @@ pub fn execute_update_plan(args: &serde_json::Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing 'content' argument".to_string())?;
 
-    let plan_dir = std::env::current_dir()
-        .map_err(|e| format!("failed to get current dir: {}", e))?
-        .join(".mae/plans");
-
-    let filename = if name.ends_with(".md") {
-        name.to_string()
-    } else {
-        format!("{}.md", name)
-    };
-    let path = plan_dir.join(filename);
+    let path = plan_file(editor, name)?;
 
     if !path.exists() {
         return Err(format!("Plan not found: {}", path.display()));
@@ -326,5 +341,53 @@ mod switch_project_tests {
             editor.lsp.pending_root_change.is_none(),
             "a refused switch must not re-root the language server"
         );
+    }
+}
+
+/// #969: a plan name is a file name, never a path, and plan and memory writes
+/// stay inside an active test sandbox.
+#[cfg(test)]
+mod plan_path_tests {
+    use super::*;
+
+    #[test]
+    fn a_plan_name_that_is_a_path_is_refused_before_any_write() {
+        let editor = Editor::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let elsewhere = tmp.path().join("CLAUDE.md").display().to_string();
+        for name in [elsewhere.as_str(), "../../escape", "a/b", "..", ".", ""] {
+            assert!(plan_file(&editor, name).is_err(), "{name:?} accepted");
+            for run in [execute_create_plan, execute_update_plan] {
+                let args = serde_json::json!({ "name": name, "content": "x" });
+                assert!(run(&editor, &args).is_err(), "{name:?} accepted");
+            }
+        }
+        assert!(!tmp.path().join("CLAUDE.md").exists(), "a plan escaped");
+    }
+
+    /// Positive control: an ordinary name resolves under `.mae/plans`.
+    #[test]
+    fn an_ordinary_plan_name_resolves_under_the_plans_directory() {
+        let editor = Editor::new();
+        for (name, file) in [("feature-x", "feature-x.md"), ("notes.md", "notes.md")] {
+            let path = plan_file(&editor, name).expect(name);
+            assert!(
+                path.ends_with(Path::new(".mae/plans").join(file)),
+                "{path:?}"
+            );
+        }
+    }
+
+    /// During a self-test the working directory is the real project, so a
+    /// plan or memory write there is outside the sandbox and refused.
+    #[test]
+    fn plan_and_memory_writes_outside_the_sandbox_are_refused() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut editor = Editor::new();
+        editor.test_sandbox_dir = Some(tmp.path().to_path_buf());
+        let plan = serde_json::json!({ "name": "p969", "content": "x" });
+        assert!(execute_create_plan(&editor, &plan).is_err());
+        let fact = serde_json::json!({ "fact": "x" });
+        assert!(execute_save_memory(&editor, &fact).is_err());
     }
 }

@@ -33,7 +33,6 @@ pub fn create_test_sandbox(project_root: &Path) -> TestSandbox {
 /// ancestor resolved through every symlink, and never through a link at the
 /// path itself. Returns the path to write on success, or an error message.
 pub fn validate_write_path(path: &str, sandbox_dir: &Path) -> Result<PathBuf, String> {
-    use crate::path_confine::{contained, is_symlink, Escape};
     let outside = |why: String| {
         Err(format!(
             "Path '{}' is outside the test sandbox ({}): {why}",
@@ -53,13 +52,7 @@ pub fn validate_write_path(path: &str, sandbox_dir: &Path) -> Result<PathBuf, St
             sandbox_dir.display()
         ));
     }
-    match contained(sandbox_dir, &expanded) {
-        Ok(out) if is_symlink(&out) => outside("it is a symbolic link".to_string()),
-        Ok(out) => Ok(out),
-        Err(Escape::ParentDir) => outside("'..' is not allowed".to_string()),
-        Err(Escape::Outside(p)) => outside(format!("it resolves to {}", p.display())),
-        Err(Escape::Unresolvable(e)) => outside(format!("cannot resolve {e}")),
-    }
+    crate::path_confine::confined_write(sandbox_dir, &expanded).or_else(outside)
 }
 
 /// Filter a shell command for safety during test mode.

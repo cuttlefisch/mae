@@ -1,0 +1,90 @@
+# Refusals on untrusted writes (#969): MAE's own config is not written by an
+# AI-originated or unattended save, and while a test sandbox is active nothing
+# an agent writes lands outside it. One refusal chokepoint for every save path
+# plus the agent's file tools. Each mutant removes one guard; the named test
+# must catch it.
+
+[[mutant]]
+id = "core-write-refusal/save-all-skips-refusal"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(no_ai_or_unattended_save_reaches_project_config_on_any_path)"
+[[mutant.edit]]
+file = "crates/core/src/editor/file_ops.rs"
+find = '''                if let Err(e) = self.refuse_save(i, origin) {'''
+replace = '''                if let Err(e) = self.refuse_save_into_stale_archive(i) {'''
+
+[[mutant]]
+id = "core-write-refusal/timer-trusted"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(no_ai_or_unattended_save_reaches_project_config_on_any_path)"
+[[mutant.edit]]
+file = "crates/core/src/editor/file_ops.rs"
+find = '''        if origin == WriteOrigin::Command && !self.is_ai_originated_dispatch() {'''
+replace = '''        if origin != WriteOrigin::Agent && !self.is_ai_originated_dispatch() {'''
+
+[[mutant]]
+id = "core-write-refusal/agent-trusted-outside-scope"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(create_file_outside_the_sandbox_is_refused_at_the_effect)"
+[[mutant.edit]]
+file = "crates/core/src/editor/file_ops.rs"
+find = '''        if origin == WriteOrigin::Command && !self.is_ai_originated_dispatch() {'''
+replace = '''        if origin != WriteOrigin::Timer && !self.is_ai_originated_dispatch() {'''
+
+[[mutant]]
+id = "core-write-refusal/sandbox-unchecked"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(an_ai_save_outside_the_test_sandbox_is_refused_on_every_path)"
+[[mutant.edit]]
+file = "crates/core/src/editor/file_ops.rs"
+find = '''        self.refuse_write_outside_test_sandbox(path)
+    }'''
+replace = '''        let _ = path;
+        Ok(())
+    }'''
+
+[[mutant]]
+id = "core-write-refusal/rename-source-unchecked"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(rename_file_refuses_moving_a_real_file_into_the_sandbox)"
+[[mutant.edit]]
+file = "crates/ai/src/tool_impls/file.rs"
+find = '''    for candidate in [&old_path, &new] {
+        editor.refuse_untrusted_write(candidate, WriteOrigin::Agent)?;'''
+replace = '''    for candidate in [&new] {
+        editor.refuse_untrusted_write(candidate, WriteOrigin::Agent)?;'''
+
+[[mutant]]
+id = "core-write-refusal/plan-name-a-path"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(a_plan_name_that_is_a_path_is_refused_before_any_write)"
+[[mutant.edit]]
+file = "crates/ai/src/tool_impls/project.rs"
+find = '''    if !plain {
+        return Err(format!(
+            "invalid plan name'''
+replace = '''    if false && !plain {
+        return Err(format!(
+            "invalid plan name'''
+
+[[mutant]]
+id = "core-write-refusal/ex-copy-target-unchecked"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(ex_rename_and_copy_are_confined_where_they_write_for_an_ai_only)"
+[[mutant.edit]]
+file = "crates/core/src/editor/command.rs"
+find = '''                        if let Err(e) =
+                            self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
+                        {
+                            self.set_status(e);
+                            return true;
+                        }
+                        match std::fs::copy(&old_path, &new) {'''
+replace = '''                        match std::fs::copy(&old_path, &new) {'''

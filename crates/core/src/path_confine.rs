@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// Why a target was refused.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Escape {
+pub enum Escape {
     /// The path has a `..` component (or is empty), so where it lands depends
     /// on directories that may not exist yet.
     ParentDir,
@@ -27,7 +27,7 @@ pub(crate) enum Escape {
 /// Where a write to `path` lands, if that is inside `root`: `root.join(path)`
 /// for a relative path, `path` itself for an absolute one. The root itself is
 /// not "inside" it.
-pub(crate) fn contained(root: &Path, path: &Path) -> Result<PathBuf, Escape> {
+pub fn contained(root: &Path, path: &Path) -> Result<PathBuf, Escape> {
     let plain = !path.as_os_str().is_empty()
         && path.components().all(|c| {
             matches!(
@@ -60,6 +60,25 @@ pub(crate) fn contained(root: &Path, path: &Path) -> Result<PathBuf, Escape> {
     Ok(out)
 }
 
+/// Where a write to the absolute `path` lands, if that is inside `root` and
+/// not through a link at the path itself; otherwise why not, in words. The
+/// rule every write confined to the self-test sandbox shares: the tool guard
+/// (`mae_ai`'s `validate_write_path`) and the editor's own save, rename and
+/// copy effects (#969). A relative `path` is refused: where it lands depends
+/// on a working directory this function does not know.
+pub fn confined_write(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("a relative path is judged against no directory here".to_string());
+    }
+    match contained(root, path) {
+        Ok(out) if is_symlink(&out) => Err("it is a symbolic link".to_string()),
+        Ok(out) => Ok(out),
+        Err(Escape::ParentDir) => Err("'..' is not allowed".to_string()),
+        Err(Escape::Outside(p)) => Err(format!("it resolves to {}", p.display())),
+        Err(Escape::Unresolvable(e)) => Err(format!("cannot resolve {e}")),
+    }
+}
+
 /// `out` names the root itself (only possible when it exists, so it is its
 /// own deepest existing ancestor).
 fn out_is_root(out: &Path, existing_real: &Path, root_real: &Path) -> bool {
@@ -69,7 +88,7 @@ fn out_is_root(out: &Path, existing_real: &Path, root_real: &Path) -> bool {
 /// Whether the entry at `path` is itself a symbolic link. A confined write
 /// refuses one: writing through it would land wherever it points, and even a
 /// link to somewhere inside the root turns a deliberate link into a copy.
-pub(crate) fn is_symlink(path: &Path) -> bool {
+pub fn is_symlink(path: &Path) -> bool {
     path.symlink_metadata()
         .is_ok_and(|m| m.file_type().is_symlink())
 }

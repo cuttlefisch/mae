@@ -453,6 +453,10 @@
           "kind": "mod"
         },
         {
+          "name": "path_confine",
+          "kind": "mod"
+        },
+        {
           "name": "project",
           "kind": "mod"
         },

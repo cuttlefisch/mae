@@ -55,6 +55,7 @@ pub mod messages;
 pub mod notifications;
 pub mod notifications_view;
 pub mod options;
+pub mod path_confine;
 pub mod project;
 pub mod render_common;
 pub mod scheme_async;
