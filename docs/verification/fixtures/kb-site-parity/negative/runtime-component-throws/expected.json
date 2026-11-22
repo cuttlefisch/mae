@@ -1,0 +1,14 @@
+{
+ "requirement": "P-157",
+ "exit": 1,
+ "runtime": "the runner configures a component whose render throws, on every page, and builds",
+ "assert": [
+  "exit code 1",
+  "the log names the component",
+  "nothing is published"
+ ],
+ "reference": {
+  "exit": null,
+  "why": "to be recorded"
+ }
+}
