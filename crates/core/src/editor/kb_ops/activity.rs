@@ -45,9 +45,16 @@ impl Editor {
             return;
         };
         let today = today_str();
-        for parsed in mae_kb::org::parse_org_multi(&content) {
+        // @ai-caution: [kb-links] Hashes recorded before ingest moved to mae-org
+        // (#941) are of the OLD parser's body, whose boundaries differ for some
+        // nodes. A stored hash that matches the old parse of the current text is
+        // that node unchanged: it is re-based silently, not stamped modified, or
+        // the first save of every file after the upgrade would mark its untouched
+        // nodes as edited today. Remove with `mae_kb::org` (#941 PR5).
+        let mut legacy: Option<std::collections::HashMap<String, String>> = None;
+        for parsed in mae_kb::org_ingest::parse_nodes(&content) {
             // Only nodes this KB actually already knows about — skip a node
-            // parse_org_multi found that hasn't been ingested (yet).
+            // the parse found that hasn't been ingested (yet).
             if self.kb_get_node_mut(&parsed.id).is_none() {
                 continue;
             }
@@ -67,9 +74,22 @@ impl Editor {
             if old_hash.as_deref() == Some(&new_hash) {
                 continue; // this node's content unchanged
             }
+            let rebase = old_hash.as_deref().is_some_and(|old| {
+                legacy
+                    .get_or_insert_with(|| {
+                        mae_kb::org::parse_org_multi(&content)
+                            .into_iter()
+                            .map(|n| (n.id, mae_kb::activity::body_hash(&n.body)))
+                            .collect()
+                    })
+                    .get(&parsed.id)
+                    .is_some_and(|h| h == old)
+            });
             let entry = self.kb.activity.entry(parsed.id.clone()).or_default();
             entry.hash = Some(new_hash);
-            entry.modified = Some(today.clone());
+            if !rebase {
+                entry.modified = Some(today.clone());
+            }
             self.kb.activity_dirty = true;
         }
     }

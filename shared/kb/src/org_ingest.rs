@@ -1,9 +1,11 @@
 //! MAE's KB derivation from org text, built on `mae-org` (ADR-112 O4).
-//! @ai-caution: [kb-links] Nothing calls this module yet (#941 PR1). It is
-//! the one derivation the ingest, edge and node-buffer paths move onto in
-//! PR2–PR4; until then `crate::org` stays authoritative, and the two are
-//! held together by `tests/org_semantics_differential.rs`, which requires
-//! every difference to be one `mae-org`'s divergence register lists.
+//! @ai-caution: [kb-links] This is THE derivation for ingest (every
+//! `.org` -> node path: `KnowledgeBase::ingest_org_*`, federation's imports,
+//! the import plan, `kb_build`, activity, ghost detection) and for stored
+//! edges (#941 PR2/PR3). `crate::org` is left only for the node-buffer save's
+//! segmentation (PR4) and the export/read-mode renderers (#942/#943); it is
+//! held to this module by `tests/org_semantics_differential.rs`, which
+//! requires every difference to be one `mae-org`'s divergence register lists.
 //!
 //! Every function here is a projection of [`mae_org::semantics_with`] under
 //! [`org_options`]: nothing re-splits org text. Where `mae-org` and the old
@@ -35,8 +37,8 @@
 //! carries it into `[[id:T?Q][D]]`, so no consumer of stored bodies is
 //! harmed by it.
 
-use crate::org::{OrgParseResult, ParsedLink};
-use crate::{Node, NodeKind};
+use crate::org::{IngestReport, OrgParseResult, ParsedLink};
+use crate::{KnowledgeBase, Node, NodeKind};
 use mae_org::{
     parse, semantics_with, Document, Link, LinkFormat, LinkKind, NodeOrigin, ParseOptions,
     SemanticLink, SemanticNode, Semantics, SemanticsOptions, SyntaxKind, TodoSequence,
@@ -113,6 +115,102 @@ pub fn edges_of_body(body: &str) -> Vec<ParsedLink> {
         .filter(|l| is_edge(l))
         .map(parsed_link)
         .collect()
+}
+
+/// Rewrite the legacy store form of a KB link, `[[TARGET|DESCRIPTION]]`,
+/// to Org's `[[TARGET][DESCRIPTION]]` wherever it sits in a table row, and
+/// return the new body and how many links it rewrote; `None` when there is
+/// nothing to rewrite (#941).
+///
+/// MAE's old ingest stored every KB link in the bar form. In a table the bar
+/// is Org's cell separator, so `mae-org` reads such a link as two cells of
+/// text and derives no edge from it: a native KB, with no file left to
+/// re-ingest, would lose those links from its graph and from every rendering.
+/// Only real table rows (the tree's `TABLE_ROW`, so never a table-looking
+/// line inside a block) are touched, and only a link whose rewrite reads as
+/// exactly one KB edge: each rewrite is kept only if, in the body, it adds
+/// exactly one edge (so a link inside verbatim markup in a cell is left as
+/// written without blocking the other rewrites of the same body).
+pub fn repair_table_pipe_links(body: &str) -> Option<(String, usize)> {
+    if !body.contains("[[") || !body.contains('|') {
+        return None;
+    }
+    let edits = table_row_edits(body);
+    if edits.is_empty() {
+        return None;
+    }
+    keep_edge_adding_edits(body, &edits)
+}
+
+/// Every bar-form link `[[P|D]]` inside a real table row of `body` (the tree's
+/// `TABLE_ROW`), with the Org form `[[P][D]]` to replace it by, in order.
+fn table_row_edits(body: &str) -> Vec<(Range<usize>, String)> {
+    let doc = parse(body, &org_options().parse);
+    let rows: Vec<Range<usize>> = doc
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::TABLE_ROW)
+        .map(|n| {
+            let r = n.text_range();
+            usize::from(r.start())..usize::from(r.end())
+        })
+        .collect();
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    for row in rows {
+        let text = &body[row.clone()];
+        let mut from = 0;
+        while let Some(open) = text[from..].find("[[").map(|i| from + i) {
+            let Some(close) = text[open + 2..].find("]]").map(|i| open + 2 + i) else {
+                break;
+            };
+            let inner = &text[open + 2..close];
+            from = close + 2;
+            let Some((path, desc)) = inner.split_once('|') else {
+                continue;
+            };
+            let plain = |s: &str| !s.is_empty() && !s.contains(['[', ']', '|']);
+            if !plain(path) || !plain(desc) || path.contains(char::is_whitespace) {
+                continue;
+            }
+            let link = format!("[[{path}][{desc}]]");
+            edits.push((row.start + open..row.start + close + 2, link));
+        }
+    }
+    edits
+}
+
+/// `body` with the `edits` that each add exactly one edge applied, and how
+/// many: `None` when none does.
+fn keep_edge_adding_edits(body: &str, edits: &[(Range<usize>, String)]) -> Option<(String, usize)> {
+    let before = edges_of_body(body).len();
+    // Fast path, one parse: every rewrite at once, kept if together they add
+    // exactly one edge each (the common case; edit-by-edit below re-parses the
+    // body per edit, which is quadratic in a note with hundreds of table links).
+    let mut all = String::with_capacity(body.len() + edits.len());
+    let mut at = 0;
+    for (range, link) in edits {
+        all.push_str(&body[at..range.start]);
+        all.push_str(link);
+        at = range.end;
+    }
+    all.push_str(&body[at..]);
+    if edges_of_body(&all).len() == before + edits.len() {
+        return Some((all, edits.len()));
+    }
+    // Last edit first, so the earlier ranges stay valid as the text changes.
+    let mut out = body.to_string();
+    let mut edges = before;
+    let mut kept = 0;
+    for (range, link) in edits.iter().rev() {
+        let candidate = format!("{}{}{}", &out[..range.start], link, &out[range.end..]);
+        let n = edges_of_body(&candidate).len();
+        if n == edges + 1 {
+            out = candidate;
+            edges = n;
+            kept += 1;
+        }
+    }
+    (kept > 0).then_some((out, kept))
 }
 
 /// The `#+TRANSCLUDE:` members of a body, as `(member, role)` in document
@@ -507,4 +605,302 @@ fn reads_as_edge(links: &[SemanticLink], len: usize, l: &SemanticLink) -> bool {
 /// edge.
 fn reads_as_no_edge(links: &[SemanticLink]) -> bool {
     !links.iter().any(is_edge)
+}
+
+// ------------------------------------------------------------ edge rows
+
+/// A stored `links` row's payload: `(dst, rel_type, weight, confidence)`.
+pub type EdgeRow = (String, String, f64, f64);
+
+/// The `links` rows a sequence of edges stores: one per `(dst, rel_type)`,
+/// the LAST in body order (what the old per-link `:put`s left behind), in
+/// first-occurrence order. The one collapse rule, used by
+/// `CozoKbStore::derived_links` and by [`declare_edges`]'s check.
+pub fn edge_rows<'a>(edges: impl IntoIterator<Item = &'a ParsedLink>) -> Vec<EdgeRow> {
+    let mut out: Vec<EdgeRow> = Vec::new();
+    for l in edges {
+        let row = (l.target.clone(), l.rel_type.clone(), l.weight, l.confidence);
+        match out
+            .iter_mut()
+            .find(|(d, r, _, _)| *d == l.target && *r == l.rel_type)
+        {
+            Some(existing) => *existing = row,
+            None => out.push(row),
+        }
+    }
+    out
+}
+
+// ------------------------------------------- declaring typed edges (#854)
+
+/// The text `kb_add_link` appends to a node's body for one ADR-030 typed
+/// link, on a line of its own: `[[DST?rel=REL&w=W][DST]]`, with `&c=C` when
+/// a confidence is given. The one formatter for an appended typed link: the
+/// editor's add-link path and the open-time repair ([`declare_edges`]) both
+/// call it.
+pub fn typed_link_line(dst: &str, rel: &str, weight: f64, confidence: Option<f64>) -> String {
+    let mut query = format!("rel={rel}&w={weight}");
+    if let Some(c) = confidence {
+        query.push_str(&format!("&c={c}"));
+    }
+    format!("\n[[{dst}?{query}][{dst}]]")
+}
+
+/// One typed edge a body must declare.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WantedEdge {
+    pub dst: String,
+    pub rel: String,
+    pub weight: f64,
+    pub confidence: f64,
+}
+
+impl WantedEdge {
+    /// The weight and confidence the link grammar can carry: ADR-030's
+    /// `[0, 1]`, a non-finite value read as absent (1.0), as `mae-org`
+    /// reads them.
+    fn unit(x: f64) -> f64 {
+        if x.is_finite() {
+            x.clamp(0.0, 1.0) + 0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// The `?query` that declares this edge on an existing link: `rel`, and
+    /// `w`/`c` only where they are not the default.
+    fn query(&self) -> String {
+        let mut q = format!("rel={}", self.rel);
+        let (w, c) = (Self::unit(self.weight), Self::unit(self.confidence));
+        if w != 1.0 {
+            q.push_str(&format!("&w={w}"));
+        }
+        if c != 1.0 {
+            q.push_str(&format!("&c={c}"));
+        }
+        q
+    }
+
+    /// [`typed_link_line`] for this edge.
+    fn line(&self) -> String {
+        let c = Self::unit(self.confidence);
+        typed_link_line(
+            &self.dst,
+            &self.rel,
+            Self::unit(self.weight),
+            (c != 1.0).then_some(c),
+        )
+    }
+
+    /// Whether a link can declare this edge at all: its appended line,
+    /// read alone, is exactly this edge. An external URL, or a target the
+    /// link grammar cannot hold (`]`, `|`, `?`, `#`, a line break), cannot.
+    pub fn is_declarable(&self) -> bool {
+        let edges = edges_of_body(&self.line());
+        matches!(edges.as_slice(), [e] if e.target == self.dst && e.rel_type == self.rel)
+    }
+}
+
+/// What [`declare_edges`] did to a body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Declared {
+    pub body: String,
+    /// Edges declared by giving an existing untyped link to their target the
+    /// relation.
+    pub rewritten: usize,
+    /// Edges declared by appending a [`typed_link_line`].
+    pub appended: usize,
+}
+
+/// The link `raw` rewritten to carry `w`'s relation (and non-default weight
+/// and confidence) in its query, in the form it was written in. `None` for a
+/// link whose path already has a query, a fragment or a search option.
+fn with_relation(raw: &RawLink, w: &WantedEdge) -> Option<String> {
+    let (path, bar) = match raw.path.split_once('|') {
+        Some((p, d)) => (p, Some(d)),
+        None => (raw.path, None),
+    };
+    if path.contains(['?', '#']) || path.contains("::") {
+        return None;
+    }
+    let mut text = format!("[[{path}?{}", w.query());
+    if let Some(d) = bar {
+        text.push('|');
+        text.push_str(d);
+    }
+    if let Some(d) = raw.description {
+        text.push_str("][");
+        text.push_str(d);
+    }
+    text.push_str("]]");
+    Some(text)
+}
+
+/// Whether two edge lists are the same, weights and confidences bit for bit.
+fn same_edge_rows(a: &[EdgeRow], b: &[EdgeRow]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.0 == y.0
+                && x.1 == y.1
+                && x.2.to_bits() == y.2.to_bits()
+                && x.3.to_bits() == y.3.to_bits()
+        })
+}
+
+/// `body` changed so that it declares every edge of `wanted`, touching
+/// nothing else: an untyped bracket link to an edge's target (`[[id:X][L]]`,
+/// `[[X|L]]`, `[[X]]` -- one with no query, fragment or search option) is
+/// given the relation (`[[id:X?rel=R][L]]`), each such link taking at most
+/// one relation, in body order; an edge with no such link left is declared
+/// by appending its [`typed_link_line`], as `kb_add_link` would. Prose,
+/// every other link and every other edge are unchanged.
+///
+/// Checked, not trusted: the result must derive exactly the edges `body`
+/// derives with those links' relations changed and the appended ones added
+/// ([`edge_rows`] of both). Otherwise -- an edge that is not
+/// [`WantedEdge::is_declarable`], a body whose end swallows an appended line
+/// (an unterminated block) -- `None`, and the body is not changed.
+pub fn declare_edges(body: &str, wanted: &[WantedEdge]) -> Option<Declared> {
+    if wanted.is_empty() {
+        return None;
+    }
+    let (doc, sem) = derive(body);
+    let links = tree_links(&doc);
+    let mut used = vec![false; sem.links.len()];
+    let mut edits: Vec<Edit> = Vec::new();
+    let mut appended: Vec<&WantedEdge> = Vec::new();
+    // What each edge of the body becomes: (target, rel, w, c), by link index.
+    let mut expected: Vec<Option<ParsedLink>> = sem
+        .links
+        .iter()
+        .map(|l| is_edge(l).then(|| parsed_link(l)))
+        .collect();
+    for w in wanted {
+        let slot = sem.links.iter().enumerate().find_map(|(i, l)| {
+            let untyped = is_edge(l)
+                && l.target == w.dst
+                && l.fragment.is_none()
+                && l.rel == mae_org::DEFAULT_REL
+                && l.weight == 1.0
+                && l.confidence == 1.0
+                && l.attrs.is_empty();
+            if used[i] || !untyped {
+                return None;
+            }
+            let range = l.span.range();
+            let raw = RawLink::read(links.get(&range.start), body.get(range.clone())?)?;
+            let text = with_relation(&raw, w)?;
+            Some((i, Edit { range, text }))
+        });
+        match slot {
+            Some((i, edit)) => {
+                used[i] = true;
+                edits.push(edit);
+                if let Some(Some(e)) = expected.get_mut(i) {
+                    e.rel_type = w.rel.clone();
+                    e.weight = WantedEdge::unit(w.weight);
+                    e.confidence = WantedEdge::unit(w.confidence);
+                }
+            }
+            None => appended.push(w),
+        }
+    }
+    edits.sort_by_key(|e| e.range.start);
+    let mut out = apply_edits(body, 0..body.len(), &edits);
+    for w in &appended {
+        out.push_str(&w.line());
+    }
+    let mut want: Vec<ParsedLink> = expected.into_iter().flatten().collect();
+    want.extend(appended.iter().map(|w| ParsedLink {
+        target: w.dst.clone(),
+        display: w.dst.clone(),
+        rel_type: w.rel.clone(),
+        fragment: None,
+        weight: WantedEdge::unit(w.weight),
+        confidence: WantedEdge::unit(w.confidence),
+        attrs: Vec::new(),
+    }));
+    let got = edges_of_body(&out);
+    let same = same_edge_rows;
+    same(&edge_rows(&got), &edge_rows(&want)).then_some(Declared {
+        body: out,
+        rewritten: edits.len(),
+        appended: appended.len(),
+    })
+}
+
+// ------------------------------------------------------------ ingest
+
+impl KnowledgeBase {
+    /// Walk `dir` recursively, parse every `.org` file, and insert both
+    /// the file-level node (if it has `:ID:`) and any heading-level
+    /// nodes (headings with their own `:PROPERTIES: :ID:` drawer).
+    /// Existing nodes with the same id are overwritten. Returns counts
+    /// for reporting to the user.
+    pub fn ingest_org_dir(&mut self, dir: impl AsRef<std::path::Path>) -> IngestReport {
+        let mut report = IngestReport::default();
+        let mut seen_ids = std::collections::HashSet::new();
+        for entry in walkdir::WalkDir::new(dir.as_ref())
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("org") {
+                continue;
+            }
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    let nodes = parse_nodes(&content);
+                    if nodes.is_empty() {
+                        report.skipped_no_id += 1;
+                        continue;
+                    }
+                    for mut node in nodes {
+                        // `parse_nodes` only sees the file's text, not
+                        // its own path, so it can never set this — must be
+                        // stamped here, mirroring `ingest_org_file` (the
+                        // watcher's single-file re-ingest path, which
+                        // already does this correctly). Without it, every
+                        // node picked up by the initial bulk directory
+                        // scan has `source_file: None` forever (unless the
+                        // file happens to be re-saved later, triggering
+                        // the watcher path instead) — `help_edit_source`/
+                        // `kb_node_source_file` then report "No source
+                        // file" for a node whose file plainly exists.
+                        node.source_file = Some(path.to_path_buf());
+                        let id = node.id.clone();
+                        if seen_ids.insert(id.clone()) {
+                            self.insert(node);
+                            report.indexed += 1;
+                            report.ingested_ids.push(id);
+                        } else {
+                            report.read_errors.push(path.to_path_buf());
+                        }
+                    }
+                }
+                Err(_) => report.read_errors.push(path.to_path_buf()),
+            }
+        }
+        report
+    }
+
+    /// Re-ingest a single file (for use by the watcher). Inserts every
+    /// node found in the file (file-level + heading-level) and returns
+    /// the list of upserted ids. Returns an empty vec if nothing parsed.
+    pub fn ingest_org_file(&mut self, path: impl AsRef<std::path::Path>) -> Vec<String> {
+        let Ok(content) = std::fs::read_to_string(path.as_ref()) else {
+            return Vec::new();
+        };
+        let nodes = parse_nodes(&content);
+        let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        for mut n in nodes {
+            n.source_file = Some(path.as_ref().to_path_buf());
+            self.insert(n);
+        }
+        ids
+    }
 }

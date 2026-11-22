@@ -74,6 +74,8 @@ pub fn write_org_fixtures(dir: &std::path::Path) {
 
 A buffer is the unit of editable content. [[concept:window?rel=references][See windows]].
 [[concept:mode?rel=references]]
+
+It holds a rope of text, a file path when it has one, and its modification state.
 "#,
         ),
         (
@@ -85,6 +87,8 @@ A buffer is the unit of editable content. [[concept:window?rel=references][See w
 #+title: Mode
 
 Modes control which keymap is active. [[concept:buffer?rel=references]]
+
+The editor is in exactly one mode at a time.
 "#,
         ),
         (
