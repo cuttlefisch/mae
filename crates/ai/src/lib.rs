@@ -12,6 +12,7 @@ pub mod guardrail;
 pub mod guidance;
 pub mod ollama;
 pub mod openai;
+pub(crate) mod path_confine;
 pub mod pricing;
 pub mod provider;
 pub mod session;

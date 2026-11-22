@@ -995,6 +995,28 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// The guard refuses every write path the effect would not land inside the
+    /// sandbox: a relative one (written against the process's working
+    /// directory), on either side of a rename, and one outside. An absolute
+    /// path under the sandbox passes.
+    #[test]
+    fn sandbox_guard_refuses_writes_the_effect_would_land_outside() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = tmp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let inside = sandbox.join("ok.txt").display().to_string();
+        let guard = |tool: &str, args: serde_json::Value| sandbox_guard(tool, &args, &sandbox);
+        assert!(guard("create_file", serde_json::json!({ "path": inside })).is_none());
+        assert!(guard("create_file", serde_json::json!({ "path": "x.txt" })).is_some());
+        assert!(guard("create_file", serde_json::json!({ "path": "~" })).is_some());
+        let outside = tmp.path().join("elsewhere.txt").display().to_string();
+        assert!(guard("create_file", serde_json::json!({ "path": outside })).is_some());
+        for (old, new) in [(inside.as_str(), "y.txt"), ("y.txt", inside.as_str())] {
+            let args = serde_json::json!({ "old_path": old, "new_path": new });
+            assert!(guard("rename_file", args).is_some(), "{old} -> {new}");
+        }
+    }
+
     fn make_tool(name: &str, props: Vec<(&str, &str)>, required: Vec<&str>) -> ToolDefinition {
         let mut properties = HashMap::new();
         for (pname, ptype) in props {

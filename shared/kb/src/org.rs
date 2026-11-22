@@ -15,9 +15,9 @@
 //! (headings with sub-node `:ID:` drawers, block types, etc.) we can
 //! swap in tree-sitter-org without breaking the API.
 
-use crate::{KnowledgeBase, Node, NodeKind};
+use crate::{Node, NodeKind};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A parsed link from org content with typed relationship info.
 #[derive(Debug, Clone, PartialEq)]
@@ -175,7 +175,10 @@ fn file_level_node(header: &FileHeader, id: String, body: String) -> Node {
 pub fn parse_org(content: &str) -> Option<Node> {
     let header = parse_file_header(content);
     let id = header.file_id.clone()?;
-    let body = rewrite_links(&body_after_header(content));
+    // The store form of mae-org (#854): the link query stays in the body, so
+    // a node-buffer save keeps the node's typed edges. The segmentation is
+    // still this module's until the node-buffer save moves (#941 PR4).
+    let body = crate::org_ingest::store_body(&body_after_header(content));
     Some(file_level_node(&header, id, body))
 }
 
@@ -1464,83 +1467,10 @@ pub fn update_property(content: &str, node_id: &str, key: &str, value: &str) -> 
     Some(out)
 }
 
-impl KnowledgeBase {
-    /// Walk `dir` recursively, parse every `.org` file, and insert both
-    /// the file-level node (if it has `:ID:`) and any heading-level
-    /// nodes (headings with their own `:PROPERTIES: :ID:` drawer).
-    /// Existing nodes with the same id are overwritten. Returns counts
-    /// for reporting to the user.
-    pub fn ingest_org_dir(&mut self, dir: impl AsRef<Path>) -> IngestReport {
-        let mut report = IngestReport::default();
-        let mut seen_ids = HashSet::new();
-        for entry in walkdir::WalkDir::new(dir.as_ref())
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("org") {
-                continue;
-            }
-            match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    let nodes = parse_org_multi(&content);
-                    if nodes.is_empty() {
-                        report.skipped_no_id += 1;
-                        continue;
-                    }
-                    for mut node in nodes {
-                        // `parse_org_multi` only sees the file's text, not
-                        // its own path, so it can never set this — must be
-                        // stamped here, mirroring `ingest_org_file` (the
-                        // watcher's single-file re-ingest path, which
-                        // already does this correctly). Without it, every
-                        // node picked up by the initial bulk directory
-                        // scan has `source_file: None` forever (unless the
-                        // file happens to be re-saved later, triggering
-                        // the watcher path instead) — `help_edit_source`/
-                        // `kb_node_source_file` then report "No source
-                        // file" for a node whose file plainly exists.
-                        node.source_file = Some(path.to_path_buf());
-                        let id = node.id.clone();
-                        if seen_ids.insert(id.clone()) {
-                            self.insert(node);
-                            report.indexed += 1;
-                            report.ingested_ids.push(id);
-                        } else {
-                            report.read_errors.push(path.to_path_buf());
-                        }
-                    }
-                }
-                Err(_) => report.read_errors.push(path.to_path_buf()),
-            }
-        }
-        report
-    }
-
-    /// Re-ingest a single file (for use by the watcher). Inserts every
-    /// node found in the file (file-level + heading-level) and returns
-    /// the list of upserted ids. Returns an empty vec if nothing parsed.
-    pub fn ingest_org_file(&mut self, path: impl AsRef<Path>) -> Vec<String> {
-        let Ok(content) = std::fs::read_to_string(path.as_ref()) else {
-            return Vec::new();
-        };
-        let nodes = parse_org_multi(&content);
-        let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
-        for mut n in nodes {
-            n.source_file = Some(path.as_ref().to_path_buf());
-            self.insert(n);
-        }
-        ids
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::KnowledgeBase;
     use tempfile::TempDir;
 
     const SAMPLE: &str = "\

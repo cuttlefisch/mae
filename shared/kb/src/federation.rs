@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::org::parse_org_multi_result;
 use crate::store::KbStoreError;
 use crate::{KnowledgeBase, Node};
 
@@ -1518,7 +1517,7 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
 
         match std::fs::read_to_string(path) {
             Ok(content) => {
-                let nodes = crate::org::parse_org_multi(&content);
+                let nodes = crate::org_ingest::parse_nodes(&content);
                 if nodes.is_empty() {
                     report.nodes_skipped += 1;
                     skipped_paths.push(path.to_path_buf());
@@ -1705,9 +1704,10 @@ pub fn import_org_dir_to_store(
             continue;
         }
 
-        // Parse with typed-link support (ADR-030: rel/weight/confidence are
-        // encoded inline in each link's `?query`, so no rel-type table is needed).
-        let parse_result = parse_org_multi_result(&content);
+        // ADR-030: a link's rel/weight/confidence live in its `?query`, which
+        // the stored body keeps, so `insert_node` derives the typed edges from
+        // the body like every other write (#854) -- no side path here.
+        let parse_result = crate::org_ingest::parse_file(&content);
         if parse_result.nodes.is_empty() {
             report.nodes_skipped += 1;
             skipped_paths.push(path.to_path_buf());
@@ -1764,13 +1764,6 @@ pub fn import_org_dir_to_store(
                 report
                     .duplicate_ids
                     .push((node.id.clone(), path.to_path_buf()));
-            }
-        }
-
-        // Wire typed links to CozoDB.
-        for (src_id, link) in &parse_result.typed_links {
-            if let Err(e) = store.add_typed_link(src_id, &link.target, &link.rel_type, 1.0) {
-                tracing::debug!(src = %src_id, dst = %link.target, rel = %link.rel_type, error = %e, "typed link insert failed");
             }
         }
 

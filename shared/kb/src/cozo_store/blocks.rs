@@ -94,7 +94,7 @@ impl CozoKbStore {
     /// file-imported node already does, instead of only ever picking up
     /// `#+TRANSCLUDE:` directives at file-import time.
     pub fn update_meta_members_for_node(&self, node: &Node) -> Result<(), KbStoreError> {
-        let members = crate::org::parse_transclusion_directives(&node.body);
+        let members = Self::derived_members(node);
         self.replace_meta_members(&node.id, &members)
     }
 

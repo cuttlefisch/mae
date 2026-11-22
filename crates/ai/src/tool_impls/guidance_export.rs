@@ -93,25 +93,24 @@ fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::P
             "Refused: path '{target}' must be relative to the project root, without '..'"
         ));
     }
-    let out = root.join(rel);
-    let root_real = root
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve the project root {}: {e}", root.display()))?;
-    // The deepest part of `out` that exists decides where the write really goes
-    // (the rest is created below it).
-    let existing = out
-        .ancestors()
-        .find(|a| a.symlink_metadata().is_ok())
-        .unwrap_or(root);
-    let existing_real = existing
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve {}: {e}", existing.display()))?;
-    if !existing_real.starts_with(&root_real) {
-        return Err(format!(
-            "Refused: '{target}' resolves outside the project root ({})",
-            existing_real.display()
-        ));
-    }
+    // Where the write really goes: the deepest existing part of the path,
+    // resolved through every link (`crate::path_confine`).
+    use crate::path_confine::{contained, is_symlink, Escape};
+    let out = match contained(root, rel) {
+        Ok(out) => out,
+        Err(Escape::Outside(real)) => {
+            return Err(format!(
+                "Refused: '{target}' resolves outside the project root ({})",
+                real.display()
+            ))
+        }
+        Err(Escape::Unresolvable(e)) => return Err(format!("cannot resolve {e}")),
+        Err(Escape::ParentDir) => {
+            return Err(format!(
+                "Refused: path '{target}' must be relative to the project root, without '..'"
+            ))
+        }
+    };
     if mae_core::workspace_trust::is_protected_config_path(&out) {
         return Err(format!(
             "Refused: '{target}' is MAE configuration, which an AI session may not write"
@@ -120,10 +119,7 @@ fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::P
     // A link INSIDE the project is refused too: reading through it would copy
     // the file it names (`.env`, `.git/config`) into the export, and replacing
     // it would silently turn a deliberate link into a stale copy.
-    if out
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
+    if is_symlink(&out) {
         return Err(format!(
             "Refused: '{target}' is a symbolic link; the export neither reads nor \
              replaces a link. Export to another path, or replace the link with a file."
