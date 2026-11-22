@@ -8,7 +8,7 @@
   "nothing is published"
  ],
  "reference": {
-  "exit": null,
-  "why": "to be recorded"
+  "exit": 3,
+  "why": "the renderer's self-test builds with the same configuration, so the throwing component fails it first: exit 3 (an image fault, retried), the log names no component; nothing is published"
  }
 }
