@@ -648,6 +648,11 @@ async fn handle_request(
     if let Some(resp) = public_response(&req, config, doc_store) {
         return Ok(resp);
     }
+    // ADR-119 L1a: the site's static assets are public (no KB content, and a
+    // `<link>` cannot carry a bearer token), served only when the site is on.
+    if config.site_enabled && req.uri().path().starts_with(mae_site::assets::PREFIX) {
+        return Ok(site_asset(&req));
+    }
     // ADR-099: `/ws` and `/ws/ticket` exist only when `ws_enabled`; otherwise
     // they are ordinary paths and fall through to the authenticated default.
     if crate::ws::is_ws_path(req.uri().path()) && listener.ws.is_some() {
@@ -793,6 +798,26 @@ async fn site_route(
             "this KB is larger than the site derives per request".into(),
         ),
     }
+}
+
+/// One embedded site asset (`mae_site::assets`), by its content-addressed
+/// name: immutable for a year, since a change always gets a new name. Any
+/// other path under the prefix, or a method but GET, is the site's 404.
+fn site_asset(req: &Request<Incoming>) -> Response<Full<Bytes>> {
+    let asset = (req.method() == hyper::Method::GET)
+        .then(|| mae_site::assets::at(req.uri().path()))
+        .flatten();
+    let Some(asset) = asset else {
+        return site_response(StatusCode::NOT_FOUND, "not found".into());
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", asset.content_type)
+        .header("content-security-policy", mae_daemon::site::CSP)
+        .header("x-content-type-options", "nosniff")
+        .header("cache-control", "public, max-age=31536000, immutable")
+        .body(Full::new(Bytes::from_static(asset.body.as_bytes())))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// An HTML (or plain refusal) response with the site's headers: its CSP,

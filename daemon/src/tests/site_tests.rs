@@ -215,3 +215,14 @@ async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
         SitePage::NotFound
     );
 }
+
+#[test]
+fn a_page_links_the_palette_by_its_content_addressed_name() {
+    let html = site::document("en-US", "T", "<p>x</p>");
+    let href = mae_site::assets::href(mae_site::assets::PALETTE);
+    assert!(
+        html.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
+        "{html}"
+    );
+    assert_eq!(mae_site::assets::at(&href), Some(mae_site::assets::PALETTE));
+}

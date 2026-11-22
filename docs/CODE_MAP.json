@@ -1387,6 +1387,10 @@
           "kind": "mod"
         },
         {
+          "name": "assets",
+          "kind": "mod"
+        },
+        {
           "name": "derive",
           "kind": "mod"
         },

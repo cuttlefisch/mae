@@ -128,9 +128,11 @@ pub fn document(lang: &str, title: &str, article: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <link rel=\"stylesheet\" href=\"{}\">\
          <title>{}</title></head><body><main id=\"mae-main\"><article id=\"mae-article\">\
          <h1>{}</h1>{article}</article></main></body></html>\n",
         escape(lang),
+        mae_site::assets::href(mae_site::assets::PALETTE),
         escape(title),
         escape(title)
     )
