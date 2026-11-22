@@ -463,6 +463,11 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 
 ### Architecture Debt (v0.9.1+)
 
+- [ ] **The live KB site and the web view share `/kb/<kb-id>/view`.** `daemon/src/site.rs` serves
+  `/kb/<kb-id>/<id>` (ADR-119 L1a). With `webview_enabled` too, ADR-073's view answers
+  `/kb/<kb-id>/view` before authentication, so a node whose ID is `view` cannot be reached at its own
+  address: the shadowing parity row P-166 forbids. Fix in ADR-119, which succeeds that view: retire
+  the view's path, or reserve the name and withhold such a page.
 - [ ] **Four copies of the unix-days → civil-date conversion.** `daemon/src/rfc3339.rs` (added for
   `kb/query`'s RFC 3339 times), `crates/core/src/editor/kb_ops/mod.rs::civil_from_days`,
   `crates/core/src/project.rs::days_to_ymd` and `shared/kb/src/migrate/mod.rs::days_to_ymd`. None was

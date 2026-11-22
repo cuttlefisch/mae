@@ -85,6 +85,15 @@ pub struct OAuthConfig {
     /// `DocStore` must exist to serve from — see `main.rs`'s
     /// `doc_store_for_query` wiring); this flag alone does not create one.
     pub kb_query_enabled: bool,
+    /// Whether the live KB site (ADR-119 L1a) answers `GET /kb/<kb-id>/<id>` on
+    /// this listener: a KB's pages, read-only, to a bearer holder the KB's read
+    /// gate admits (the same gate as `kb/query.*`). Default false (principle
+    /// #12). Needs a `DocStore`, like `kb_query_enabled`, and is bounded by
+    /// `kb_query_max_scan_nodes`.
+    pub site_enabled: bool,
+    /// The live KB site's locale: `<html lang>` and every string the site
+    /// writes (P-16, P-164). Default `en-US`.
+    pub site_locale: String,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -240,6 +249,8 @@ impl Default for OAuthConfig {
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
             kb_query_enabled: false,
+            site_enabled: false,
+            site_locale: "en-US".to_string(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,
