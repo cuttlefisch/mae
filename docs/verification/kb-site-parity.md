@@ -215,13 +215,13 @@ Conventions for acceptance tests:
 |---|---|---|
 | P-91 | MUST offer light and dark modes, defaulting to the system preference, with the choice persisted and applied before paint. | Browser: `colorScheme` emulation sets the default; toggled mode present in the first frame after reload. |
 | P-92 | MUST declare the active palette on the root element and expose its colour tokens exactly as defined. | Root attribute equals the configured palette; each computed token equals the palette definition, both modes. |
-| P-93 | SHOULD let the reader choose a palette from a keyboard-operable menu next to the mode toggle; the choice applies at once (page and graph), in both modes, and persists across pages before paint; choosing the site default restores it. | Browser: select via keyboard; tokens change without reload; next page has them in the first frame. |
+| P-93 | SHOULD let the reader choose a palette from a keyboard-operable menu next to the mode toggle; the choice applies at once (page and graph), in both modes, and persists across pages before paint; choosing the site default restores it. | Browser: select via keyboard (on opening, focus may land on the checked palette or on the first item); tokens change without reload; next page has them in the first frame. |
 | P-94 | SHOULD offer accent (emphasis) swatches per palette in a submenu beside it, the palette's default first; palettes without swatches show none. | Browser: submenu items equal the palette's swatch list in order. |
 | P-95 | MUST let an accent change only the accent role (accent token, graph accent, "here" marker), never link or notice colours. | Browser: after selecting a swatch, link and notice computed colours are unchanged. |
 | P-96 | MUST persist the accent per palette, apply it before paint, clear it on "default", restore it on switching back to that palette, and ignore a stored value not valid for the palette. | Browser: each case checked via reload and storage injection. |
 | P-97 | MUST render and remain operable when browser storage throws. (new: not guaranteed by today's site, whose explorer and mode toggle stop working) | Browser with storage access overridden to throw: no console error; menu works for the session. |
 | P-98 | SHOULD map a removed palette stored by a reader to its designated successor and drop its accent. | Inject a removed palette name: the successor is active, no accent attribute. |
-| P-99 | MUST make the palette submenu operable by mouse (hover intent; crossing other items does not open them), by click (selected palette opens its submenu; another selects it), by keyboard (→, ←, Escape, Enter, Space) and by touch at 390 px, staying inside the viewport at desktop, 390 and 320 px. | Browser per input mode; submenu box within viewport; no horizontal scroll. |
+| P-99 | MUST make the palette submenu operable by mouse (hover intent; crossing other items does not open them), by click (selected palette opens its submenu; another selects it), by keyboard (→, ←, Escape, Enter, Space) and by touch at 390 px, staying inside the viewport at desktop, 390 and 320 px; where it cannot sit beside its parent menu, it may cover or replace it. | Browser per input mode; submenu box within viewport; no horizontal scroll. |
 | P-100 | MUST pass WCAG AA text contrast (4.5:1, 3:1 large) on every audit scenario in light and dark. | Automated WCAG 1.4.3 rule over the scenario set (§4.4): 0 violations. |
 | P-101 | MUST give every interactive control's boundary and every focus indicator 3:1 against the page (WCAG 1.4.11, 2.4.7). | Audit: listed control borders and focused outlines ≥ 3:1. |
 | P-102 | MUST keep link text ≥ 4.5:1 against the page, and every accent swatch ≥ 4.5:1 against the background, in both modes and every palette. | Computed link colour and each swatch accent vs background ≥ 4.5:1. |
@@ -236,8 +236,8 @@ Conventions for acceptance tests:
 | P-106 | MUST colour each token by its role from the active palette and mode, not by inline styles. | Browser: each role class's computed colour equals the palette token, in two palettes × two modes; no `style` attributes in code. |
 | P-107 | MUST keep the block text byte-identical to the source; copying a whole block yields the author's text exactly (tabs, trailing spaces, blank lines, Unicode, CR-LF, markup-like text). | Browser: select a block's contents; `Selection.toString()` and the text of the `copy` event equal the source; build-time comparison per fixture block. |
 | P-108 | MUST leave blocks of unsupported or undeclared languages unhighlighted, exact, in the block colour, occupying the same space as highlighted text would; log the languages and pages. Not fatal. | Fixture typo language: plain text; box size equal to a highlighted twin; log line lists it; exit 0. |
-| P-109 | SHOULD offer a copy control per block that copies the exact text. (new: not guaranteed by today's site) | Browser (Chromium, clipboard permission): clipboard equals source. |
-| P-110 | MUST scroll long lines inside the block, never the page, without wrapping that changes copied text. (new: not guaranteed by today's site) | Browser 390 px: block `scrollWidth > clientWidth`; page has no horizontal scroll; copied text unchanged. |
+| P-109 | SHOULD offer a copy control per block that copies the exact text. (new: not guaranteed by today's site, whose copy control drops a blank line) | Browser (Chromium, clipboard permission): clipboard equals source, for every fixture block, consecutive blank lines included. |
+| P-110 | MUST scroll long lines inside the block, never the page, without wrapping that changes copied text. | Browser 390 px: the block or one of its descendants has `scrollWidth > clientWidth` and scrolls; page has no horizontal scroll; copied text unchanged. |
 
 ### 3.14 Diagrams
 
@@ -265,12 +265,12 @@ Conventions for acceptance tests:
 | ID | Requirement | Acceptance test |
 |---|---|---|
 | P-127 | MUST make each section foldable by a button at its heading (`aria-expanded`, `aria-controls`, named by the heading). | Browser: button per heading with a body; toggling flips `aria-expanded` and visibility. |
-| P-128 | MUST open long pages outline-first (≥ 4 foldable sections and ≥ 3000 characters: top level folded; a single top section opens one level down); author-marked folded sections stay folded; others open. | Fixture long page: exactly the expected sections folded on load. |
+| P-128 | MUST open long pages outline-first (≥ 4 foldable sections and ≥ 3000 characters: top level folded; a single top section opens one level down); author-marked folded sections stay folded; others open. (new for outline-first: today's site folds only author-marked sections) | Fixture long page: exactly the expected sections folded on load. |
 | P-129 | MUST offer one expand-all/collapse-all control, named for what it will do, with `aria-expanded`, and remember the state for the next page. | Browser: label switches; next page opens as left. |
 | P-130 | MUST open folded sections containing a requested fragment (on load, client-side navigation, `hashchange`, Back/Forward, same-page links, footnotes) and scroll to it. | Browser: `#fragment` inside a folded section: section expanded, target in view. |
 | P-131 | SHOULD let the browser's find-in-page reveal folded text (`hidden=until-found`), the button reflecting it. | DOM: folded bodies carry `hidden="until-found"` (find-in-page itself is checked by hand). |
-| P-132 | MUST show everything without controls when printed and when JavaScript is off. | Print media emulation: no folded content hidden, no fold buttons visible; same with JS disabled. |
-| P-133 | MUST scroll a wide table inside its own container, never the page; cells of text at least 14ch wide, short unbroken cells (≤ 24 chars) exempt; header sticky when the table is taller than 80 % of the viewport. | Browser 390 px and 1200 px: container scrolls; page does not; header `position: sticky` stays at top when scrolled. |
+| P-132 | MUST show everything without controls when printed and when JavaScript is off. | Print media emulation: every folded section's content renders (judged by its content's boxes, not by the absence of `hidden`, which a print style may leave in place), no fold buttons visible; same with JS disabled. |
+| P-133 | MUST scroll a wide table inside its own container, never the page; cells of text at least 14ch wide, short unbroken cells (≤ 24 chars) exempt; header sticky when the table is taller than 80 % of the viewport. | Browser 390 px and 1200 px: where the table is wider than its container, the container scrolls; the page never does; header `position: sticky` stays at top when scrolled. |
 | P-134 | MUST offer a full-screen control per table that opens it in a modal dialog; Escape returns it with focus on the control; it returns before print or navigation. | Browser: dialog contains the table; after Escape, table in article, focus on control. |
 
 ### 3.16 Unique element IDs and offline output
@@ -393,6 +393,10 @@ to the engine.
   several frames. A check that fails only intermittently is a defect, fixed at its cause.
 - A check that scrolls and then reads a scroll position scrolls with `behavior: "instant"`: a
   site may set `scroll-behavior: smooth`, and a smooth scroll is still moving when it is read.
+- After a client-side navigation, wait for the new page's `h1` to replace the old one, not for
+  network idle, which is already met when the navigation starts.
+- Whether a section is folded is judged on its contents. A body under `hidden="until-found"`
+  still has a box (`content-visibility: hidden`), so `checkVisibility()` on the body itself is true.
 
 ### 4.6 Retirement criteria
 
