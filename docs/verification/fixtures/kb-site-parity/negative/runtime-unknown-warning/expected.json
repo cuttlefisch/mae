@@ -1,5 +1,9 @@
 {
  "requirement": "P-146",
  "exit": 1,
- "runtime": "the runner injects a log line outside the allow-list; it must be echoed to stderr"
+ "runtime": "the runner injects a log line outside the allow-list; it must be echoed to stderr",
+ "reference": {
+  "exit": null,
+  "why": "not forced on the reference: it has no hook to inject a log line; its allow-list is covered by its own unit tests"
+ }
 }

@@ -9,8 +9,9 @@
 # Environment / direnv
 .envrc
 
-# Symlinked org-roam node (user-local)
-README.org
+# Symlinked org-roam node (user-local), at the root only: unanchored, this
+# also hid the parity fixture's README.org
+/README.org
 
 # MAE runtime state (project-local, user-specific)
 .mae/

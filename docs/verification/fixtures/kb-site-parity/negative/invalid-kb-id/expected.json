@@ -1,5 +1,9 @@
 {
  "requirement": "P-04",
  "exit": 1,
- "why": "a KB identifier outside ^[a-z0-9][a-z0-9-]{0,62}$"
+ "why": "a KB identifier outside ^[a-z0-9][a-z0-9-]{0,62}$",
+ "reference": {
+  "exit": 3,
+  "why": "the reference's renderer self-test builds with the same configuration, so an invalid KB identifier fails the self-test first and reports the renderer (3), not the content (1)"
+ }
 }

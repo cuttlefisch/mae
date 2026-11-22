@@ -1,5 +1,9 @@
 {
  "requirement": "P-117",
  "exit": 1,
- "runtime": "the runner forces the diagram time budget to near zero"
+ "runtime": "the runner forces the diagram time budget to near zero",
+ "reference": {
+  "exit": null,
+  "why": "not forced on the reference: its diagram time budget is a constant, not an option; the fatal budget line is covered by its own unit tests"
+ }
 }
