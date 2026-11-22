@@ -50,7 +50,9 @@ fn bundle() -> Site {
 fn the_whole_bundle_derives_and_nothing_is_withheld() {
     let site = bundle();
     assert_eq!(site.withheld, vec![], "withheld");
-    assert_eq!(site.pages.len(), 16);
+    // Every page of the bundle, whatever the fixture grows to.
+    assert_eq!(site.pages.len(), sources(&fixture().join("bundle")).len());
+    assert!(site.pages.len() >= 16);
     for (id, p) in &site.pages {
         assert_eq!(&p.id, id);
         assert_eq!(p.href, format!("/{}/", mae_site::address::segment(id)));
