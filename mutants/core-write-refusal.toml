@@ -88,3 +88,33 @@ find = '''                        if let Err(e) =
                         }
                         match std::fs::copy(&old_path, &new) {'''
 replace = '''                        match std::fs::copy(&old_path, &new) {'''
+
+[[mutant]]
+id = "core-write-refusal/tangle-unchecked"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(an_ai_tangle_into_project_config_is_refused_and_a_human_one_is_not)"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''            if let Err(e) = self.refuse_untrusted_write(&out.path, super::WriteOrigin::Command) {'''
+replace = '''            if let Err(e) = Ok::<(), String>(()) {'''
+
+[[mutant]]
+id = "core-write-refusal/export-unchecked"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(an_ai_export_out_of_the_test_sandbox_is_refused)"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''                self.refuse_untrusted_write(&out, super::WriteOrigin::Command)?;'''
+replace = ''''''
+
+[[mutant]]
+id = "core-write-refusal/ai-save-unchecked"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(ai_save_outside_the_sandbox_is_refused)"
+[[mutant.edit]]
+file = "crates/ai/src/tool_impls/file.rs"
+find = '''    editor.refuse_untrusted_write(&resolved, WriteOrigin::Agent)?;'''
+replace = ''''''

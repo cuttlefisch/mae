@@ -119,6 +119,8 @@ pub fn execute_ai_save(editor: &mut Editor, args: &serde_json::Value) -> Result<
         PathBuf::from(p)
     };
 
+    // Confined like every agent write (#969): the path is the agent's choice.
+    editor.refuse_untrusted_write(&resolved, WriteOrigin::Agent)?;
     match editor.ai_save(&resolved) {
         Ok(n) => Ok(format!("Saved {} entries to {}", n, resolved.display())),
         Err(e) => Err(e),
@@ -605,8 +607,10 @@ mod sandbox_effect_tests {
         assert!(to.exists() && !from.exists());
     }
 
-    /// `create_file` resolves a relative path against the process's working
-    /// directory, so the effect judges it there; outside the sandbox, refused.
+    /// A create outside the sandbox is refused at the effect, and nothing is
+    /// written. (A relative path is judged against the working directory; that
+    /// is tested in mae-core without a write, so a regression here cannot
+    /// litter the checkout.)
     #[test]
     fn create_file_outside_the_sandbox_is_refused_at_the_effect() {
         let mut s = sandboxed();
@@ -617,21 +621,29 @@ mod sandbox_effect_tests {
         );
         assert!(result.is_err() && !planted.exists(), "{result:?}");
 
-        let relative = format!("mae-969-{}.txt", std::process::id());
-        let result = execute_create_file(
-            &mut s.editor,
-            &serde_json::json!({ "path": relative, "content": "x" }),
-        );
-        let landed = std::env::current_dir().unwrap().join(&relative);
-        let escaped = landed.exists();
-        let _ = std::fs::remove_file(&landed);
-        assert!(result.is_err() && !escaped, "{result:?}");
-
         let inside = s.sandbox.join("ok.txt");
         execute_create_file(
             &mut s.editor,
             &serde_json::json!({ "path": inside.display().to_string(), "content": "x" }),
         )
         .expect("a create inside the sandbox");
+    }
+
+    /// `ai_save` writes a transcript to a path the agent chooses.
+    #[test]
+    fn ai_save_outside_the_sandbox_is_refused() {
+        let mut s = sandboxed();
+        s.editor
+            .buffers
+            .push(mae_core::buffer::Buffer::new_conversation("*AI*"));
+        let planted = s.outside.with_file_name("transcript.json");
+        let args = serde_json::json!({ "path": planted.display().to_string() });
+        let result = execute_ai_save(&mut s.editor, &args);
+        assert!(result.is_err() && !planted.exists(), "{result:?}");
+
+        let inside = s.sandbox.join("transcript.json");
+        let args = serde_json::json!({ "path": inside.display().to_string() });
+        execute_ai_save(&mut s.editor, &args).expect("a save inside the sandbox");
+        assert!(inside.exists());
     }
 }

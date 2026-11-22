@@ -175,7 +175,9 @@ fn an_ai_save_outside_the_test_sandbox_is_refused_on_every_path() {
 
 /// The sandbox bounds the agent under test, not the human sharing the editor
 /// (an MCP client runs the self-test against a live session): a human's
-/// command still saves outside it, and an AI save inside it still lands.
+/// explicit command still saves outside it, and an AI save inside it still
+/// lands. Autosave of a buffer outside it waits until the test ends: the timer
+/// cannot tell whose edit it would write.
 #[test]
 fn the_sandbox_leaves_human_saves_and_saves_inside_it_alone() {
     let mut s = sandboxed();
@@ -248,5 +250,97 @@ fn ex_rename_and_copy_are_confined_where_they_write_for_an_ai_only() {
         assert_eq!(target.exists(), happens, "{case}: target");
         let source_kept = !(happens && cmd == "rename");
         assert_eq!(s.outside.exists(), source_kept, "{case}: source");
+    }
+}
+
+/// A relative path is judged where the write resolves it, the working
+/// directory, never against the sandbox. Judged only: nothing is written.
+#[test]
+fn a_relative_path_is_judged_against_the_working_directory() {
+    let s = sandboxed();
+    let relative = Path::new("mae-969-relative.txt");
+    assert!(s
+        .editor
+        .refuse_write_outside_test_sandbox(relative)
+        .is_err());
+    let absolute_inside = s.sandbox.join("x.txt");
+    assert!(s
+        .editor
+        .refuse_write_outside_test_sandbox(&absolute_inside)
+        .is_ok());
+}
+
+/// An org buffer whose only block tangles to `target`, visiting a file in `dir`.
+fn tangling_buffer(editor: &mut Editor, dir: &Path, target: &Path) -> usize {
+    let src = format!(
+        "#+begin_src scheme :tangle \"{}\"\n(set-option! \"ai_permission_tier\" \"full\")\n#+end_src\n",
+        target.display()
+    );
+    let idx = modified_buffer(editor, &dir.join("notes.org"), &src);
+    editor.window_mgr.focused_window_mut().buffer_idx = idx;
+    idx
+}
+
+/// `:tangle` names any path. An AI-originated tangle into MAE's config is the
+/// `create_file` escalation in one block, so it is refused and writes nothing,
+/// while the human tangling their own literate config is unaffected.
+#[test]
+fn an_ai_tangle_into_project_config_is_refused_and_a_human_one_is_not() {
+    for ai in [true, false] {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join(".mae").join("init.scm");
+        let mut editor = Editor::new();
+        tangling_buffer(&mut editor, tmp.path(), &target);
+        editor.ai.ai_dispatch_depth = u32::from(ai);
+        editor.babel_tangle();
+        editor.ai.ai_dispatch_depth = 0;
+        assert_eq!(target.exists(), !ai, "tangle (ai: {ai})");
+    }
+}
+
+/// And under a sandbox: a tangle target outside it is refused for an AI.
+#[test]
+fn an_ai_tangle_out_of_the_test_sandbox_is_refused() {
+    let mut s = sandboxed();
+    let target = s.outside.with_file_name("tangled.scm");
+    let dir = s.sandbox.clone();
+    tangling_buffer(&mut s.editor, &dir, &target);
+    s.editor.ai.ai_dispatch_depth = 1;
+    s.editor.babel_tangle();
+    s.editor.ai.ai_dispatch_depth = 0;
+    assert!(!target.exists());
+
+    let inside = s.sandbox.join("tangled.scm");
+    tangling_buffer(&mut s.editor, &dir, &inside);
+    s.editor.ai.ai_dispatch_depth = 1;
+    s.editor.babel_tangle();
+    s.editor.ai.ai_dispatch_depth = 0;
+    assert!(
+        inside.exists(),
+        "a tangle inside the sandbox must still work"
+    );
+}
+
+/// An export writes beside the buffer's file, so an AI export of a buffer
+/// outside the sandbox writes outside it: refused. Inside, it works.
+#[test]
+fn an_ai_export_out_of_the_test_sandbox_is_refused() {
+    for inside in [false, true] {
+        let mut s = sandboxed();
+        let file = if inside {
+            s.sandbox.join("doc.org")
+        } else {
+            s.outside.with_file_name("doc.org")
+        };
+        let idx = modified_buffer(&mut s.editor, &file, "* Heading\nbody\n");
+        s.editor.window_mgr.focused_window_mut().buffer_idx = idx;
+        s.editor.ai.ai_dispatch_depth = 1;
+        s.editor.org_export_html();
+        s.editor.ai.ai_dispatch_depth = 0;
+        assert_eq!(
+            file.with_extension("html").exists(),
+            inside,
+            "inside: {inside}"
+        );
     }
 }

@@ -146,17 +146,23 @@ pub fn execute_switch_project(
     Ok(format!("Switched to project '{}' at {}", name, path_str))
 }
 
+/// `<cwd>/.mae/memory`, if a write there is allowed: not while a test sandbox
+/// is active and it lies outside it (#969).
+fn memory_dir(editor: &Editor) -> Result<PathBuf, String> {
+    let dir = std::env::current_dir()
+        .map_err(|e| format!("failed to get current dir: {}", e))?
+        .join(".mae/memory");
+    editor.refuse_write_outside_test_sandbox(&dir)?;
+    Ok(dir)
+}
+
 pub fn execute_save_memory(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let fact = args
         .get("fact")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing 'fact' argument".to_string())?;
 
-    let mae_dir = std::env::current_dir()
-        .map_err(|e| format!("failed to get current dir: {}", e))?
-        .join(".mae/memory");
-
-    editor.refuse_write_outside_test_sandbox(&mae_dir)?;
+    let mae_dir = memory_dir(editor)?;
     if !mae_dir.exists() {
         std::fs::create_dir_all(&mae_dir)
             .map_err(|e| format!("failed to create memory dir: {}", e))?;
@@ -183,10 +189,12 @@ pub fn execute_save_memory(editor: &Editor, args: &serde_json::Value) -> Result<
 /// while a test sandbox is active the plan must land inside it.
 fn plan_file(editor: &Editor, name: &str) -> Result<PathBuf, String> {
     let mut parts = Path::new(name).components();
-    let plain = matches!(
-        (parts.next(), parts.next()),
-        (Some(std::path::Component::Normal(_)), None)
-    );
+    // `x/` is one component to `Path`, and became `.mae/plans/x/.md`.
+    let plain = !name.contains(std::path::is_separator)
+        && matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        );
     if !plain {
         return Err(format!(
             "invalid plan name '{name}': give a file name, not a path"
@@ -345,7 +353,9 @@ mod switch_project_tests {
 }
 
 /// #969: a plan name is a file name, never a path, and plan and memory writes
-/// stay inside an active test sandbox.
+/// stay inside an active test sandbox. Every case here judges a path without
+/// writing, or writes only into a temp directory, so a regression cannot
+/// write into the checkout's own `.mae/`.
 #[cfg(test)]
 mod plan_path_tests {
     use super::*;
@@ -355,12 +365,22 @@ mod plan_path_tests {
         let editor = Editor::new();
         let tmp = tempfile::TempDir::new().unwrap();
         let elsewhere = tmp.path().join("CLAUDE.md").display().to_string();
-        for name in [elsewhere.as_str(), "../../escape", "a/b", "..", ".", ""] {
+        for name in [
+            elsewhere.as_str(),
+            "../../escape",
+            "a/b",
+            "x/",
+            "..",
+            ".",
+            "",
+        ] {
             assert!(plan_file(&editor, name).is_err(), "{name:?} accepted");
-            for run in [execute_create_plan, execute_update_plan] {
-                let args = serde_json::json!({ "name": name, "content": "x" });
-                assert!(run(&editor, &args).is_err(), "{name:?} accepted");
-            }
+        }
+        // Through the tools too, with the one name whose regression would land
+        // in the temp directory rather than the working directory.
+        for run in [execute_create_plan, execute_update_plan] {
+            let args = serde_json::json!({ "name": elsewhere, "content": "x" });
+            assert!(run(&editor, &args).is_err());
         }
         assert!(!tmp.path().join("CLAUDE.md").exists(), "a plan escaped");
     }
@@ -378,16 +398,15 @@ mod plan_path_tests {
         }
     }
 
-    /// During a self-test the working directory is the real project, so a
-    /// plan or memory write there is outside the sandbox and refused.
+    /// During a self-test the working directory is the real project, so plan
+    /// and memory paths there are outside the sandbox and refused.
     #[test]
-    fn plan_and_memory_writes_outside_the_sandbox_are_refused() {
+    fn plan_and_memory_paths_outside_the_sandbox_are_refused() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut editor = Editor::new();
+        assert!(plan_file(&editor, "p969").is_ok() && memory_dir(&editor).is_ok());
         editor.test_sandbox_dir = Some(tmp.path().to_path_buf());
-        let plan = serde_json::json!({ "name": "p969", "content": "x" });
-        assert!(execute_create_plan(&editor, &plan).is_err());
-        let fact = serde_json::json!({ "fact": "x" });
-        assert!(execute_save_memory(&editor, &fact).is_err());
+        assert!(plan_file(&editor, "p969").is_err());
+        assert!(memory_dir(&editor).is_err());
     }
 }
