@@ -44,6 +44,8 @@ mae-sync = { path = "../shared/sync" }
 # file drawer and which are keywords is what Org says, not a line heuristic.
 # rowan is its only dependency.
 mae-org = { path = "../shared/org" }
+# ADR-119: the web core, for the live KB site (`site`).
+mae-site = { path = "../shared/site" }
 
 # Collab WAL persistence — uses `sqlite` crate (same native lib as cozo, no links conflict)
 sqlite = { version = "0.32", features = ["bundled"] } # one SQLite everywhere: the bundled copy the musl release links (see .cargo/config.toml)

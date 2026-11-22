@@ -62,6 +62,10 @@ pub struct ResourceServerConfig {
     /// independently toggleable from the listener being up (see
     /// `config::OAuthConfig::kb_query_enabled`'s doc comment).
     pub kb_query_enabled: bool,
+    /// `config::OAuthConfig::site_enabled`: the live KB site's routes.
+    pub site_enabled: bool,
+    /// `config::OAuthConfig::site_locale`.
+    pub site_locale: String,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -665,6 +669,14 @@ async fn handle_request(
         Err(resp) => return Ok(*resp),
     };
 
+    // ADR-119 L1a: the live KB site, read-only, when enabled. Authenticated
+    // like every route here; the KB's read gate decides the rest.
+    if config.site_enabled {
+        if let Some((kb_id, id)) = site_path(req.uri().path()) {
+            return Ok(site_route(&req, &listener, &principal, &kb_id, &id).await);
+        }
+    }
+
     // Read the body (never done before this phase) to see if this is a
     // kb/query.* JSON-RPC call. An empty/unparseable body is not an error —
     // it's exactly what a bare bearer-verification probe sends. The size
@@ -692,6 +704,107 @@ async fn handle_request(
     )
     .await;
     Ok(json_response(StatusCode::OK, body))
+}
+
+/// `/kb/<kb-id>/<id>`, with `<id>` percent-decoded. One segment each: any
+/// other shape is not a site path.
+pub(crate) fn site_path(path: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/kb/")?;
+    let (kb, id) = rest.split_once('/')?;
+    if kb.is_empty() || id.is_empty() || id.contains('/') {
+        return None;
+    }
+    Some((kb.to_string(), percent_decode(id)?))
+}
+
+/// `%XX` decoded; `None` for a bad escape or text that is not UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let h = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(h, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// One live-site request (ADR-119 L1a): `GET` only, charged as a scan, and
+/// every refusal answered as one not-found (D7).
+async fn site_route(
+    req: &Request<Incoming>,
+    listener: &Listener,
+    principal: &ValidatedPrincipal,
+    kb_id: &str,
+    id: &str,
+) -> Response<Full<Bytes>> {
+    use mae_daemon::site::{self, SitePage};
+    let config = &listener.config;
+    if req.method() != hyper::Method::GET {
+        return site_response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed".into());
+    }
+    let not_found = || site_response(StatusCode::NOT_FOUND, "not found".into());
+    let Some(store) = listener.doc_store.as_ref() else {
+        return not_found();
+    };
+    if principal.credential == oauth_self_issue::Credential::IdpUnbound {
+        return not_found();
+    }
+    // A page derivation reads the whole KB: charged as a scan.
+    if mae_daemon::quota::charge_or_reject(
+        listener.quota.as_ref(),
+        Some(&principal.principal),
+        "kb/query.list",
+        serde_json::Value::Null,
+    )
+    .is_err()
+    {
+        return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into());
+    }
+    match site::page(
+        store,
+        kb_id,
+        id,
+        Some(&principal.principal),
+        config.kb_query_max_scan_nodes,
+    )
+    .await
+    {
+        SitePage::Found { title, html } => site_response(
+            StatusCode::OK,
+            site::document(&config.site_locale, &title, &html),
+        ),
+        SitePage::NotFound => not_found(),
+        SitePage::TooLarge => site_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this KB is larger than the site derives per request".into(),
+        ),
+    }
+}
+
+/// An HTML (or plain refusal) response with the site's headers: its CSP,
+/// no sniffing, no referrer, no caching of a reader's private page.
+fn site_response(status: StatusCode, body: String) -> Response<Full<Bytes>> {
+    let ctype = if status == StatusCode::OK {
+        "text/html; charset=utf-8"
+    } else {
+        "text/plain; charset=utf-8"
+    };
+    Response::builder()
+        .status(status)
+        .header("content-type", ctype)
+        .header("content-security-policy", mae_daemon::site::CSP)
+        .header("x-content-type-options", "nosniff")
+        .header("referrer-policy", "no-referrer")
+        .header("cache-control", "private, no-store")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// Read an authenticated request's body under `max_request_body_bytes`,
