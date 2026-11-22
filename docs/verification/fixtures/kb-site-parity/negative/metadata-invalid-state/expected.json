@@ -1,0 +1,6 @@
+{
+ "requirement": "P-150",
+ "exit": 0,
+ "log": "invalid document state",
+ "feature": "the invalid-state notice, never another state"
+}

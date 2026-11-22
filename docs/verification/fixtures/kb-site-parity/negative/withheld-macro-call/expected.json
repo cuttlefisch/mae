@@ -1,0 +1,5 @@
+{
+ "requirement": "P-147",
+ "exit": 1,
+ "why": "a macro call while macros are unsupported"
+}

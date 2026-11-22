@@ -65,7 +65,7 @@ Conventions for acceptance tests:
 | P-01 | MUST emit exactly one page per file-level node in the bundle. | Count of pages in the output equals count of file-level IDs in the bundle; each ID resolves to one page. |
 | P-02 | MUST answer every published ID (page and addressable section) at `/<id>`, leading to the page (and the section's anchor). | For every ID in the address manifest, loading `/<id>` ends on the page URL with the right fragment. |
 | P-03 | MUST make `/<id>` redirects static: canonical link, `noindex`, zero-delay refresh, relative target. | Parse each redirect file: `<link rel=canonical>`, `<meta name=robots content=noindex>`, `<meta http-equiv=refresh content="0; url=<relative>">`. |
-| P-04 | MUST, when a KB identifier is configured, also answer `/<kb-id>/<id>`; `/<id>` stays. An invalid KB identifier fails the build. | Both paths redirect to the same page; a config with an identifier outside `^[a-z0-9][a-z0-9-]{0,62}$` exits 1. |
+| P-04 | MUST, when a KB identifier is configured, also answer `/<kb-id>/<id>`; `/<id>` stays. An invalid KB identifier fails the build. | Both paths redirect to the same page; a config with an identifier outside `^[a-z0-9][a-z0-9-]{0,62}$` exits 1. Configuration is validated before the renderer self-test (P-118): 3 means a retryable environment fault, and a bad identifier is not retryable. |
 | P-05 | MUST keep every URL the site ever served for a page leading to it after a move or rename, from the route history in the bundle. | Build with a history mapping an old path to an ID: the old URL redirects to the current page. |
 | P-06 | MUST never overwrite a live page with a redirect; a live page always wins. | A history entry whose old URL equals a live page's URL: the live page has no refresh meta. |
 | P-07 | MUST NOT redirect an ID that is no longer published; its old URL is 404. | Remove a node from the bundle: neither `/<id>` nor its old path exists in the output. |
@@ -243,7 +243,7 @@ Conventions for acceptance tests:
 | P-111 | MUST render DOT blocks at build time to inline SVG, with no client script and no network. | Output contains `<svg>` for each fixture DOT block; offline check passes. |
 | P-112 | MUST name each diagram from its caption (`role=img`, `aria-label`) or a default locale name; diagrams with links are named groups instead. | DOM: `aria-label` equals caption; linked diagram has `role=group`. |
 | P-113 | MUST draw default-coloured ink, borders and background with the theme's diagram roles in light and dark, in both browsers. | Computed fill/stroke of default elements equal the role tokens; repeated with roles overridden to distinct test values. |
-| P-114 | MUST map author colours that equal a declared palette role to that role, following the theme. | Fixture "role map": each element's computed colour is its role's value in the active palette and mode. |
+| P-114 | MUST map author colours that equal a declared palette role to that role, following the theme. | Fixture "role map": each element's computed colour is its role's value in the active palette and mode. The reference recognises a role-mapped diagram only in the fixture's exact shape (zone clusters, white nodes, line, highlight and block roles; a background fill takes it out); the candidate must accept at least that shape. |
 | P-115 | MUST fail the build when any diagram would fall back to a fixed panel for author colours or lose the theme; the log names the page. | Fixture page with an author colour on the background: exit 1; stderr names the page. |
 | P-116 | MUST keep a diagram with a DOT syntax error as code with a visible notice in the locale, without the renderer's message; not fatal. | Fixture broken block: `<pre>` with its source and a notice element; exit 0. |
 | P-117 | MUST fail the build when the diagram time budget runs out. | Budget forced to near zero: exit 1. |
@@ -295,7 +295,7 @@ Conventions for acceptance tests:
 | P-148 | MUST print one summary line per build with counts (published, withheld by reason, links resolved/unresolved, diagrams drawn/as code, code blocks highlighted/plain). | Clean build log matches the documented line format. |
 | P-149 | MUST build with no network, a read-only root filesystem and writable space only in temporary storage and the output. | Run in a sandbox with networking off and root read-only: clean fixture exits 0. |
 | P-150 | MUST NOT stop a publish for non-content metadata faults (malformed date, missing what's-new target, invalid version data, invalid document state); each yields a log line and the feature is left out or a notice shown. | One fixture per case: exit 0; documented log line present. |
-| P-151 | MUST pass all page HTML through a final allow-list sanitiser (elements, attributes per element, URL protocols). | Hostile fixture (script, event handlers, `javascript:` URLs, raw HTML blocks): none survive. |
+| P-151 | MUST pass all page HTML through a final allow-list sanitiser (elements, attributes per element, URL protocols). | Hostile fixture (script, event handlers, `javascript:` URLs, raw HTML blocks): none survive, judged on the parsed DOM (inside the article: no `<script>`, no `on*` attribute, no `javascript:` URL; page-wide: no `on*` attribute, every `<script src>` same-origin; the marker only in text nodes). No inline `<script>` on any page *(new: not guaranteed by today's site; ADR-119 D19)*. |
 | P-152 | SHOULD produce byte-identical output from the same bundle and configuration, except declared build timestamps. (new: not guaranteed by today's site) | Build twice; diff is empty or limited to the declared fields. |
 
 ### 3.18 Component-hook contract
@@ -330,7 +330,14 @@ to the engine.
   every supported language plus a typo language and an undeclared block, DOT diagrams
   (default colours, author fill under text, role map, linked nodes, tall, small, broken),
   section nodes, a route-history entry, a malformed date, a draft-state page, version data.
-- **Negative fixtures**, one per failure in §3.17, each with its expected exit code.
+  It lives in [`fixtures/kb-site-parity/`](fixtures/kb-site-parity/README.org), whose README
+  maps each part to its requirements and states the fixture's own data contracts (document
+  state, last-updated date, route history, version data); each engine's build adapter
+  translates them into what that engine reads.
+- **Negative fixtures**, one per failure in §3.17, each with its expected exit code
+  (`fixtures/kb-site-parity/negative/*/expected.json`). Cases that need the build environment
+  rather than content (a symbolic link, a non-empty output, a broken extension) are described
+  there and created by the suite's runner at run time, on a temporary copy of the bundle.
 - A site may also compare on a private published bundle of its own; those results stay with
   the site.
 

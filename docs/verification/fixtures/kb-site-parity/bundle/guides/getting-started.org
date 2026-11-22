@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000010
+:END:
+#+title: Getting started
+#+filetags: :guides:
+
+A guide at the first folder level. It links [[id:1a000000-0000-4000-8000-000000000011][a deeper guide]] and back to the
+[[id:1a000000-0000-4000-8000-000000000001][home page]].

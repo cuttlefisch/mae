@@ -1,0 +1,37 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000020
+:END:
+#+title: The long reference page
+#+filetags: :reference:
+
+A long page. It has more than four top-level sections and more than three thousand characters,
+so it opens with the top level folded.
+
+* First section
+This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. 
+
+* Second section
+This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. 
+A footnote reference.[fn:1]
+
+* Third section, folded by the author
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. 
+
+** The folded target section
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000021
+:END:
+<<deep-target>>A target inside a folded section. Opening a link to it must unfold its parent.
+
+* Fourth section
+This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. 
+
+* Fifth section
+This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. This paragraph is filler that gives the page its length, so that the outline-first rule applies. It is plain prose without links. 
+A link to [[deep-target][the target above]].
+
+* Footnotes
+[fn:1] The footnote's text.

@@ -1,0 +1,10 @@
+{
+ "requirement": "P-144",
+ "exit": 1,
+ "why": "an alias with .. must not write outside the output",
+ "also": "nothing written beside the site directory",
+ "reference": {
+  "exit": 0,
+  "why": "the reference publishes no alias pages from this bundle at all (a harmless alias produces none either), so nothing is written outside; exit 1 for an escaping alias is new"
+ }
+}

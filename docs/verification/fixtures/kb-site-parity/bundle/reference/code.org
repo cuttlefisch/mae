@@ -1,0 +1,138 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000030
+:END:
+#+title: Code blocks
+#+filetags: :reference:code:
+
+Every supported language, then the cases that must stay plain.
+
+* Supported languages
+** sh
+#+begin_src sh
+echo "hello"  # trailing spaces after this   
+exit 0
+#+end_src
+
+** bash
+#+begin_src bash
+for f in *.org; do
+	printf "%s\n" "$f"
+done
+#+end_src
+
+** shell
+#+begin_src shell
+ls -la
+#+end_src
+
+** powershell
+#+begin_src powershell
+Write-Output "hello"
+#+end_src
+
+** ps1
+#+begin_src ps1
+Get-ChildItem
+#+end_src
+
+** yaml
+#+begin_src yaml
+name: fixture
+items:
+  - one
+  - two
+#+end_src
+
+** yml
+#+begin_src yml
+key: value
+#+end_src
+
+** python
+#+begin_src python
+def greet(name: str) -> str:
+    return f"hello, {name}"
+#+end_src
+
+** py
+#+begin_src py
+print('ünïcödé ✓')
+#+end_src
+
+** json
+#+begin_src json
+{"a": 1, "b": [true, null]}
+#+end_src
+
+** toml
+#+begin_src toml
+[section]
+key = "value"
+#+end_src
+
+** hcl
+#+begin_src hcl
+resource "example" "a" {
+  name = "a"
+}
+#+end_src
+
+** terraform
+#+begin_src terraform
+variable "x" {}
+#+end_src
+
+** tf
+#+begin_src tf
+output "y" { value = 1 }
+#+end_src
+
+** ini
+#+begin_src ini
+[core]
+name = fixture
+#+end_src
+
+** conf
+#+begin_src conf
+listen 8080
+#+end_src
+
+** sql
+#+begin_src sql
+SELECT id, title FROM nodes WHERE id = 1;
+#+end_src
+
+** nginx
+#+begin_src nginx
+server {
+    listen 8080;
+}
+#+end_src
+
+* Cases that stay plain or exact
+** A typo language (stays plain, exact)
+#+begin_src pyhton
+print('not highlighted')
+#+end_src
+
+** An undeclared block
+#+begin_src
+no language: plain, exact
+#+end_src
+
+** Markup-like text, blank lines and a long line
+#+begin_src sh
+<script>alert(1)</script> &amp; [[id:x]]
+
+
+echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#+end_src
+
+* Code inside a folded section
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+#+begin_src python
+print('highlighted even when folded')
+#+end_src

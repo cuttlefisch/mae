@@ -1,0 +1,67 @@
+#+title: Parity fixture bundle (kb-site-parity, §4.1)
+
+A public, synthetic fixture for the knowledge-base site parity specification
+(docs/verification/kb-site-parity.md in MAE). Every page is invented for this purpose: nothing
+here comes from any real or private knowledge base. Build both the reference engine and the
+candidate engine from =bundle/=, =data/= and =site.yaml=, then run the parity acceptance suite
+against both.
+
+* Layout
+
+- =bundle/= :: the org files: the only content input.
+- =data/= :: build-time data: route history, version records.
+- =site.yaml= :: the site configuration both engines take (locale, base path, KB identifier,
+  palette, slots, hidden namespaces, descending folders, the what's-new node).
+- =negative/= :: one directory per build failure of §3.17, each with =expected.json= (exit code,
+  and the log line or the absence it must produce).
+
+* What each part exercises
+
+| Path | Requirements |
+|---+---|
+| =bundle/index.org= | P-01, P-02, P-11 (link to an absent ID), P-13 (one hidden, one shown namespace reference), P-14, P-17, P-18 (remote image), P-70 to P-73 (tags) |
+| =bundle/whats-new.org= | P-163 (what's new) |
+| =bundle/guides/= | P-72 (folder listings), nested folders |
+| =bundle/guides/advanced/deep/deeper/= | deep pages; the explorer and breadcrumbs at depth |
+| =bundle/guides/a-page-…-long-title.org= | long titles (explorer, header, graph labels) |
+| =bundle/journal/= | a folder configured to list newest first |
+| =bundle/reference/long-page.org= | P-127 to P-132 (≥ 4 top sections, > 3000 characters, an author-folded section, a target inside a folded section), P-10 (section node), footnotes |
+| =bundle/reference/wide-table.org= | P-133, P-134 (a 7-column table) |
+| =bundle/reference/code.org= | P-105 to P-110 (every supported language, a typo language, an undeclared block, exact text) |
+| =bundle/reference/diagrams.org= | P-111 to P-126 (default colours, author fill under text, role map, linked nodes, tall, small, broken) |
+| =bundle/status/draft.org= | P-161 (document-state badge) |
+| =bundle/status/malformed-date.org= | P-150, P-163 (a malformed date: no last-updated line) |
+| =data/route-history.json= | P-05 (old path to ID), P-06 (old path equal to a live page), P-08 (an unsafe path) |
+| =data/version/= | P-160, P-163 (version data, site-changes page) |
+| =negative/= | P-04, P-15, P-141 to P-147, P-150, P-151 |
+
+* Data formats
+
+The fixture defines its own neutral contracts; each engine's build adapter translates them into
+whatever that engine reads, outside this repository.
+
+- Document state: the file-level property =:STATE:= with =draft=, =in-review=, =approved=,
+  =in-force=, =superseded= or =withdrawn= (exact text; anything else is an invalid state).
+- Last updated: =:UPDATED: YYYY-MM-DD= (a day that exists).
+- Route history (=data/route-history.json=): ={"format": "route-history/1", "routes": {"<old
+  path>.org": "<ID of the last page that had it>"}}=.
+- Version data (=data/version/=): =version.json= ={"schema": 1, "version": "vA.B.C", "commit",
+  "date"}= and =changes.json= ={"schema": 1, "versions": [{"version", "date", "sections": [{"type",
+  "entries": [{"text", "scope", "commit", "breaking"}]}]}]}=.
+- Palette: =neutral=.
+
+Highlighting follows each engine's declared language list: a block is expected highlighted when its
+language is on the engine's list and plain otherwise. =code.org= covers twenty common names; the
+typo language and the undeclared block are plain for every engine.
+
+* Not covered here
+
+- CR-LF inside a code block (P-107): MAE's seed planner refuses CR-LF files, so the bundle keeps LF
+  only; the suite injects a CR-LF page into its own temporary copy of the bundle, never into this
+  repository.
+- What needs the build environment rather than content (P-142 symbolic link, P-143 non-empty
+  output, P-145 a broken extension, P-146 an unknown warning, P-149 the sandbox): the negative
+  fixtures describe them, and the suite's runner creates them at run time.
+- Where the reference engine's exit differs from the requirement, the case's =expected.json= says so
+  under =reference= (=exit= =null=: the condition cannot be forced on the reference). The
+  requirement's =exit= stays the one a conforming engine must give.
