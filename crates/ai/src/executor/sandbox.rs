@@ -28,43 +28,37 @@ pub fn create_test_sandbox(project_root: &Path) -> TestSandbox {
     }
 }
 
-/// Validate that a write path resolves to a location under `sandbox_dir`.
-/// Returns the canonicalized path on success, or an error message.
+/// Validate that a write path lands under `sandbox_dir`, judged on where the
+/// write really goes (`crate::path_confine`): no `..`, the deepest existing
+/// ancestor resolved through every symlink, and never through a link at the
+/// path itself. Returns the path to write on success, or an error message.
 pub fn validate_write_path(path: &str, sandbox_dir: &Path) -> Result<PathBuf, String> {
-    let expanded = expand_tilde(path);
-    let resolved = if expanded.is_absolute() {
-        expanded
-    } else {
-        sandbox_dir.join(&expanded)
-    };
-
-    // Canonicalize the parent (the file itself may not exist yet).
-    let parent = resolved.parent().unwrap_or(&resolved);
-    let canon_parent = if parent.exists() {
-        parent
-            .canonicalize()
-            .map_err(|e| format!("Cannot resolve path: {e}"))?
-    } else {
-        // Parent doesn't exist — check it's logically under sandbox.
-        parent.to_path_buf()
-    };
-
-    let canon_sandbox = if sandbox_dir.exists() {
-        sandbox_dir
-            .canonicalize()
-            .unwrap_or_else(|_| sandbox_dir.to_path_buf())
-    } else {
-        sandbox_dir.to_path_buf()
-    };
-
-    if canon_parent.starts_with(&canon_sandbox) {
-        Ok(resolved)
-    } else {
+    use crate::path_confine::{contained, is_symlink, Escape};
+    let outside = |why: String| {
         Err(format!(
-            "Path '{}' is outside the test sandbox ({})",
+            "Path '{}' is outside the test sandbox ({}): {why}",
             path,
             sandbox_dir.display()
         ))
+    };
+    // The same expansion the effect applies (`execute_create_file`,
+    // `rename_file`): a path the guard reads differently from the write is not
+    // confined. And absolute only: the effect resolves a relative path against
+    // the process's working directory, not the sandbox, so a relative path the
+    // guard judged as `<sandbox>/x` was written to `<cwd>/x`.
+    let expanded = PathBuf::from(mae_core::file_picker::expand_tilde(path));
+    if !expanded.is_absolute() {
+        return outside(format!(
+            "give an absolute path under {}; a relative path is written outside it",
+            sandbox_dir.display()
+        ));
+    }
+    match contained(sandbox_dir, &expanded) {
+        Ok(out) if is_symlink(&out) => outside("it is a symbolic link".to_string()),
+        Ok(out) => Ok(out),
+        Err(Escape::ParentDir) => outside("'..' is not allowed".to_string()),
+        Err(Escape::Outside(p)) => outside(format!("it resolves to {}", p.display())),
+        Err(Escape::Unresolvable(e)) => outside(format!("cannot resolve {e}")),
     }
 }
 
@@ -104,15 +98,6 @@ pub fn cleanup_sandbox(sandbox_dir: &Path) {
     }
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,8 +106,9 @@ mod tests {
     fn validate_path_inside_sandbox() {
         let sandbox = std::env::temp_dir().join("mae-sandbox-test-valid");
         std::fs::create_dir_all(&sandbox).unwrap();
-        let result = validate_write_path("test.txt", &sandbox);
-        assert!(result.is_ok());
+        let inside = sandbox.join("test.txt");
+        let result = validate_write_path(inside.to_str().unwrap(), &sandbox);
+        assert!(result.is_ok(), "{result:?}");
         let _ = std::fs::remove_dir_all(&sandbox);
     }
 
@@ -136,14 +122,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&sandbox);
     }
 
+    /// A link at the path itself is never written through, even one to a
+    /// file inside the sandbox: the write would land wherever it points.
+    #[cfg(unix)]
+    #[test]
+    fn validate_path_through_a_final_symlink_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = tmp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        std::fs::write(sandbox.join("real.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(sandbox.join("real.txt"), sandbox.join("link.txt")).unwrap();
+        let real = sandbox.join("real.txt").display().to_string();
+        assert!(validate_write_path(&real, &sandbox).is_ok());
+        let link = sandbox.join("link.txt").display().to_string();
+        let err = validate_write_path(&link, &sandbox).unwrap_err();
+        assert!(err.contains("symbolic link"), "{err}");
+    }
+
+    /// The effect writes a relative path against the process's working
+    /// directory, not the sandbox, and expands a bare `~` to `$HOME`. Neither
+    /// may pass the guard, or the write lands outside it.
+    #[test]
+    fn validate_path_relative_or_home_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = tmp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        for p in [
+            "test.txt",
+            "./test.txt",
+            "sub/test.txt",
+            "~",
+            "~other/test.txt",
+        ] {
+            let err = validate_write_path(p, &sandbox).unwrap_err();
+            assert!(err.contains("outside the test sandbox"), "{p}: {err}");
+        }
+    }
+
     #[test]
     fn validate_path_traversal_rejected() {
-        let sandbox = std::env::temp_dir().join("mae-sandbox-test-traversal");
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = tmp.path().join("sandbox");
         std::fs::create_dir_all(&sandbox).unwrap();
-        let result = validate_write_path("../../../etc/passwd", &sandbox);
-        // Should fail because canonicalized parent won't be under sandbox.
-        assert!(result.is_err());
-        let _ = std::fs::remove_dir_all(&sandbox);
+        // Through a directory that exists nowhere, so only the check decides.
+        // A traversal that happened to land on a real directory (`/etc` from
+        // `/tmp`) was refused by luck, whatever TMPDIR was (#967).
+        let absent = format!("absent-{}", uuid::Uuid::new_v4().simple());
+        for p in [
+            format!("../{absent}/file"),
+            format!("{}/../{absent}/file", sandbox.display()),
+        ] {
+            let result = validate_write_path(&p, &sandbox);
+            assert!(result.is_err(), "{p} must be refused: {result:?}");
+            assert!(!tmp.path().join(&absent).exists());
+        }
     }
 
     #[test]
