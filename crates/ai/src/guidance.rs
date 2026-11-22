@@ -257,9 +257,13 @@ pub fn read_guidance_kb_context(data_dir: &Path, guidance_kb: &str) -> Option<St
         .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&db_path, "sled"))
         .ok()?;
     let node = store.get_node("index").ok().flatten()?;
+    // The title is the index's own heading. A stored body holds content only
+    // (ADR-112 O4): no property drawer and no `#+title:` line, so the title
+    // reaches the agent only if it is written here.
     Some(format!(
-        "\n## Required Practices (KB: {guidance_kb})\n{}\n{}\n",
+        "\n## Required Practices (KB: {guidance_kb})\n{}\n\n### {}\n\n{}\n",
         guidance_link_instruction(guidance_kb),
+        node.title,
         node.body
     ))
 }
@@ -431,6 +435,10 @@ mod tests {
 
         let ctx = read_guidance_kb_context(tmp.path(), "dev-practices").unwrap();
         assert!(ctx.contains("dev-practices"));
+        assert!(
+            ctx.contains("### Practices Index\n"),
+            "the title heads the body: {ctx}"
+        );
         assert!(ctx.contains("Always write tests first."));
     }
 
@@ -504,6 +512,11 @@ mod tests {
             ctx.contains("Development Practices"),
             "expected the real index.org title/body content, got: {ctx}"
         );
+        // The source's drawer and keyword lines are not content, and an
+        // agent's instructions must not carry them.
+        for raw in [":PROPERTIES:", ":END:", "#+title:", "#+filetags:"] {
+            assert!(!ctx.contains(raw), "{raw} leaked into the guidance: {ctx}");
+        }
     }
 
     /// Issue #514 / ADR-076, end-to-end against the REAL shipped asset —
