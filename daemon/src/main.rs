@@ -560,6 +560,8 @@ async fn spawn_oauth_listener(
         jwks_ca_file: config.oauth.jwks_ca_file.clone(),
         issuer: config.oauth.issuer.clone(),
         kb_query_enabled: config.oauth.kb_query_enabled,
+        site_enabled: config.oauth.site_enabled,
+        site_locale: config.oauth.site_locale.clone(),
         max_request_body_bytes: config.oauth.max_request_body_bytes,
         kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
         kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
