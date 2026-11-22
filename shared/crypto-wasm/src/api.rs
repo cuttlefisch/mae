@@ -22,6 +22,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use mae_crypto::backup::{self, BackupError, KdfParams};
 use mae_crypto::content_crypto::{self as cc, ContentKey, CryptoError};
+use mae_crypto::content_op::{ContentOp, HeaderError};
 use mae_crypto::identity_challenge::{self as ic, Challenge, ChallengeRefusal, Claimant};
 use mae_crypto::member::{self, MemberKey};
 use mae_crypto::rng;
@@ -53,11 +54,12 @@ pub enum Op {
     ContentOpen = 15,
     ContentWrap = 16,
     ContentUnwrap = 17,
+    SignOp = 18,
 }
 
 impl Op {
     /// Every operation, in ABI order.
-    pub const ALL: [Op; 17] = [
+    pub const ALL: [Op; 18] = [
         Op::Version,
         Op::Generate,
         Op::ImportSeed,
@@ -75,6 +77,7 @@ impl Op {
         Op::ContentOpen,
         Op::ContentWrap,
         Op::ContentUnwrap,
+        Op::SignOp,
     ];
 
     pub fn from_u32(n: u32) -> Option<Op> {
@@ -116,6 +119,15 @@ impl From<CryptoError> for ApiError {
             CryptoError::Decrypt => Self::new("decrypt", "wrong key, or the data was altered"),
             CryptoError::Malformed => Self::new("malformed", "malformed or hostile input"),
             CryptoError::BadKey => Self::new("bad-key", "not a valid public key"),
+        }
+    }
+}
+
+impl From<HeaderError> for ApiError {
+    fn from(e: HeaderError) -> Self {
+        match e {
+            HeaderError::EmptyField(_) => Self::new("empty-field", e),
+            HeaderError::NulInField(_) => Self::new("nul-in-field", e),
         }
     }
 }
@@ -179,6 +191,7 @@ fn run(op: Op, r: &[u8]) -> Result<String, ApiError> {
         Op::ContentOpen => content_open(r),
         Op::ContentWrap => content_wrap(r),
         Op::ContentUnwrap => content_unwrap(r),
+        Op::SignOp => sign_op(r),
     }
 }
 
@@ -394,11 +407,13 @@ fn version(r: &[u8]) -> Result<String, ApiError> {
         version: &'static str,
         backup_version: u64,
         challenge_domain: &'static str,
+        content_op_domain: &'static str,
     }
     out(&V {
         version: API_VERSION,
         backup_version: backup::VERSION,
         challenge_domain: ic::DOMAIN_TAG,
+        content_op_domain: mae_crypto::content_op::CONTENT_OP_DOMAIN,
     })
 }
 
@@ -616,4 +631,68 @@ fn content_unwrap(r: &[u8]) -> Result<String, ApiError> {
     let ck = held(req.key, |k| k.unwrap_content_key(&wrapped))??;
     let b64 = Zeroizing::new(STANDARD.encode(ck.as_bytes()));
     out(&ContentKeyOut { content_key: &b64 })
+}
+
+/// `sign_op`'s request: the op's typed fields. The module builds the signed
+/// message itself (ADR-036 D1); the author is the held key's own fingerprint.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignOpReq<'a> {
+    key: u32,
+    #[serde(borrow)]
+    kb_id: Cow<'a, str>,
+    #[serde(borrow)]
+    node_id: Cow<'a, str>,
+    #[serde(borrow)]
+    base_sv: Cow<'a, str>,
+    /// Decimal text: an epoch is a random u64 (#72), beyond what a JavaScript
+    /// number holds exactly.
+    #[serde(borrow)]
+    epoch: Cow<'a, str>,
+    issued_at: u64,
+    #[serde(borrow)]
+    update: Cow<'a, str>,
+}
+
+/// A u64 written as canonical decimal text: digits only, no sign, no leading
+/// zero (except "0"), in range.
+fn decimal_u64(field: &str, s: &str) -> Result<u64, ApiError> {
+    let canonical =
+        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    canonical
+        .then(|| s.parse::<u64>().ok())
+        .flatten()
+        .ok_or_else(|| ApiError::new("bad-request", format!("{field} is not a decimal u64")))
+}
+
+fn sign_op(r: &[u8]) -> Result<String, ApiError> {
+    let req: SignOpReq = parse(r)?;
+    let base_sv = bytes("base_sv", &req.base_sv)?;
+    let update = bytes("update", &req.update)?;
+    let epoch = decimal_u64("epoch", &req.epoch)?;
+    let (op, sig, public) = held(req.key, |k| {
+        let op = ContentOp::for_key(k, &req.kb_id, &req.node_id, &base_sv, epoch, req.issued_at);
+        op.check()?;
+        let sig = op.sign_with(k, &update);
+        Ok::<_, ApiError>((op, sig, k.public_key()))
+    })??;
+    /// The ADR-036 header, as the daemon reads it: the top-level params of
+    /// `kb/node_update`, or `params.content_header` of `sync/update`.
+    #[derive(Serialize)]
+    struct Header {
+        author: String,
+        epoch: String,
+        issued_at: u64,
+        base_sv: String,
+        sig: String,
+        author_pubkey: String,
+    }
+    out(&Header {
+        author: op.author,
+        epoch: op.epoch.to_string(),
+        issued_at: op.issued_at,
+        base_sv: STANDARD.encode(&op.base_sv),
+        sig: STANDARD.encode(sig),
+        author_pubkey: STANDARD.encode(public),
+    })
 }

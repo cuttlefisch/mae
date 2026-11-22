@@ -7,7 +7,7 @@ description = "MAE's member-key, identity-challenge, key-backup and content-enve
 # workspace version and the crates it lists, so a MAE release changes
 # neither this number nor the WASM artifact's bytes. Bump it by hand when
 # the contract changes.
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

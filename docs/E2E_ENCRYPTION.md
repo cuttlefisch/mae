@@ -240,7 +240,7 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 
 | op | name | request | result |
 |----|------|---------|--------|
-| 1 | `version` | `{}` | `{"version":"0.1.0","backup_version":1,"challenge_domain":"mae-identity-binding-v1"}` |
+| 1 | `version` | `{}` | `{"version":"0.2.0","backup_version":1,"challenge_domain":"mae-identity-binding-v1","content_op_domain":"maecontent/v1"}` |
 | 2 | `generate` | `{}` | `KeyInfo` (seed: 32 bytes from the host) |
 | 3 | `import_seed` | `{"seed":B64}` | `KeyInfo` |
 | 4 | `export_seed` | `{"key":n}` | `{"seed":B64}` |
@@ -257,6 +257,7 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 | 15 | `content_open` | `{"content_key":B64,"sealed":B64}` | `{"plaintext":B64}` |
 | 16 | `content_wrap` | `{"content_key":B64,"wrap_public":B64}` | `{"wrapped":B64}` |
 | 17 | `content_unwrap` | `{"key":n,"wrapped":B64}` | `{"content_key":B64}` |
+| 18 | `sign_op` | `{"key":n,"kb_id":S,"node_id":S,"base_sv":B64,"epoch":"<decimal u64>","issued_at":unix,"update":B64}` | `{"author","epoch":"<decimal u64>","issued_at","base_sv":B64,"sig":B64,"author_pubkey":B64}` |
 
 The loader's method names are the camelCase forms (`signChallenge`, `backupSeal`, …). `challenge` (8, 9) is
 the challenge text or the daemon's whole `/identity/challenge` answer; it is signed only if it is
@@ -277,7 +278,8 @@ seed, passphrase, key, envelope or challenge field ever appears in a response bu
 `other-key`, `other-issuer`, `other-subject`, `other-audience`, `expired`, `expiry-too-far`. Backup:
 `too-long`, `not-an-envelope`, `unknown-version`, `unknown-kdf`, `kdf-params`, `passphrase`,
 `passphrase-weak` (sealing only), `open` (a wrong passphrase and an altered envelope are deliberately
-indistinguishable), `fingerprint-mismatch`. Content: `decrypt`, `malformed`, `bad-key`. Without entropy,
+indistinguishable), `fingerprint-mismatch`. Content: `decrypt`, `malformed`, `bad-key`. Op signing:
+`empty-field`, `nul-in-field`. Without entropy,
 `generate`, `backup_seal` and `content_key_generate` answer `no-entropy`; `content_seal` and `content_wrap`
 trap (fail closed, instance retired and wiped). A host fill of 16 bytes or more that is all zeros, or
 identical to the previous such fill, is refused as no entropy.
@@ -311,9 +313,49 @@ seed (the X25519 wrap secret, the Ed25519 signing hash prefix) once the call tha
 `js/test.mjs` searches the whole memory for each, raw and base64. JavaScript strings the caller holds (a
 passphrase, an exported seed) are outside the module's reach.
 
-**Reserved: op signing (#727), planned for the next minor version; no code yet.** A future op
-`sign_op {key, kb_id, doc, update_sha256, …}` will sign a content or membership op with a held member key.
-Like `sign_challenge` it will sign only a canonical, domain-separated message the module builds itself from
-those typed fields (its own domain tag, distinct from `mae-identity-binding-v1`), never caller-supplied
-bytes: there is, and will be, no generic `sign` operation, because the member key's signatures are its
-authority over every KB it belongs to.
+**Op signing: `sign_op` (18, since 0.2.0; ADR-036 F5).** It signs a KB content op with a held member key.
+Like `sign_challenge`, it signs only a canonical, domain-separated message the module builds itself from the
+typed fields, never caller-supplied bytes. There is, and will be, no generic `sign` operation, because the
+member key's signatures are its authority over every KB it belongs to. The message is ADR-036 D1's
+`ContentOp::canonical_bytes`, from the same Rust code (`mae_crypto::content_op`) that the editor signs with
+and that the daemon verifies against. Its parts, each NUL-terminated:
+- `maecontent/v1`;
+- `kb_id`;
+- `node_id`;
+- `base_sv` as lower-case hex;
+- the author's fingerprint;
+- `epoch` and `issued_at` in decimal;
+then the raw `update` bytes, unframed.
+
+The author is the held key's own fingerprint, never a request field (a request naming `author` is
+`bad-request`). `kb_id` and `node_id` must be non-empty and free of NUL (`empty-field`, `nul-in-field`):
+NUL separates the encoding's fields.
+
+`epoch` is **decimal text** in both the request and the result. An authorization epoch is a random u64
+(#72), which a JavaScript number cannot hold exactly. Only the canonical form is accepted: digits, no sign,
+no leading zero (`bad-request` otherwise, a JSON number included). The daemon reads the header's `epoch` as
+either a number or that same canonical text. Native clients still send it as a number, so a JavaScript relay
+that re-reads such a header must parse `epoch` as text or BigInt, not as a Number. The verifier refuses a
+header whose `kb_id` or `node_id` is empty or contains NUL, whatever its signature.
+
+The result is the ADR-036 header, sent in one of two ways:
+- for `kb/node_update`, its fields go at the top level of the params, beside `kb_id`, `node_id` and
+  `update`;
+- for `sync/update` of document `kbn:<kb_id>:<node_id>`, it goes whole as `params.content_header`.
+
+Either way the daemon re-binds `kb_id` and `node_id` from the request or document it will write, so a header
+signed for one node never verifies for another.
+
+Test vector (`mae_crypto::content_op`, `tests/sign_op.rs` and `js/test.mjs` pin it):
+- seed: 32 bytes of `0x5a`;
+- `kb_id`: `kb-alpha`;
+- `node_id`: `concept:buffer`;
+- `base_sv`: bytes `01 02 00 ff`;
+- `epoch`: `"7"`;
+- `issued_at`: `1790000000`;
+- `update`: bytes `00 01 02 03 00 09`.
+
+The signature is, in hex:
+`f98071fb0ab87e6107a5e0835b3beadc3aa532bee4de847b6dba6a0b1ba67a6fc8ee7c45935c5d3cb25143207acb1c39ab20f620bf16d135782318d049a87702`.
+
+Membership ops are not signed here yet: a browser owner signing them is ADR-117 D4.

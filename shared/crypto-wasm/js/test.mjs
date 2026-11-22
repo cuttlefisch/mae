@@ -40,7 +40,7 @@ const OPS = new Map([
   ['version', 1], ['generate', 2], ['importSeed', 3], ['exportSeed', 4], ['forget', 5],
   ['keyInfo', 6], ['fingerprint', 7], ['checkChallenge', 8], ['signChallenge', 9],
   ['backupSeal', 10], ['backupOpen', 11], ['backupParams', 12], ['contentKeyGenerate', 13],
-  ['contentSeal', 14], ['contentOpen', 15], ['contentWrap', 16], ['contentUnwrap', 17],
+  ['contentSeal', 14], ['contentOpen', 15], ['contentWrap', 16], ['contentUnwrap', 17], ['signOp', 18],
 ]);
 const FAST = { m: 19456, t: 2, p: 1 };
 const ISS = 'https://idp.example.com';
@@ -147,6 +147,11 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
       script.push(['checkChallenge', req], ['signChallenge', req]);
     }
     script.push(['fingerprint', { public_key: info.public_key }]);
+    // Content ops: a good one, and each refusal.
+    const op = { key, kb_id: 'kb-alpha', node_id: 'concept:buffer', base_sv: b64(randomBytes(9)),
+      epoch: '18446744073709551557', issued_at: NOW, update: b64(randomBytes(40)) };
+    script.push(['signOp', op], ['signOp', { ...op, kb_id: '' }], ['signOp', { ...op, node_id: 'a\u0000b' }],
+      ['signOp', { ...op, epoch: '007' }], ['signOp', { ...op, epoch: 7 }], ['signOp', { ...op, author: fp }]);
   });
   script.push(
     ['forget', { key: 1 }], ['forget', { key: 1 }], ['keyInfo', { key: 1 }], ['exportSeed', { key: 1 }],
@@ -170,8 +175,18 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   const codes = new Set(w.map(result).filter((r) => !r.ok).map((r) => r.code));
   for (const c of ['other-key', 'other-subject', 'other-issuer', 'expired', 'empty-field', 'not-a-challenge',
     'wrong-domain', 'too-long', 'no-key', 'bad-public-key', 'bad-request', 'not-an-envelope', 'unknown-version',
-    'decrypt', 'malformed', 'other-audience', 'expiry-too-far', 'passphrase-weak']) {
+    'decrypt', 'malformed', 'other-audience', 'expiry-too-far', 'passphrase-weak', 'nul-in-field']) {
     check(codes.has(c), `differential never saw '${c}'`);
+  }
+  // The content-op signature is the pinned vector (mae-crypto's content_op tests).
+  {
+    const m = instantiate(module);
+    const k = m.importSeed(b64(new Uint8Array(32).fill(0x5a)));
+    const h = m.signOp({ key: k.key, kb_id: 'kb-alpha', node_id: 'concept:buffer', base_sv: b64(Uint8Array.from([1, 2, 0, 255])),
+      epoch: '7', issued_at: 1790000000, update: b64(Uint8Array.from([0, 1, 2, 3, 0, 9])) });
+    check(Buffer.from(h.sig, 'base64').toString('hex') === 'f98071fb0ab87e6107a5e0835b3beadc3aa532bee4de847b6dba6a0b1ba67a6fc8ee7c45935c5d3cb25143207acb1c39ab20f620bf16d135782318d049a87702',
+      'signOp: the pinned vector');
+    check(h.author === k.fingerprint && h.epoch === '7', 'signOp: author is the key, epoch is text');
   }
   // And a signature verifies over exactly the challenge bytes.
   const signed = w.map(result).find((r) => r.ok && r.result.body);
@@ -301,6 +316,8 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
     try { m.contentOpen(m.contentKeyGenerate(), s); } catch {}
     m.signChallenge({ key: k.key, issuer: ISS, subject: SUB, audience: AUD, challenge: challengeText(fp, ISS, SUB, NOW + 60), now: NOW });
     try { m.signChallenge({ key: k.key, issuer: ISS, subject: 'x', audience: AUD, challenge: 'sign me', now: NOW }); } catch {}
+    m.signOp({ key: k.key, kb_id: 'kb', node_id: 'n', base_sv: '', epoch: '1', issued_at: NOW, update: b64(randomBytes(64)) });
+    try { m.signOp({ key: k.key, kb_id: '', node_id: 'n', base_sv: '', epoch: '1', issued_at: NOW, update: '' }); } catch {}
     m.forget(m.generate().key);
   };
   for (let i = 0; i < 50; i++) warm();
@@ -323,6 +340,7 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   const pass = 'residue ' + b64(randomBytes(9));
   let h = r.importSeed(b64(seed));
   r.signChallenge({ key: h.key, issuer: ISS, subject: SUB, audience: AUD, challenge: challengeText(h.fingerprint, ISS, SUB, NOW + 60), now: NOW });
+  r.signOp({ key: h.key, kb_id: 'kb', node_id: 'n', base_sv: '', epoch: '1', issued_at: NOW, update: b64(randomBytes(64)) });
   const env = r.backupSeal({ key: h.key, passphrase: pass, kdf: FAST });
   r.exportSeed(h.key);
   check(copies(r, Buffer.from(seed)) > 0, 'control: a held seed is found');

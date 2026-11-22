@@ -45,6 +45,7 @@ graph TD
     mae_core --> mae_mcp
     mae_crypto[mae-crypto]
     mae_crypto_wasm --> mae_crypto
+    mae_crypto_wasm --> mae_sync
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
@@ -239,6 +240,7 @@ Source: `shared/crypto/src/lib.rs`
 |------|------|
 | `backup` | mod |
 | `content_crypto` | mod |
+| `content_op` | mod |
 | `identity_challenge` | mod |
 | `member` | mod |
 | `rng` | mod |
