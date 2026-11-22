@@ -1,5 +1,6 @@
 :PROPERTIES:
 :ID: 1a000000-0000-4000-8000-000000000010
+:UPDATED: 2026-01-05
 :END:
 #+title: Getting started
 #+filetags: :guides:

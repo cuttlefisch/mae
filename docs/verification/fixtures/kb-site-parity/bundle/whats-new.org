@@ -1,5 +1,6 @@
 :PROPERTIES:
 :ID: 1a000000-0000-4000-8000-000000000002
+:UPDATED: 2026-03-18
 :END:
 #+title: What's new
 #+filetags: :fixture:
