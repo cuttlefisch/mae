@@ -41,7 +41,19 @@ pub fn validate_write_path(path: &str, sandbox_dir: &Path) -> Result<PathBuf, St
             sandbox_dir.display()
         ))
     };
-    match contained(sandbox_dir, &expand_tilde(path)) {
+    // The same expansion the effect applies (`execute_create_file`,
+    // `rename_file`): a path the guard reads differently from the write is not
+    // confined. And absolute only: the effect resolves a relative path against
+    // the process's working directory, not the sandbox, so a relative path the
+    // guard judged as `<sandbox>/x` was written to `<cwd>/x`.
+    let expanded = PathBuf::from(mae_core::file_picker::expand_tilde(path));
+    if !expanded.is_absolute() {
+        return outside(format!(
+            "give an absolute path under {}; a relative path is written outside it",
+            sandbox_dir.display()
+        ));
+    }
+    match contained(sandbox_dir, &expanded) {
         Ok(out) if is_symlink(&out) => outside("it is a symbolic link".to_string()),
         Ok(out) => Ok(out),
         Err(Escape::ParentDir) => outside("'..' is not allowed".to_string()),
@@ -86,15 +98,6 @@ pub fn cleanup_sandbox(sandbox_dir: &Path) {
     }
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,8 +106,9 @@ mod tests {
     fn validate_path_inside_sandbox() {
         let sandbox = std::env::temp_dir().join("mae-sandbox-test-valid");
         std::fs::create_dir_all(&sandbox).unwrap();
-        let result = validate_write_path("test.txt", &sandbox);
-        assert!(result.is_ok());
+        let inside = sandbox.join("test.txt");
+        let result = validate_write_path(inside.to_str().unwrap(), &sandbox);
+        assert!(result.is_ok(), "{result:?}");
         let _ = std::fs::remove_dir_all(&sandbox);
     }
 
@@ -128,9 +132,31 @@ mod tests {
         std::fs::create_dir_all(&sandbox).unwrap();
         std::fs::write(sandbox.join("real.txt"), "x").unwrap();
         std::os::unix::fs::symlink(sandbox.join("real.txt"), sandbox.join("link.txt")).unwrap();
-        assert!(validate_write_path("real.txt", &sandbox).is_ok());
-        let err = validate_write_path("link.txt", &sandbox).unwrap_err();
+        let real = sandbox.join("real.txt").display().to_string();
+        assert!(validate_write_path(&real, &sandbox).is_ok());
+        let link = sandbox.join("link.txt").display().to_string();
+        let err = validate_write_path(&link, &sandbox).unwrap_err();
         assert!(err.contains("symbolic link"), "{err}");
+    }
+
+    /// The effect writes a relative path against the process's working
+    /// directory, not the sandbox, and expands a bare `~` to `$HOME`. Neither
+    /// may pass the guard, or the write lands outside it.
+    #[test]
+    fn validate_path_relative_or_home_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = tmp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        for p in [
+            "test.txt",
+            "./test.txt",
+            "sub/test.txt",
+            "~",
+            "~other/test.txt",
+        ] {
+            let err = validate_write_path(p, &sandbox).unwrap_err();
+            assert!(err.contains("outside the test sandbox"), "{p}: {err}");
+        }
     }
 
     #[test]

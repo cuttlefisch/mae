@@ -54,3 +54,13 @@ filter = "test(validate_path_through_a_final_symlink_rejected)"
 file = "crates/ai/src/executor/sandbox.rs"
 find = '''        Ok(out) if is_symlink(&out) => outside("it is a symbolic link".to_string()),'''
 replace = '''        Ok(out) if false && is_symlink(&out) => outside("it is a symbolic link".to_string()),'''
+
+[[mutant]]
+id = "ai-path-confine/sandbox-relative-allowed"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(/validate_path_relative_or_home_rejected|sandbox_guard_refuses_writes_the_effect_would_land_outside/)"
+[[mutant.edit]]
+file = "crates/ai/src/executor/sandbox.rs"
+find = '''    if !expanded.is_absolute() {'''
+replace = '''    if false && !expanded.is_absolute() {'''
