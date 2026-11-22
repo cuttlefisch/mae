@@ -401,3 +401,48 @@ fn every_fixture_backlink_is_a_published_page_that_really_links_there() {
     }
     assert!(total > 0, "the fixture has links");
 }
+
+/// The backlink count of every fixture page, as the parity suite computes it
+/// independently from the bundle's links (P-36).
+#[test]
+fn each_fixture_page_has_the_backlinks_the_parity_suite_counts() {
+    let expected: &[(&str, usize)] = &[
+        ("index.org", 3),
+        ("reference/code.org", 2),
+        ("reference/diagrams.org", 2),
+        ("reference/long-page.org", 2),
+        ("whats-new.org", 2),
+        ("guides/getting-started.org", 4),
+        ("guides/advanced/configuration.org", 1),
+        ("guides/advanced/deep/deeper/deepest-page.org", 1),
+        ("guides/a-page-whose-title-is-long-enough-to-wrap.org", 0),
+        ("journal/2026-01-15.org", 0),
+        ("journal/2026-02-15.org", 0),
+        ("journal/2026-03-15.org", 0),
+        ("reference/special-blocks.org", 0),
+        ("reference/wide-table.org", 0),
+        ("status/draft.org", 0),
+        ("status/malformed-date.org", 0),
+        ("tagging/malformed-tags.org", 0),
+    ];
+    let sources = sources(&fixture().join("bundle"));
+    assert_eq!(
+        sources.len(),
+        expected.len(),
+        "every page has an expectation"
+    );
+    let site = derive(&sources, &export());
+    for (origin, want) in expected {
+        let s = sources
+            .iter()
+            .find(|s| &s.origin == origin)
+            .unwrap_or_else(|| panic!("no {origin}"));
+        let id = mae_org::semantics(&mae_org::parse(&s.text, &mae_org::ParseOptions::default()))
+            .nodes
+            .iter()
+            .find(|n| n.origin == mae_org::NodeOrigin::File)
+            .map(|n| n.id.clone())
+            .unwrap();
+        assert_eq!(site.pages[&id].backlinks.len(), *want, "{origin}");
+    }
+}
