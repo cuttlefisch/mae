@@ -10,7 +10,9 @@ role, checked for contrast when derived, and written out as CSS variables
 - The tests require WCAG AA of the default palette in both modes, and of every
   palette what makes the site work (links, legible code, distinguishable map
   zones, the graph's bands).
-- `dist/` is generated (`npm run build`), not committed.
+- `dist/` is generated (`npm run build`) and committed: MAE's daemon embeds it, so
+  a Rust build needs no node (owner, 2026-11-22). The build is byte-deterministic,
+  and CI rebuilds it and fails on any difference. Edit `palettes/`, never `dist/`.
 
 The data vocabulary (`light`/`dark`, the group and role names, the `data-theme`
 and `data-emphasis` attributes, swatch display names) is the package's data format

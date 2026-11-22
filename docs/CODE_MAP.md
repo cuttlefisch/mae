@@ -541,8 +541,10 @@ Source: `shared/site/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `address` | mod |
+| `assets` | mod |
 | `derive` | mod |
 | `sanitize` | mod |
+| `strings` | mod |
 
 ## mae-snippets
 

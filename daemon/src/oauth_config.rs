@@ -94,6 +94,9 @@ pub struct OAuthConfig {
     /// The live KB site's locale: `<html lang>` and every string the site
     /// writes (P-16, P-164). Default `en-US`.
     pub site_locale: String,
+    /// Namespaces whose references (`ns:rest`) the live site removes from every
+    /// page and index (P-13, P-78). Default none.
+    pub site_hidden_namespaces: Vec<String>,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -251,6 +254,7 @@ impl Default for OAuthConfig {
             kb_query_enabled: false,
             site_enabled: false,
             site_locale: "en-US".to_string(),
+            site_hidden_namespaces: Vec::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,
