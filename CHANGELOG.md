@@ -2,7 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.180] - 2026-11-22
+
+
+
+
+### Features
+
+- *(kb)* KB ingest and stored edges on mae-org, with a one-time repair (#941, #854) ([85c2824](https://github.com/cuttlefisch/mae/commit/85c28242fa8aea51d660e144e05b7c965cf556d7))
+
+### Bug Fixes
+
+- *(kb)* Two tests that relied on the old ingest's header-in-body; fn-length ratchet (#941) ([662078e](https://github.com/cuttlefisch/mae/commit/662078e9f36776e5719914d5a04dbc24b464468d))
+- *(ai)* Guidance states the KB index's title, now that bodies hold content only (#941) ([b852595](https://github.com/cuttlefisch/mae/commit/b852595fbd84a9a905f4371014b4cd1518767f78))
+
+### Documentation
+
+- *(verification)* The kb-site parity fixture bundle (§4.1) ([c6aed75](https://github.com/cuttlefisch/mae/commit/c6aed75e366d1891afc6d301abb3a46f80e0e913))
+- *(verification)* The fixture's README, and the reference's exit codes ([a87a732](https://github.com/cuttlefisch/mae/commit/a87a732991057facd33eebcf47b61ac9547c5b47))
+
+### Miscellaneous
+
+- *(deps)* Url 2.5.9 in both workspaces (RUSTSEC-2026-0592) ([700f800](https://github.com/cuttlefisch/mae/commit/700f8005ed11fb03714225ce55c04ef8f6482460))
+
 ## [0.14.179] - 2026-11-21
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.179 ([ba8a274](https://github.com/cuttlefisch/mae/commit/ba8a27476e33f402be0d75b7a8b1a370b3d2aa76))
+
+## [mae-crypto-v0.2.0] - 2026-11-21
 
 
 
