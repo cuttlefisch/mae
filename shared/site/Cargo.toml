@@ -1,7 +1,11 @@
 [package]
 name = "mae-site"
 description = "MAE's web core (ADR-119): one derivation of a KB into pages, for the live app and the static export"
-version.workspace = true
+# Its own version, not the workspace's: a crate new to the workspace would
+# otherwise go stale in Cargo.lock at every release bump made before it lands
+# on main (the bump's `cargo update -w` cannot see a crate main lacks), and the
+# next build would rewrite the lock. Bump it by hand when its API changes.
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
