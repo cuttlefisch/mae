@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: case-folded
+:END:
+#+title: Lower
+
+The other.

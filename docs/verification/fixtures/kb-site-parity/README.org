@@ -33,7 +33,7 @@ against both.
 | =bundle/status/malformed-date.org= | P-150, P-163 (a malformed date: no last-updated line) |
 | =data/route-history.json= | P-05 (old path to ID), P-06 (old path equal to a live page), P-08 (an unsafe path) |
 | =data/version/= | P-160, P-163 (version data, site-changes page) |
-| =negative/= | P-04, P-15, P-141 to P-147, P-150, P-151, P-166 (a page in the engine's tag namespace) |
+| =negative/= | P-04, P-15 (=duplicate-url= by file path, =case-folded-ids= by ID), P-141 to P-147, P-150, P-151, P-166 (a page in the engine's tag namespace). A case's =applies_when= says which engines it binds. |
 
 * Data formats
 

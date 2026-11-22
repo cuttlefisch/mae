@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-0000000009a0
+:END:
+#+title: Index
+
+The two pages below have IDs that differ only in case.
