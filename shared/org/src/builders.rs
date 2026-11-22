@@ -158,7 +158,19 @@ impl Resolved {
         Resolved {
             href: href.into(),
             title: None,
+            custom_ids: Default::default(),
         }
+    }
+
+    /// Adds one of the target page's `CUSTOM_ID`s, at the anchor it renders
+    /// at ([`Resolved::custom_ids`]).
+    pub fn with_custom_id(
+        mut self,
+        custom_id: impl Into<String>,
+        anchor: impl Into<String>,
+    ) -> Self {
+        self.custom_ids.insert(custom_id.into(), anchor.into());
+        self
     }
 
     /// [`Resolved::title`].

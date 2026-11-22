@@ -420,12 +420,25 @@ fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
         None | Some(Json::Null) => {}
         Some(Json::Obj(kv)) => {
             for (id, v) in kv {
-                known_keys(v, &["href", "title"], "a resolver target")?;
+                known_keys(v, &["href", "title", "custom_ids"], "a resolver target")?;
                 let href = opt_str(v.get("href"), "href")?
                     .ok_or_else(|| format!("resolver target {id:?} has no href"))?;
                 let title = opt_str(v.get("title"), "title")?;
                 let mut target = Resolved::new(href);
                 target.title = title;
+                // The target page's CUSTOM_ID -> anchor, as its render's
+                // `custom_ids` gave them.
+                match v.get("custom_ids") {
+                    None | Some(Json::Null) => {}
+                    Some(Json::Obj(cids)) => {
+                        for (c, a) in cids {
+                            let a = opt_str(Some(a), "a custom_ids anchor")?
+                                .ok_or("a custom_ids anchor must be a string")?;
+                            target = target.with_custom_id(c.clone(), a);
+                        }
+                    }
+                    Some(_) => return Err("resolver target custom_ids must be an object".into()),
+                }
                 r.targets.insert(id.clone(), target);
             }
         }

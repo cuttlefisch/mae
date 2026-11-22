@@ -942,6 +942,12 @@
     ],
     "type": "root"
   },
+  "custom_ids": [
+    {
+      "anchor": "cid-kinds",
+      "custom_id": "kinds"
+    }
+  ],
   "diagnostics": [
     {
       "end": 358,

@@ -755,10 +755,13 @@ pub(crate) fn rendering_outside(
             (second.run(&root), second.found)
         };
         let (nodes, _) = super::meta::nodes(p, cx.clone(), sem, &opts, resolver, &found);
+        let mut custom_ids: Vec<_> = found.custom_ids.clone().into_iter().collect();
+        custom_ids.sort();
         let rendered = super::Rendered {
             body: built,
             nodes,
             diagnostics: Vec::new(),
+            custom_ids,
         };
         out.push_str(&super::hast::rendered_json(
             &rendered,

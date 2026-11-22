@@ -151,6 +151,17 @@ pub(crate) fn rendered_json(r: &Rendered, format: TreeFormat) -> String {
             s.end
         ));
     }
+    out.push_str("],\"custom_ids\":[");
+    for (i, (c, a)) in r.custom_ids.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"custom_id\":");
+        json_str(c, &mut out);
+        out.push_str(",\"anchor\":");
+        json_str(a, &mut out);
+        out.push('}');
+    }
     out.push_str("]}");
     out
 }

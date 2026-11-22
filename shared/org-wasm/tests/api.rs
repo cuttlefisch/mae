@@ -251,3 +251,41 @@ fn post_blank_false_ends_spans_before_the_spaces_after_them() {
 
     assert!(err(7, r#"{"text": "x", "post_blank": "no"}"#).contains("post_blank"));
 }
+
+/// `[[id:X::#C]]` through the WASM surface (ADR-119 S0): a target's
+/// `custom_ids` come from that page's own render, and the link lands on the
+/// anchor when `C` is there and on the page when it is not. Bad shapes are
+/// refused, never ignored.
+#[test]
+fn a_resolver_target_carries_the_target_page_s_custom_ids() {
+    let target = ok(
+        2,
+        r##"{"text": ":PROPERTIES:\n:ID: x\n:END:\n* P\n:PROPERTIES:\n:CUSTOM_ID: p\n:END:\n"}"##,
+    );
+    assert_eq!(target["custom_ids"][0]["custom_id"], "p");
+    let anchor = target["custom_ids"][0]["anchor"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let req = format!(
+        r##"{{"text": "[[id:x::#p][to p]] [[id:x::#q][to q]]\n",
+             "resolver": {{"targets": {{"x": {{"href": "/x.html", "custom_ids": {{"p": "{anchor}"}}}}}}}}}}"##
+    );
+    // Op 2 is the hast render: each href is a JSON string in it.
+    let got = ok(2, &req).to_string();
+    assert!(got.contains(&format!("\"/x.html#{anchor}\"")), "{got}");
+    assert!(
+        got.contains("\"/x.html\""),
+        "the absent one goes to the page: {got}"
+    );
+    assert!(err(
+        2,
+        r##"{"resolver": {"targets": {"x": {"href": "/x", "custom_ids": ["p"]}}}}"##
+    )
+    .contains("custom_ids"));
+    assert!(err(
+        2,
+        r##"{"resolver": {"targets": {"x": {"href": "/x", "custom_ids": {"p": 1}}}}}"##
+    )
+    .contains("anchor"));
+}

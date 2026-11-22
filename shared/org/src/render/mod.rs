@@ -196,6 +196,11 @@ pub struct Resolved {
     pub href: String,
     /// The text of a link without a description.
     pub title: Option<String>,
+    /// The target page's `CUSTOM_ID`s, each with the anchor it renders at
+    /// ([`Rendered::custom_ids`] of that page). `[[id:X::#C]]` goes to
+    /// `href#anchor` when `C` is here, and to `href` alone when it is not:
+    /// never a placeholder, never a failure (ADR-119 D5).
+    pub custom_ids: std::collections::BTreeMap<String, String>,
 }
 
 /// KB node id → [`Resolved`], and the text of an unresolved link.
@@ -370,6 +375,12 @@ pub struct Rendered {
     pub nodes: Vec<NodeMeta>,
     /// Sorted by span, then kind.
     pub diagnostics: Vec<RenderDiagnostic>,
+    /// Each `CUSTOM_ID` of a headline the page renders, with the anchor its
+    /// section landed on, sorted by `CUSTOM_ID`. Not always `cid-…`: a
+    /// headline that is also a KB node is anchored at its `id-…`. What a
+    /// resolver gives another page's `[[id:X::#CUSTOM_ID]]` (see
+    /// [`Resolved::custom_ids`]).
+    pub custom_ids: Vec<(String, String)>,
 }
 
 /// Which serialisation [`Rendered::to_json`] embeds trees as.
@@ -394,10 +405,10 @@ pub fn render(
 ) -> Rendered {
     let p = prepared::prepare(doc, sem);
     let mut diagnostics = p.notes.clone();
-    let (body, nodes) = match p.failed {
+    let (body, nodes, custom_ids) = match p.failed {
         Some(f) => {
             diagnostics.push(f);
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Vec::new())
         }
         None => {
             // One reading of the document for the page and its nodes.
@@ -414,7 +425,9 @@ pub fn render(
             let unseen = notes::unrendered_undefined(&p.doc, &p.sem);
             let found = page.diagnostics.into_iter().chain(notes).chain(unseen);
             diagnostics.extend(found.map(|d| p.to_source(d)));
-            (page.body, nodes)
+            let mut custom: Vec<_> = page.table.custom_ids.into_iter().collect();
+            custom.sort();
+            (page.body, nodes, custom)
         }
     };
     diagnostics.sort();
@@ -423,6 +436,7 @@ pub fn render(
         body,
         nodes,
         diagnostics,
+        custom_ids,
     }
 }
 
@@ -456,8 +470,8 @@ impl Rendered {
     /// The whole result as JSON: `{"body": T, "nodes": [{"id", "anchor",
     /// "title": T, "title_unlinked": T, "aliases": [T], "properties":
     /// [{"key", "value": T}]}],
-    /// "diagnostics": [{"kind", "start", "end"}]}`, each tree `T` in
-    /// `format`.
+    /// "diagnostics": [{"kind", "start", "end"}], "custom_ids":
+    /// [{"custom_id", "anchor"}]}`, each tree `T` in `format`.
     pub fn to_json(&self, format: TreeFormat) -> String {
         hast::rendered_json(self, format)
     }

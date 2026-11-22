@@ -654,6 +654,12 @@
     ],
     "type": "root"
   },
+  "custom_ids": [
+    {
+      "anchor": "id-kb.3aheadline.2fone",
+      "custom_id": "custom-one"
+    }
+  ],
   "diagnostics": [],
   "nodes": [
     {
