@@ -1,5 +1,6 @@
 {
  "requirement": "P-147",
  "exit": 1,
- "why": "a macro call while macros are unsupported"
+ "why": "a macro call while macros are unsupported",
+ "applies_when": "the engine does not support Org macros. An engine that expands them (the candidate renders with mae-org, which does) publishes the page and exits 0; a macro that fails to expand still withholds (withheld-emptied-by-macros)"
 }

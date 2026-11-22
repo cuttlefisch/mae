@@ -26,6 +26,7 @@ against both.
 | =bundle/guides/a-page-…-long-title.org= | long titles (explorer, header, graph labels) |
 | =bundle/journal/= | a folder configured to list newest first |
 | =bundle/reference/long-page.org= | P-127 to P-132 (≥ 4 top sections, > 3000 characters, an author-folded section, a target inside a folded section), P-10 (section node), footnotes |
+| =bundle/reference/special-blocks.org= | P-52 (a link preview from inside each special block: note, tip, important, warning, caution, and the unstyled =aside=) |
 | =bundle/reference/wide-table.org= | P-133, P-134 (a 7-column table) |
 | =bundle/reference/code.org= | P-105 to P-110 (every supported language, a typo language, an undeclared block, exact text) |
 | =bundle/reference/diagrams.org= | P-111 to P-126 (default colours, author fill under text, role map, linked nodes, tall, small, broken) |
@@ -33,7 +34,7 @@ against both.
 | =bundle/status/malformed-date.org= | P-150, P-163 (a malformed date: no last-updated line) |
 | =data/route-history.json= | P-05 (old path to ID), P-06 (old path equal to a live page), P-08 (an unsafe path) |
 | =data/version/= | P-160, P-163 (version data, site-changes page) |
-| =negative/= | P-04, P-15, P-141 to P-147, P-150, P-151 |
+| =negative/= | P-04, P-15 (=duplicate-url= by file path, =case-folded-ids= by ID), P-141 to P-147, P-150, P-151, P-166 (a page in the engine's tag namespace). A case's =applies_when= says which engines it binds. |
 
 * Data formats
 
@@ -42,7 +43,8 @@ whatever that engine reads, outside this repository.
 
 - Document state: the file-level property =:STATE:= with =draft=, =in-review=, =approved=,
   =in-force=, =superseded= or =withdrawn= (exact text; anything else is an invalid state).
-- Last updated: =:UPDATED: YYYY-MM-DD= (a day that exists).
+- Last updated: =:UPDATED: YYYY-MM-DD= (a day that exists). Every page but =status/malformed-date.org=
+  has a distinct valid date, so "most recent" (P-75) has one answer.
 - Route history (=data/route-history.json=): ={"format": "route-history/1", "routes": {"<old
   path>.org": "<ID of the last page that had it>"}}=.
 - Version data (=data/version/=): =version.json= ={"schema": 1, "version": "vA.B.C", "commit",
@@ -60,7 +62,8 @@ typo language and the undeclared block are plain for every engine.
   only; the suite injects a CR-LF page into its own temporary copy of the bundle, never into this
   repository.
 - What needs the build environment rather than content (P-142 symbolic link, P-143 non-empty
-  output, P-145 a broken extension, P-146 an unknown warning, P-149 the sandbox): the negative
+  output, P-145 a broken extension, P-146 an unknown warning, P-149 the sandbox, P-166 a page in
+  the engine's tag namespace): the negative
   fixtures describe them, and the suite's runner creates them at run time.
 - Where the reference engine's exit differs from the requirement, the case's =expected.json= says so
   under =reference= (=exit= =null=: the condition cannot be forced on the reference). The

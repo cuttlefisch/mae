@@ -77,7 +77,9 @@ Conventions for acceptance tests:
 | P-13 | MUST hide references in configured hidden namespaces (`ns:rest`) and show those in other namespaces. | Fixture with one hidden and one shown namespace reference: the first has 0 hits in output, the second is present. |
 | P-14 | MUST only make links of: published nodes, `http(s):`, `mailto:`, same-page anchors. | Every `<a href>` in the article matches one of those four forms. |
 | P-15 | MUST fail the build when two inputs map to the same URL. | Two files whose names normalise to one URL: exit 1. |
-| P-16 | MUST set `<html lang>` to the configured locale and the site title from configuration. | `lang` attribute and `<title>`/site heading match the configuration. |
+| P-166 | MUST fail the build when a content path would land in an address space the engine generates (its tag pages, or any other namespace it declares), naming the page and the namespace, rather than shadow a generated page or be shadowed by it. (new: not guaranteed by today's site, which takes such a page for one of its tag pages) | Runtime case: a page moved into a folder named like the engine's declared tag namespace: exit 1; the log names both; nothing written at that address. |
+| P-16 | MUST set `<html lang>` to the configured locale, as its full BCP 47 tag (`en-US`, not `en`), and the site title from configuration. (new for the full tag: today's site sets the primary subtag only) | `lang` attribute equals the configured tag; `<title>`/site heading match the configuration. |
+| P-164 | MUST write every string the engine itself produces in the configured locale: control names, the headings and labels of the pages it generates (what's new, site changes, tag and folder listings), notices and dates. (new: not guaranteed by today's site, which writes some of its own labels in another language) | Build the fixture with `en-US`: no engine-written string outside the locale's catalogue; the same build with a second locale (`fr-FR`) changes every one of them, except names the engine declares untranslatable (palette and product names), each listed as such in its catalogue. A common word such as a palette called "Neutral" is not a name, and translates. |
 | P-17 | MUST use the node title as the page title and render body headings one level below it. | Page has one `h1` (the title); a top-level org heading is an `h2`. |
 | P-18 | MUST NOT load images from outside the site; a web image becomes a link. | Fixture with a remote image: no `<img>` with a remote `src`; an `<a>` to it exists. |
 | P-19 | MUST NOT render property drawers; their anchors remain. | No drawer text in output; the section anchor exists. |
@@ -90,11 +92,11 @@ Conventions for acceptance tests:
 |---|---|---|
 | P-22 | MUST navigate between internal pages without a full reload (client-side routing), updating URL and document title. | Browser: click a body link; the `window` marker survives; `location` and `document.title` are the target's. |
 | P-23 | MUST restore pages on browser Back/Forward through the router, without reload. | Navigate A→B, `history.back()`: A is shown, marker survives. |
-| P-22a | MUST, after each client-side navigation (link, Back, Forward), move focus to the new page's `h1` (`tabindex=-1`) or main region, announce the new page title through a polite live region, and on Back/Forward restore the scroll position the page had when left. | Browser: after a navigation `document.activeElement` is the new `h1` or `main`; a polite live region's text equals the new `document.title`; the window marker survives; repeat after `history.back()`, where `scrollY` also equals its value before leaving. |
+| P-22a | MUST, after each client-side navigation (link, Back, Forward), move focus to the new page's `h1` (`tabindex=-1`) or main region, announce the new page title through a polite live region, and on Back/Forward restore the scroll position the page had when left. (new: not guaranteed by today's site, which leaves focus on `<body>`) | Browser: after a navigation `document.activeElement` is the new `h1` or `main`; a polite live region's text equals the new `document.title`; the window marker survives; repeat after `history.back()`, where `scrollY` also equals its value before leaving. |
 | P-24 | SHOULD offer in-page Back and Forward controls that walk the browser's own history, name their destination, and are disabled when there is nothing to go to. | Accessible name contains the destination title; `disabled` at history ends; clicking equals `history.back()`/`forward()`. |
 | P-25 | MUST leave exactly one instance of each page-level control after any number of client-side navigations. | After 3 navigations: one explorer tree, one resize handle per panel, one Back/Forward pair, no stray dialogs. |
-| P-26 | MUST route links inside inline SVG diagrams like body links (no reload), also from a diagram's dialog, which closes. | Browser: click an SVG `<a>`; marker survives; URL is the target; no open `<dialog>`. |
-| P-27 | MUST, for a link to a section: on the same page, scroll it into view without navigation; on another page, navigate without reload and land on it; on direct load with the anchor, land on it. | Browser: section element's top is within the viewport in all three cases. |
+| P-26 | MUST route links inside inline SVG diagrams like body links (no reload), also from a diagram's dialog, which closes. (new for linked diagrams: today's site removes links from diagrams) | Browser: click an SVG `<a>`; marker survives; URL is the target; no open `<dialog>`. |
+| P-27 | MUST, for a link to a section: on the same page, scroll it into view without navigation; on another page, navigate without reload and land on it; on direct load with the anchor, land on it, with the section's heading fully in view. (new for direct load: today's site leaves the heading partly above the viewport in one engine) | Browser: the section's heading box lies entirely within the viewport in all three cases, no tolerance. |
 | P-28 | MUST mark internal body links to other pages as internal, without `target` or `rel`; same-page anchors and diagram links get no preview behaviour. | DOM: internal links lack `target`/`rel`; hovering a same-page anchor opens no preview. |
 | P-29 | SHOULD show breadcrumbs (folder path to the current page) as a navigation landmark with `aria-current` on the last item. (new: not guaranteed by today's site) | Browser: `nav` with accessible name; items link to folder pages; last item has `aria-current=page`. |
 
@@ -105,7 +107,7 @@ Conventions for acceptance tests:
 | P-30 | MUST open search with a visible control and with Ctrl+K (Cmd+K), also when the left panel is hidden. | Browser: press Ctrl+K with left panel hidden; the search input is visible and focused. |
 | P-31 | MUST index the title, tags and text of every published page, including org pages. | Content index contains each page with title, tags and text; a unique fixture word is found. |
 | P-32 | MUST return a known page for a known term and navigate to it by Enter or click, without reload. (new: not guaranteed by today's site) | Browser: type a fixture-unique term; first result is the expected page; Enter navigates; marker survives. |
-| P-33 | MUST support tag search (`#tag`). (new: not guaranteed by today's site) | Browser: `#<fixture tag>` lists exactly the tagged pages. |
+| P-33 | MUST support tag search (`#tag`). | Browser: `#<fixture tag>` lists exactly the tagged pages. |
 | P-34 | MUST open folded sections that contain the matched text and scroll to it. | Browser: search a term inside a folded section; after navigation the section is expanded and in view. |
 | P-35 | MUST give the search input a 3:1 border and every result a visible 3:1 focus indicator. | Contrast audit scenarios "search open", "result hovered", "result focused" pass in light and dark. |
 
@@ -139,7 +141,7 @@ Conventions for acceptance tests:
 | P-49 | MUST open web links in a new tab without moving the current page, with `rel` that prevents opener access. | Browser: click opens a new page; original URL unchanged; `target=_blank`, `rel` contains `noopener`. |
 | P-50 | MUST mark web links with an icon and a visually hidden text saying they open in a new tab, in the configured locale. | Accessible name ends with the locale's "opens in a new tab" string; that text is not visible (clip/size). |
 | P-51 | MUST draw the new-tab icon at 3:1 against the page in light and dark, and keep it visible under forced colours. | Contrast ≥ 3:1 both modes; Chromium forced-colours emulation: icon pixels differ from background. |
-| P-52 | MUST keep text in previews at WCAG AA, including previews opened from inside each admonition/special-block type. | Contrast audit: one scenario per block type with a preview open; 0 violations. |
+| P-52 | MUST keep text in previews at WCAG AA, including previews opened from inside a special block of each name the engine styles distinctly (it declares the list) and of one name it does not. | Contrast audit on the fixture's special-blocks page: one scenario per block with a preview open; 0 violations. |
 
 ### 3.7 Graph
 
@@ -153,7 +155,7 @@ Conventions for acceptance tests:
 | P-57a | MUST change only the hovered (or focused, or search-found) note and its own links; every other link keeps its stroke colour, opacity and width, and is not redrawn, before, during and after. | Browser, both views and modes: for every non-incident link, computed stroke/opacity/stroke-width and element identity are equal before, during and after the hover; incident links do change. |
 | P-58 | MUST highlight a note and the link to it from the current page while a body link to that note is hovered; nothing when it is left. | Browser, mouse: hover a body link; exactly that note and those links highlighted; move away; none. |
 | P-59 | MUST make the graph one tab stop, with arrow keys, Home and End to move between notes, and Enter to open; hierarchical views also walk folders (Up/Down within a level, Right into, Left out of). | Browser: Tab focuses the graph once; keys move focus as specified; Enter navigates without reload. |
-| P-60 | MUST give every note an accessible name and emit no native tooltips (no SVG `<title>`, no `title` attribute) in the graph. | DOM: 0 `title` elements/attributes in the graph; each note has a non-empty `aria-label`. |
+| P-60 | MUST give every note an accessible name and emit no native tooltips (no SVG `<title>`, no `title` attribute) in the graph, its controls included. (new for the controls: today's site gives its graph buttons `title` attributes) | DOM: 0 `title` elements/attributes in the graph and its controls; each note and control has a non-empty accessible name. |
 | P-61 | MUST open the expanded view over the whole page, opaque, without browser fullscreen and without a history entry. | Browser: element at 25 sampled viewport points belongs to the view; `document.fullscreenElement` null; `history.length` unchanged. |
 | P-61a | MUST set the expanded view's camera once when it opens, to its final framing, with no intermediate zoom or pan transforms; the same when it closes. | Browser: record the zoom transform every animation frame for 1.5 s after the expand control is activated; at most one change after the first full-size frame, then constant; equal to the settled framing. Same on close. |
 | P-62 | MUST close the expanded view with Escape, and on browser Back return to the previous page through the router, closing the view. | Browser: Escape closes; Back with view open: previous URL, marker survives, no view. |
@@ -169,9 +171,9 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
-| P-70 | MUST emit a page per tag listing every page with that tag, including org pages. (new: not guaranteed by today's site, for org pages) | Build output: each fixture tag page lists exactly the bundle's tagged nodes. |
+| P-70 | MUST emit a page per tag listing every page with that tag, including org pages. (new: not guaranteed by today's site, for org pages, whose tag index links to tag pages that do not exist) | Build output: each fixture tag page lists exactly the bundle's tagged nodes; every tag link resolves. |
 | P-71 | MUST emit a tag index listing all tags. | `tags/` index exists and lists every fixture tag. |
-| P-72 | MUST emit a listing page per folder with its pages and sub-folders. | Each fixture folder has a listing containing its children. |
+| P-72 | MUST emit a listing page per folder with its pages and sub-folders. (new: not guaranteed by today's site, for org pages) | Each fixture folder has a listing containing its children. |
 | P-73 | MUST take tags only from valid org-mode tags (letters, digits, `_ @ # %`); paths or markup in tag lines are not tags. | Fixture with a malformed tag line: no tag page for it. |
 | P-74 | MUST pass the contrast audit on tag and folder listing pages. | Contrast scenarios "tag listing", "folder listing": 0 violations. |
 
@@ -179,7 +181,7 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
-| P-75 | MUST emit an RSS feed of recent pages, including org pages. (new: not guaranteed by today's site, for org pages) | Feed validates; contains each fixture org page. |
+| P-75 | MUST emit an RSS feed of the N most recent pages by date, including org pages, where N comes from the site configuration and its default is declared by the engine. (new: not guaranteed by today's site, for org pages) | Feed validates; holds exactly the min(N, page count) most recent fixture org pages, newest first, for the engine's N (today's site: a fixed N of 10, ordered by path, not date), ordered by `:UPDATED:`. The fixture gives every page but one a distinct valid date; the page whose date is malformed sorts last. |
 | P-76 | MUST emit a sitemap listing every page URL (no redirects) under the configured base URL. | Sitemap URL set equals the page set. |
 | P-77 | MUST emit a content index (title, tags, links, text per page) used by search and graph. | JSON parses; one entry per page; links only to published pages. |
 | P-78 | MUST NOT include unpublished IDs or hidden-namespace references in any feed or index. | Grep feeds and index for fixture unpublished IDs: 0 hits. |
@@ -196,11 +198,12 @@ Conventions for acceptance tests:
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
+| P-165 | MUST give each page exactly one main landmark (`<main>`) holding the article, with the header, side panels and footer outside it. (new: not guaranteed by today's site, which has none) | DOM: exactly one `main` (or `role=main`); the article is its descendant; no panel or header is. |
 | P-82 | MUST show no horizontal page scroll at 320, 390, 1000, 1200 and 1920 px, with panels shown, hidden, or at their maximum stored width. | Browser at each width and state: no horizontal scroll. |
 | P-83 | MUST, on wide screens, put the side panels at the viewport edges and the text in a centred column of bounded measure (reference site: 104ch). | Browser 1920 px: panels touch the edges; article width ≤ the configured measure; centred ±2 px. |
 | P-84 | MUST align the header row (Back/Forward, slotted controls, graph title) with the panel toggles, without overlap; the second line (site title, page title, graph) at one height. | Browser 1440 px: box tops within 2 px; no two boxes intersect. |
-| P-85 | MUST let each side panel be hidden and shown by a control at its top, remembered across pages and applied before paint. | Browser: hide, navigate, reload: hidden state present in the first frame. |
-| P-86 | MUST let each panel be resized by a handle: click without drag steps through preset widths (WCAG 2.5.7), arrow keys, Home and End adjust within the limits, drag adjusts. | Browser: click cycles presets; ArrowRight/ArrowLeft change width by a fixed step; Home/End reach the limits; drag changes width. |
+| P-85 | MUST let each side panel be hidden and shown by a control at its top, remembered across pages and applied before paint. A hidden panel is out of the tab order and the accessibility tree, not only out of sight. | Browser: hide, navigate, reload: hidden state present in the first frame; no element of the hidden panel is focusable by Tab or exposed in the accessibility tree. |
+| P-86 | MUST let each panel be resized by a handle: click without drag steps through preset widths (WCAG 2.5.7), arrow keys, Home and End adjust within the limits, drag adjusts. Arrow keys move the handle in their physical direction, so on a right panel's left-edge handle ArrowRight narrows the panel. The handle always states a range with `aria-valuemin` ≤ `aria-valuemax`, also when its panel is hidden. (new for hidden handles: today's site reports a minimum above the maximum at narrow widths) | Browser, per panel: click cycles presets; ArrowRight/ArrowLeft move the handle by a fixed step in their direction; Home/End reach the limits; drag changes width; at every width tested (390 px included) `aria-valuemin` ≤ `aria-valuenow` ≤ `aria-valuemax`. |
 | P-87 | MUST cap the left panel at 40 % and the right at 30 % of the viewport, clamping a stored wider width, with the handle stating the current width. | Browser at 801–1920 px with a stored 640 px: width = min(640, 40 %); further ArrowRight changes nothing; handle's value text equals the width. |
 | P-88 | MUST draw each panel's inner border at 3:1 against the page. | Light and dark: border contrast ≥ 3:1. |
 | P-89 | MUST, on tablet, allow hiding the left panel and move the right panel's content below the text (no right toggle). | Browser 1000 px: left toggle works; no right toggle; graph below the article. |
@@ -212,13 +215,13 @@ Conventions for acceptance tests:
 |---|---|---|
 | P-91 | MUST offer light and dark modes, defaulting to the system preference, with the choice persisted and applied before paint. | Browser: `colorScheme` emulation sets the default; toggled mode present in the first frame after reload. |
 | P-92 | MUST declare the active palette on the root element and expose its colour tokens exactly as defined. | Root attribute equals the configured palette; each computed token equals the palette definition, both modes. |
-| P-93 | SHOULD let the reader choose a palette from a keyboard-operable menu next to the mode toggle; the choice applies at once (page and graph), in both modes, and persists across pages before paint; choosing the site default restores it. | Browser: select via keyboard; tokens change without reload; next page has them in the first frame. |
+| P-93 | SHOULD let the reader choose a palette from a keyboard-operable menu next to the mode toggle; the choice applies at once (page and graph), in both modes, and persists across pages before paint; choosing the site default restores it. | Browser: select via keyboard (on opening, focus may land on the checked palette or on the first item); tokens change without reload; next page has them in the first frame. |
 | P-94 | SHOULD offer accent (emphasis) swatches per palette in a submenu beside it, the palette's default first; palettes without swatches show none. | Browser: submenu items equal the palette's swatch list in order. |
 | P-95 | MUST let an accent change only the accent role (accent token, graph accent, "here" marker), never link or notice colours. | Browser: after selecting a swatch, link and notice computed colours are unchanged. |
 | P-96 | MUST persist the accent per palette, apply it before paint, clear it on "default", restore it on switching back to that palette, and ignore a stored value not valid for the palette. | Browser: each case checked via reload and storage injection. |
-| P-97 | MUST render and remain operable when browser storage throws. | Browser with storage access overridden to throw: no console error; menu works for the session. |
+| P-97 | MUST render and remain operable when browser storage throws. (new: not guaranteed by today's site, whose explorer and mode toggle stop working) | Browser with storage access overridden to throw: no console error; menu works for the session. |
 | P-98 | SHOULD map a removed palette stored by a reader to its designated successor and drop its accent. | Inject a removed palette name: the successor is active, no accent attribute. |
-| P-99 | MUST make the palette submenu operable by mouse (hover intent; crossing other items does not open them), by click (selected palette opens its submenu; another selects it), by keyboard (→, ←, Escape, Enter, Space) and by touch at 390 px, staying inside the viewport at desktop, 390 and 320 px. | Browser per input mode; submenu box within viewport; no horizontal scroll. |
+| P-99 | MUST make the palette submenu operable by mouse (hover intent; crossing other items does not open them), by click (selected palette opens its submenu; another selects it), by keyboard (→, ←, Escape, Enter, Space) and by touch at 390 px, staying inside the viewport at desktop, 390 and 320 px; where it cannot sit beside its parent menu, it may cover or replace it. | Browser per input mode; submenu box within viewport; no horizontal scroll. |
 | P-100 | MUST pass WCAG AA text contrast (4.5:1, 3:1 large) on every audit scenario in light and dark. | Automated WCAG 1.4.3 rule over the scenario set (§4.4): 0 violations. |
 | P-101 | MUST give every interactive control's boundary and every focus indicator 3:1 against the page (WCAG 1.4.11, 2.4.7). | Audit: listed control borders and focused outlines ≥ 3:1. |
 | P-102 | MUST keep link text ≥ 4.5:1 against the page, and every accent swatch ≥ 4.5:1 against the background, in both modes and every palette. | Computed link colour and each swatch accent vs background ≥ 4.5:1. |
@@ -233,41 +236,41 @@ Conventions for acceptance tests:
 | P-106 | MUST colour each token by its role from the active palette and mode, not by inline styles. | Browser: each role class's computed colour equals the palette token, in two palettes × two modes; no `style` attributes in code. |
 | P-107 | MUST keep the block text byte-identical to the source; copying a whole block yields the author's text exactly (tabs, trailing spaces, blank lines, Unicode, CR-LF, markup-like text). | Browser: select a block's contents; `Selection.toString()` and the text of the `copy` event equal the source; build-time comparison per fixture block. |
 | P-108 | MUST leave blocks of unsupported or undeclared languages unhighlighted, exact, in the block colour, occupying the same space as highlighted text would; log the languages and pages. Not fatal. | Fixture typo language: plain text; box size equal to a highlighted twin; log line lists it; exit 0. |
-| P-109 | SHOULD offer a copy control per block that copies the exact text. (new: not guaranteed by today's site) | Browser (Chromium, clipboard permission): clipboard equals source. |
-| P-110 | MUST scroll long lines inside the block, never the page, without wrapping that changes copied text. (new: not guaranteed by today's site) | Browser 390 px: block `scrollWidth > clientWidth`; page has no horizontal scroll; copied text unchanged. |
+| P-109 | SHOULD offer a copy control per block that copies the exact text. (new: not guaranteed by today's site, whose copy control drops a blank line) | Browser (Chromium, clipboard permission): clipboard equals source, for every fixture block, consecutive blank lines included. |
+| P-110 | MUST scroll long lines inside the block, never the page, without wrapping that changes copied text. | Browser 390 px: the block or one of its descendants has `scrollWidth > clientWidth` and scrolls; page has no horizontal scroll; copied text unchanged. |
 
 ### 3.14 Diagrams
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
 | P-111 | MUST render DOT blocks at build time to inline SVG, with no client script and no network. | Output contains `<svg>` for each fixture DOT block; offline check passes. |
-| P-112 | MUST name each diagram from its caption (`role=img`, `aria-label`) or a default locale name; diagrams with links are named groups instead. | DOM: `aria-label` equals caption; linked diagram has `role=group`. |
+| P-112 | MUST name each diagram from its caption (`role=img`, `aria-label`) or a default locale name; diagrams with links are named groups instead. (new for linked diagrams: today's site removes links from diagrams) | DOM: `aria-label` equals caption; linked diagram has `role=group`. |
 | P-113 | MUST draw default-coloured ink, borders and background with the theme's diagram roles in light and dark, in both browsers. | Computed fill/stroke of default elements equal the role tokens; repeated with roles overridden to distinct test values. |
 | P-114 | MUST map author colours that equal a declared palette role to that role, following the theme. | Fixture "role map": each element's computed colour is its role's value in the active palette and mode. The reference recognises a role-mapped diagram only in the fixture's exact shape (zone clusters, white nodes, line, highlight and block roles; a background fill takes it out); the candidate must accept at least that shape. |
 | P-115 | MUST fail the build when any diagram would fall back to a fixed panel for author colours or lose the theme; the log names the page. | Fixture page with an author colour on the background: exit 1; stderr names the page. |
 | P-116 | MUST keep a diagram with a DOT syntax error as code with a visible notice in the locale, without the renderer's message; not fatal. | Fixture broken block: `<pre>` with its source and a notice element; exit 0. |
 | P-117 | MUST fail the build when the diagram time budget runs out. | Budget forced to near zero: exit 1. |
 | P-118 | MUST self-test diagram rendering before the build and exit with the environment code (3) when a known diagram does not draw. | Renderer disabled in the sandbox: exit 3; nothing published. |
-| P-119 | MUST produce deterministic SVG: the same DOT gives the same bytes, also with randomised layouts. | Build twice: identical diagram markup. |
+| P-119 | MUST produce deterministic SVG: the same DOT gives the same bytes, also with randomised layouts. | Two independent builds of the fixture: each diagram's markup is byte-identical. |
 | P-120 | MUST sanitise diagram SVG to an allow-list (no script, `foreignObject`, animation, external URL, author class or native `<title>`); only gradient IDs remain, page-unique. | Grep output SVG for forbidden elements/attributes: 0 hits. |
-| P-121 | MUST fit each diagram on the page: no scrollbar, height ≤ 70 % of the viewport, never enlarged beyond natural size. | Browser: diagram box ≤ column width, ≤ 0.7 × `innerHeight`, ≤ natural size. |
-| P-122 | MUST open a diagram by click, Enter or Space on its frame (or a separate expand button for linked diagrams) into a modal dialog at natural size, with Fit, 100 % and Close controls named as shown; the active mode is marked. | Browser: dialog open; buttons' accessible names equal visible text; active one `aria-pressed=true`. |
-| P-123 | MUST make Fit enlarge a small diagram and shrink a tall one to the dialog. | Browser: after Fit, diagram box fills the dialog's limiting dimension ±2 px. |
+| P-121 | MUST fit each diagram on the page: no scrollbar, height ≤ 70 % of the viewport, never enlarged beyond natural size. Natural size is the SVG's `viewBox` read as points (Graphviz's unit): natural CSS px = `viewBox` × 4/3. | Browser: diagram box ≤ column width, ≤ 0.7 × `innerHeight`, ≤ natural size (`viewBox` × 4/3). |
+| P-122 | MUST open a diagram by click, Enter or Space on its frame (or a separate expand button for linked diagrams, new for linked diagrams: today's site removes links from diagrams) into a modal dialog at natural size, with Fit, 100 % and Close controls named as shown; the active mode is marked. | Browser: dialog open; buttons' accessible names equal visible text; active one `aria-pressed=true`. |
+| P-123 | MUST make Fit enlarge a small diagram and shrink a tall one to the dialog. | Browser: after Fit, diagram box fills the limiting dimension of the dialog container's content box (padding excluded) ±2 px. |
 | P-124 | MUST close the dialog with Escape, Close or a backdrop click (not a drag), returning the diagram to its place and focus to its opener. | Browser: each way closes; diagram back in the article; `activeElement` is the opener. |
 | P-125 | MUST move, not clone, the diagram into the dialog (IDs stay unique); on print or client-side navigation with the dialog open, the diagram returns and no dialog remains. | Browser: duplicate-ID check with dialog open; `print` media emulation and navigation leave 0 open dialogs and the SVG in the article. |
-| P-126 | MUST make diagram links focusable, without underline, with a thicker outline on hover and focus and a focus ring. | Browser: link `tabIndex` reachable; computed stroke width increases on hover/focus; no `text-decoration`. |
+| P-126 | MUST make diagram links focusable, without underline, with a thicker outline on hover and focus and a focus ring. (new for linked diagrams: today's site removes links from diagrams) | Browser: link `tabIndex` reachable; computed stroke width increases on hover/focus; no `text-decoration`. |
 
 ### 3.15 Long pages
 
 | ID | Requirement | Acceptance test |
 |---|---|---|
 | P-127 | MUST make each section foldable by a button at its heading (`aria-expanded`, `aria-controls`, named by the heading). | Browser: button per heading with a body; toggling flips `aria-expanded` and visibility. |
-| P-128 | MUST open long pages outline-first (≥ 4 foldable sections and ≥ 3000 characters: top level folded; a single top section opens one level down); author-marked folded sections stay folded; others open. | Fixture long page: exactly the expected sections folded on load. |
+| P-128 | MUST open long pages outline-first (≥ 4 foldable sections and ≥ 3000 characters: top level folded; a single top section opens one level down); author-marked folded sections stay folded; others open. (new for outline-first: today's site folds only author-marked sections) | Fixture long page: exactly the expected sections folded on load. |
 | P-129 | MUST offer one expand-all/collapse-all control, named for what it will do, with `aria-expanded`, and remember the state for the next page. | Browser: label switches; next page opens as left. |
 | P-130 | MUST open folded sections containing a requested fragment (on load, client-side navigation, `hashchange`, Back/Forward, same-page links, footnotes) and scroll to it. | Browser: `#fragment` inside a folded section: section expanded, target in view. |
 | P-131 | SHOULD let the browser's find-in-page reveal folded text (`hidden=until-found`), the button reflecting it. | DOM: folded bodies carry `hidden="until-found"` (find-in-page itself is checked by hand). |
-| P-132 | MUST show everything without controls when printed and when JavaScript is off. | Print media emulation: no folded content hidden, no fold buttons visible; same with JS disabled. |
-| P-133 | MUST scroll a wide table inside its own container, never the page; cells of text at least 14ch wide, short unbroken cells (≤ 24 chars) exempt; header sticky when the table is taller than 80 % of the viewport. | Browser 390 px and 1200 px: container scrolls; page does not; header `position: sticky` stays at top when scrolled. |
+| P-132 | MUST show everything without controls when printed and when JavaScript is off. | Print media emulation: every folded section's content renders (judged by its content's boxes, not by the absence of `hidden`, which a print style may leave in place), no fold buttons visible; same with JS disabled. |
+| P-133 | MUST scroll a wide table inside its own container, never the page; cells of text at least 14ch wide, short unbroken cells (≤ 24 chars) exempt; header sticky when the table is taller than 80 % of the viewport. | Browser 390 px and 1200 px: where the table is wider than its container, the container scrolls; the page never does; header `position: sticky` stays at top when scrolled. |
 | P-134 | MUST offer a full-screen control per table that opens it in a modal dialog; Escape returns it with focus on the control; it returns before print or navigation. | Browser: dialog contains the table; after Escape, table in article, focus on control. |
 
 ### 3.16 Unique element IDs and offline output
@@ -288,7 +291,7 @@ Conventions for acceptance tests:
 | P-141 | MUST exit 0 only when the output holds exactly the site (and the address manifest); 1 when the content or engine fails; 2 when the input breaks the contract; 3 when the environment cannot render (retryable). | Each negative fixture below yields its code; the clean fixture yields 0 and exactly the expected top-level entries. |
 | P-142 | MUST refuse a bundle containing any symbolic link (exit 2), without following it. | Bundle with a link to a system file: exit 2; the target's content is absent. |
 | P-143 | MUST refuse a non-empty output directory (exit 2). | Second run into the same output: exit 2. |
-| P-144 | MUST NOT write outside the output directory, including through aliases or permalinks with `..`; such an attempt fails (exit 1). | Fixture with an escaping alias: exit 1; nothing beside the site directory. |
+| P-144 | MUST NOT write outside the output directory, including through aliases *(new: not guaranteed by today's site, which publishes no alias pages from an org bundle)* or permalinks with `..`; such an attempt fails (exit 1). | Fixture with an escaping alias: exit 1; nothing beside the site directory. |
 | P-145 | MUST fail (exit 1) when any extension, plugin or component fails to load or start, or any emitter fails. | Remove or break one extension module: exit 1. |
 | P-146 | MUST fail (exit 1) on any log line outside the documented allow-list of clean-build lines. | Inject an unknown warning: exit 1; the line is echoed to stderr. |
 | P-147 | MUST fail (exit 1) when a node is withheld: no file ID, emptied by macros, macro call (while macros are unsupported), undefined footnote, duplicate ID. | One fixture per reason: exit 1; summary line names the count. |
@@ -330,6 +333,7 @@ to the engine.
   every supported language plus a typo language and an undeclared block, DOT diagrams
   (default colours, author fill under text, role map, linked nodes, tall, small, broken),
   section nodes, a route-history entry, a malformed date, a draft-state page, version data.
+  It is built twice for P-164, in its configured `en-US` and in `fr-FR`.
   It lives in [`fixtures/kb-site-parity/`](fixtures/kb-site-parity/README.org), whose README
   maps each part to its requirements and states the fixture's own data contracts (document
   state, last-updated date, route history, version data); each engine's build adapter
@@ -369,12 +373,17 @@ to the engine.
 - Run the automated text-contrast rule plus the 3:1 non-text checks (control borders, focus
   rings) on both sites, light and dark, over a scenario set covering at least: home page,
   folder listing, tag listing, a note, a diagram page, a code page, search open, a hovered
-  result, a focused result, tag search, a link preview opened from each admonition/special-
-  block type, the expanded graph, its open and close controls hovered and focused, the
+  result, a focused result, tag search, a link preview opened from inside each block of the
+  fixture's special-blocks page, the expanded graph, its open and close controls hovered and focused, the
   explorer with a folder open, and an unresolved link. The reference audit has 52 scenarios;
   the candidate's must cover at least the same states.
 - The audit itself is self-tested against pages with known verdicts (text over siblings,
   over SVG shapes, inside scaled or inner scrollers, clipped, covered, pseudo-elements).
+- Text covered by an overlay the scenario opened (search, a dialog, a menu) is not readable, so
+  it is not measured; it is counted and reported separately. Any other text whose contrast the
+  audit cannot decide fails, unless the scenario names it with a reason.
+- Focus rings are measured in keyboard modality: a key press precedes the focus, as a keyboard
+  user's would, so `:focus-visible` applies.
 
 ### 4.5 Test harness rules
 
@@ -387,6 +396,12 @@ to the engine.
   writing the checks and their mutants, with 29 candidates for new requirements.
 - No fixed sleeps: wait until no request is in flight and nothing visible has changed for
   several frames. A check that fails only intermittently is a defect, fixed at its cause.
+- A check that scrolls and then reads a scroll position scrolls with `behavior: "instant"`: a
+  site may set `scroll-behavior: smooth`, and a smooth scroll is still moving when it is read.
+- After a client-side navigation, wait for the new page's `h1` to replace the old one, not for
+  network idle, which is already met when the navigation starts.
+- Whether a section is folded is judged on its contents. A body under `hidden="until-found"`
+  still has a box (`content-visibility: hidden`), so `checkVisibility()` on the body itself is true.
 
 ### 4.6 Retirement criteria
 

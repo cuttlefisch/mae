@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.181] - 2026-11-22
+## [0.14.182] - 2026-11-22
 
 
 
@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(kb)* KB ingest and stored edges on mae-org, with a one-time repair (#941, #854) ([85c2824](https://github.com/cuttlefisch/mae/commit/85c28242fa8aea51d660e144e05b7c965cf556d7))
+- *(org)* [[id:X::#CUSTOM_ID]] lands on the custom id's anchor (ADR-119 S0; mae-org 0.10.0) ([4de395a](https://github.com/cuttlefisch/mae/commit/4de395ae67e666111677b1231302b14f241f7584))
 
 ### Bug Fixes
 
@@ -17,16 +18,22 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Guidance states the KB index's title, now that bodies hold content only (#941) ([b852595](https://github.com/cuttlefisch/mae/commit/b852595fbd84a9a905f4371014b4cd1518767f78))
 - *(ai)* Confine sandboxed writes on the resolved path (#967); idle-CPU waits for boot (#968) ([2778181](https://github.com/cuttlefisch/mae/commit/27781811e5c2b05d5f7dc729b0c9afd53036c838))
 - *(ai)* The test sandbox refuses relative write paths (#967 review) ([a9beb79](https://github.com/cuttlefisch/mae/commit/a9beb79e198922d82875a6bff5d8492dd351486b))
+- *(org)* The outside-the-edit comparison does not carry the page's CUSTOM_ID map ([652ccee](https://github.com/cuttlefisch/mae/commit/652ccee4ece053077f1bfd1acd9e44ed31e2f350))
 
 ### Documentation
 
 - *(verification)* The kb-site parity fixture bundle (§4.1) ([c6aed75](https://github.com/cuttlefisch/mae/commit/c6aed75e366d1891afc6d301abb3a46f80e0e913))
 - *(verification)* The fixture's README, and the reference's exit codes ([a87a732](https://github.com/cuttlefisch/mae/commit/a87a732991057facd33eebcf47b61ac9547c5b47))
+- *(verification)* P-144's alias clause is new ([042a4e9](https://github.com/cuttlefisch/mae/commit/042a4e983050f2dced6b45af5012372b941980f5))
+- *(verification)* Parity rows from the first output run ([43ff450](https://github.com/cuttlefisch/mae/commit/43ff4503246c41f9aa7b392ef2cd7fbb2fae21bb))
+- *(verification)* Parity rows and fixture fixes from the browser runs ([eeaa8f1](https://github.com/cuttlefisch/mae/commit/eeaa8f17beb87bdac1056cec805fcc1037bd904a))
+- *(verification)* P-86's hidden-handle range is new; P-75 records today's path order ([f67677d](https://github.com/cuttlefisch/mae/commit/f67677d2f5688414a02df3d9fda53cf53ae27db7))
 
 ### Miscellaneous
 
 - *(deps)* Url 2.5.9 in both workspaces (RUSTSEC-2026-0592) ([700f800](https://github.com/cuttlefisch/mae/commit/700f8005ed11fb03714225ce55c04ef8f6482460))
 - Bump version to 0.14.180 ([402f744](https://github.com/cuttlefisch/mae/commit/402f744e868349f5bd011ed0201141c1e4ccfb16))
+- Bump version to 0.14.181 ([79f0b69](https://github.com/cuttlefisch/mae/commit/79f0b69bd4fe68870750a53ea367d1420a4c9fe5))
 
 ## [0.14.179] - 2026-11-21
 
