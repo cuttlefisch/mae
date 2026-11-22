@@ -556,6 +556,74 @@ mod tests {
     }
 
     #[test]
+    fn raw_org_and_store_form_bodies_project_identical_link_rows() {
+        // #941 PR2: the projector stores edges through `insert_node`, whose
+        // ONE derivation is mae-org's. A CRDT body may hold raw org or the
+        // store form (`org_ingest::store_body`); either way the projected
+        // `links` and `meta_members` rows are the same, and the store form
+        // must not lose a link's ADR-030 query.
+        let raw = "See [[id:concept:b?rel=answers&w=0.5&c=0.7][the b]], \
+                   [[https://e.org][web]], [[help:x]], [[#local]] and [[concept:c]].\n\
+                   #+TRANSCLUDE: concept:d reference\n";
+        let stored = mae_kb::org_ingest::store_body(raw);
+        assert_ne!(
+            stored, raw,
+            "the store form must differ, or this proves nothing"
+        );
+
+        type Rows = (Vec<(String, String, String, String)>, Vec<(String, String)>);
+        let project = |body: &str| -> Rows {
+            let store = CozoKbStore::open_mem().unwrap();
+            let doc = mae_sync::kb::KbNodeDoc::new("concept:x", "X", body, &[]);
+            project_node(&store, "concept:x", &doc.encode(), None).unwrap();
+            let mut links: Vec<_> = store
+                .links_from("concept:x")
+                .unwrap()
+                .into_iter()
+                .map(|l| {
+                    (
+                        l.dst,
+                        l.rel_type,
+                        l.weight.to_string(),
+                        l.confidence.to_string(),
+                    )
+                })
+                .collect();
+            links.sort();
+            let members = store
+                .meta_members("concept:x")
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.member_id, m.role))
+                .collect();
+            (links, members)
+        };
+        let (a, b) = (project(raw), project(&stored));
+        assert_eq!(a, b);
+        assert_eq!(
+            a.0,
+            vec![
+                (
+                    "concept:b".into(),
+                    "answers".into(),
+                    "0.5".into(),
+                    "0.7".into()
+                ),
+                (
+                    "concept:c".into(),
+                    "references".into(),
+                    "1".into(),
+                    "1".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            a.1,
+            vec![("concept:d".to_string(), "reference".to_string())]
+        );
+    }
+
+    #[test]
     fn projection_is_deterministic_across_stores() {
         // Same CRDT state ⇒ identical projected node + links on two independent stores
         // (the ADR-029 determinism contract, at the single-node level).

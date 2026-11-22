@@ -135,6 +135,9 @@ fn kb_record_modification_only_updates_the_node_whose_body_actually_changed() {
 
     let mut editor = Editor::new();
     let mut kb = mae_kb::KnowledgeBase::new();
+    // Baseline hashes as a store ingested BEFORE mae-org recorded them (the
+    // old parser's bodies): the upgrade case, where an untouched sibling must
+    // be re-based, not stamped (#941).
     let parsed = mae_kb::org::parse_org_multi(&initial);
     for (id, title, body) in [
         ("file-id", "Repro", ""),

@@ -167,3 +167,29 @@ fn a_resolver_supplied_anchor_cannot_break_out_of_the_href() {
     ));
     assert!(body.contains(r#"href="/x.html#top""#), "{body}");
 }
+
+/// Replacing a body that holds a CUSTOM_ID headline is a change inside the
+/// body, not outside it: `Rendered::custom_ids` describes the whole page, so
+/// the outside-the-edit comparison must not include it (found by
+/// render_splice's property test).
+#[test]
+fn removing_a_body_with_a_custom_id_is_still_a_written_edit() {
+    for text in [
+        ":PROPERTIES:\n:ID: f\n:END:\n#+title: F\n\nintro\n* H\n:PROPERTIES:\n:CUSTOM_ID: c\n:END:\nbody\n",
+        "* P\n:PROPERTIES:\n:ID: p\n:END:\ntext\n** C\n:PROPERTIES:\n:CUSTOM_ID: c\n:END:\nmore\n",
+    ] {
+        let doc = parse(text, &ParseOptions::default());
+        let sem = mae_org::semantics(&doc);
+        for node in &sem.nodes {
+            let out = mae_org::replace_body(
+                text,
+                &doc,
+                node,
+                "",
+                &ParseOptions::default(),
+                &SemanticsOptions::default(),
+            );
+            assert!(out.is_ok(), "{} in {text:?}: {:?}", node.id, out.err());
+        }
+    }
+}

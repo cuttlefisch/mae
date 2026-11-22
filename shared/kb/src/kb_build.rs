@@ -370,9 +370,10 @@ fn build_into(
 }
 
 /// Ingest every `.org` file in `dir` (sorted by path for determinism):
-/// parse with `org::parse_org_multi_result`, then `insert_node` each parsed
-/// node (tagged [`NodeSource::Seed`]), `add_typed_link` each typed link, and
-/// `add_meta_member` each transclusion directive.
+/// parse with `org_ingest::parse_file`, then `insert_node` each parsed node
+/// (tagged [`NodeSource::Seed`]), which stores its typed links from its body
+/// (their `?rel=&w=&c=` kept, #854), and `add_meta_member` each transclusion
+/// directive.
 ///
 /// Errors if `dir` does not exist (the caller is almost certainly not
 /// running from the workspace root) or if zero nodes were parsed (refusing
@@ -409,7 +410,7 @@ pub fn ingest_org_dir(
                 continue;
             }
         };
-        let result = crate::org::parse_org_multi_result(&content);
+        let result = crate::org_ingest::parse_file(&content);
         all_nodes.extend(result.nodes);
         all_typed_links.extend(result.typed_links);
         all_transclusions.extend(result.transclusions);
@@ -432,17 +433,17 @@ pub fn ingest_org_dir(
         return Err(KbBuildError::EmptyCorpus(dir.to_path_buf()));
     }
 
-    let mut link_count = 0;
-    for (src, link) in &all_typed_links {
-        if let Err(e) = store.add_typed_link(src, &link.target, &link.rel_type, 1.0) {
-            eprintln!(
-                "  Warning: typed link {}→{} ({}): {}",
-                src, link.target, link.rel_type, e
-            );
-        } else {
-            link_count += 1;
-        }
-    }
+    // Stored by `insert_node` from each body: count what the store holds
+    // for the links parsed, rather than trusting a count of writes.
+    let link_count = all_typed_links
+        .iter()
+        .filter(|(src, link)| {
+            store.links_from(src).is_ok_and(|ls| {
+                ls.iter()
+                    .any(|l| l.dst == link.target && l.rel_type == link.rel_type)
+            })
+        })
+        .count();
     eprintln!("  Typed links: {typed_link_count} parsed, {link_count} stored");
 
     let mut trans_count = 0;
