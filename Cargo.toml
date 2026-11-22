@@ -27,6 +27,7 @@ members = [
     "shared/org-wasm",
     "shared/crypto",
     "shared/crypto-wasm",
+    "shared/site",
 ]
 exclude = ["tools/code-map", "tools/audit-metrics", "tools/mutate", "daemon"]
 resolver = "2"

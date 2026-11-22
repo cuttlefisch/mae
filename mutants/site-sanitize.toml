@@ -1,0 +1,33 @@
+# The web core's final allow-list sanitiser (shared/site/src/sanitize.rs,
+# ADR-119 D18/D19, P-151). Security: every content-derived fragment passes it.
+
+[[mutant]]
+id = "site-sanitize/no-op"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(the_sanitiser_strips_what_a_template_or_renderer_could_inject)"
+[[mutant.edit]]
+file = "shared/site/src/sanitize.rs"
+find = '''    builder().clean(html).to_string()'''
+replace = '''    let _ = builder;
+    html.to_string()'''
+
+[[mutant]]
+id = "site-sanitize/any-id-kept"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(/content_cannot_spell_a_chrome_id|the_sanitiser_strips_what_a_template_or_renderer_could_inject/)"
+[[mutant.edit]]
+file = "shared/site/src/sanitize.rs"
+find = '''            "id" if !is_content_anchor(value) => None,'''
+replace = '''            "id" if false && !is_content_anchor(value) => None,'''
+
+[[mutant]]
+id = "site-sanitize/javascript-scheme"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "fixture"]
+filter = "test(the_sanitiser_strips_what_a_template_or_renderer_could_inject)"
+[[mutant.edit]]
+file = "shared/site/src/sanitize.rs"
+find = '''["http", "https", "mailto"]'''
+replace = '''["http", "https", "mailto", "javascript", "data"]'''

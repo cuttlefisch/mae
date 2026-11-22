@@ -1372,6 +1372,26 @@
         }
       ]
     },
+    "mae-site": {
+      "path": "shared/site/src/lib.rs",
+      "dependencies": [
+        "mae-org"
+      ],
+      "public_items": [
+        {
+          "name": "address",
+          "kind": "mod"
+        },
+        {
+          "name": "derive",
+          "kind": "mod"
+        },
+        {
+          "name": "sanitize",
+          "kind": "mod"
+        }
+      ]
+    },
     "mae-snippets": {
       "path": "crates/snippets/src/lib.rs",
       "dependencies": [],
