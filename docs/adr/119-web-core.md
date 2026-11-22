@@ -634,7 +634,8 @@ design-system specification, which is this amendment's input. Two rules from it 
   components are sanitised like content, under an allow-list extended to exactly the ARIA states and
   `data-` keys their contract needs.
 - **Meaningful without JavaScript.** The markup works without scripts. The export needs none; the live
-  app needs its router for page-load authorization (D16).
+  app's pages arrive through the browser client's backend (A6), and the router adds no-reload
+  navigation.
 
 ### A3. Addresses of generated pages; IDs that cannot be addresses
 
@@ -675,12 +676,23 @@ default off; `oauth.site_locale` sets the locale.
 address. The live app succeeds that view. The resolution (retire its path, or reserve `view` under A3)
 is due with L1a's router.
 
-### A6. Pages require a bearer until the router lands
+### A6. The reader authenticates through the browser client's backend *(owner, 2026-11-22)*
 
-L1a's route answers a request that carries `Authorization: Bearer`, which serves `curl`, scripts and
-the parity suite. A browser navigation cannot carry one. D16's token-free shell and the same-origin
-router that fetches each page with the bearer come next in L1a, and the browser reader depends on
-them.
+This supersedes D16's "How the live app authenticates a page load". The browser client uses a
+backend-for-frontend (RFC 10017) for the reader and the editor alike. Its server is a confidential
+client that holds the tokens behind a cookie session and calls the daemon; the browser never holds a
+token. So:
+
+- the daemon's `GET /kb/<kb-id>/<id>` and its tag views stay bearer-only, as built (A5), and are called
+  server-side by that backend, one daemon session per person;
+- the daemon builds no token-free shell, and D16's "there are no cookies, so there is no CSRF" no
+  longer describes the browser: the backend's cookie session carries its own Origin and CSRF checks;
+- the in-page router keeps everything else D16 gives it (no-reload navigation, focus, scroll,
+  behaviours once per navigation), and fetches pages through the backend;
+- D19's sanitiser, the strict CSP and Trusted Types still guard the page the browser renders.
+
+The daemon's own refusal answers (A5) are unchanged, and the backend passes the daemon's CSP and
+security headers through with each page.
 
 ## Amendments this needs
 
