@@ -1,8 +1,11 @@
 # ADR-119: The MAE web core: one core for the live web app and the static export
 
-**Status:** Proposed (design). Nothing here is built. Spikes C1–C6 and C10–C12 are measured (results:
-`docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and C13 are still to spike. D14 (search) and
-D15 (graph) stay open until they report. Phased (S0, L1–L3, X1, below).
+**Status:** Proposed (design), being built in phase order. Built: S0 (mae-org 0.10.0, #973), and L1a's
+first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
+`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided. Spikes
+C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
+C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
+X1, below).
 
 **Depends on:**
 - ADR-112 (mae-org: one lossless parser, its semantics and renderers, and the `Resolver` it renders
@@ -588,6 +591,108 @@ grows D6's property test.
 - **L3. Change records and review:** ADR-116, ADR-113, ADR-117 and ADR-115 as views (D11). Also the
   published-view derivation and its leak test (D8), which open review-enabled KBs to the live app.
 - **Diagrams** go live in whichever phase is current once D13's conditions are met.
+
+## Amendment 1 (2026-11-22): decisions made while building L1a
+
+Building S0 and L1a's first slices decided the following. Two are the owner's (A1, A2); the rest
+follow from the decisions above and the parity specification (`docs/verification/kb-site-parity.md`).
+
+### A1. The browser runtime's build output is committed; the daemon embeds it *(owner, 2026-11-22)*
+
+D2 said CI builds the runtime into versioned assets that the daemon serves, not how the daemon gets
+them. The packages' generated output (first: the palette's `dist/palette.css` and `dist/tokens.json`)
+is **committed**. The generators are byte-deterministic, and CI's `site-web` job rebuilds the output
+and fails on any difference, untracked files included. `mae-site` embeds it at compile time
+(`mae_site::assets`), so neither a daemon build nor the export needs node. Rejected: serving a
+release-shipped directory (more deployment parts), and a `build.rs` that runs npm (every Rust build
+needs node).
+
+Assets are served at `/site-assets/<name>` under content-addressed names (`palette-<fnv64>.css`),
+immutable for a year, so a change always reaches a browser under a new name. They are public: they hold
+no KB content, and a `<link>` cannot carry a bearer token. Any other name under the prefix is the
+site's not-found.
+
+### A2. One component library for the reader and the browser editor *(owner, 2026-11-22)*
+
+The reader's chrome components (explorer, search, graph, TOC, backlinks, panels, menus, dialogs,
+badges, footer) and the browser editor's UI are one library, not two that drift. Each component is:
+
+- a documented markup contract (elements, ARIA roles, names and states, `data-` attributes), which the
+  engine's templates and the editor's TypeScript both emit;
+- CSS over the palette's tokens only;
+- a framework-free TypeScript behaviour module registered through `mae.site.register` (D18), run once
+  per navigation and cleaned up before the next (P-156).
+
+Golden fixtures in this repository (inputs and the expected normalised accessibility tree) are the
+contract test both repositories run. The library's built assets reach the browser editor as versioned
+files with a canonical hash, vendored there with a fetch-and-verify step, as mae-org's and
+mae-crypto's WASM are. The inventory, states and accessibility criteria come from the browser client's
+design-system specification, which is this amendment's input. Two rules from it are fixed here:
+
+- **Core chrome vs slot components.** The core's chrome is added after sanitising (D19). Its ids carry
+  the reserved prefix `mae-`, which no content anchor can spell (`mae_site::sanitize`). Operator slot
+  components are sanitised like content, under an allow-list extended to exactly the ARIA states and
+  `data-` keys their contract needs.
+- **Meaningful without JavaScript.** The markup works without scripts. The export needs none; the live
+  app's pages arrive through the browser client's backend (A6), and the router adds no-reload
+  navigation.
+
+### A3. Addresses of generated pages; IDs that cannot be addresses
+
+D4 extends to the pages the engine generates. Tag pages sit below the tag index:
+`/kb/<kb-id>/tags` and `/kb/<kb-id>/tags/<tag>` live, `<base>/tags/` and `<base>/tags/<tag>/` in the
+export. A generated address is never shadowed (P-166):
+
+- **Reserved IDs.** A page whose file ID is `tags`, compared as the export compares directories (so
+  `Tags` too), is withheld (`Withheld::Reserved`). Later generated namespaces join the list.
+- **IDs with no address.** An empty ID would give `//` (protocol-relative), and `.` or `..` are dot
+  segments a browser collapses. Percent-encoding cannot defuse those: the URL standard reads `%2e` as
+  `.`. So an ID that is empty or all dots is withheld (`Withheld::InvalidId`).
+- **Export directory collisions.** Two file IDs whose encoded directory names are equal case-folded,
+  or equal once trailing dots are dropped (Windows drops them), are withheld (`Withheld::FsCollision`,
+  P-15). The live app, addressing pages by URL, does not need this rule and does not apply it.
+- **One holder per node ID.** A node ID held twice anywhere in the KB, file-level or not, withholds
+  every page holding it. A link is never decided by page order, and no page can take another's address.
+
+### A4. Every engine-written string comes from a catalogue (P-164)
+
+The chrome takes its words from `mae_site::strings` by the configured locale, never from a literal:
+`en-US`, and `fr-FR` as the parity suite's second locale. A locale with no catalogue falls back to
+`en-US`. Proper names the engine never translates (palette and product names) are declared as such
+and are not in the catalogue.
+
+### A5. The live route's answers
+
+`GET /kb/<kb-id>/<id>` (and the tag views) answer with the same not-found for every refusal and
+absence: no KB, no read access, an end-to-end-encrypted KB (L1 serves plaintext KBs only), no such
+node or tag, an invalid identifier, a withheld page. The read gate is `kb/query.*`'s own
+(`kb_query::load_gated`). Until D6's cache, every request derives the KB, bounded by the node count and
+the per-node byte size (`kb_query_max_scan_nodes`, `kb_query_max_body_bytes`), charged to the tenant
+quota as a scan, and rendered off the async workers. The route is behind `oauth.site_enabled`,
+default off; `oauth.site_locale` sets the locale.
+
+**Known collision (architecture debt).** With `webview_enabled`, ADR-073's view answers
+`/kb/<kb-id>/view` before authentication, so a node whose ID is `view` cannot be reached at its own
+address. The live app succeeds that view. The resolution (retire its path, or reserve `view` under A3)
+is due with L1a's router.
+
+### A6. The reader authenticates through the browser client's backend *(owner, 2026-11-22)*
+
+This supersedes D16's "How the live app authenticates a page load". The browser client uses a
+backend-for-frontend (RFC 10017) for the reader and the editor alike. Its server is a confidential
+client that holds the tokens behind a cookie session and calls the daemon; the browser never holds a
+token. So:
+
+- the daemon's `GET /kb/<kb-id>/<id>` and its tag views stay bearer-only, as built (A5), and are called
+  server-side by that backend, one daemon session per person;
+- the daemon builds no token-free shell, and D16's "there are no cookies, so there is no CSRF" no
+  longer describes the browser: the backend's cookie session carries its own Origin and CSRF checks;
+- the in-page router keeps everything else D16 gives it (no-reload navigation, focus, scroll,
+  behaviours once per navigation), and fetches pages through the backend;
+- D19's sanitiser, the strict CSP and Trusted Types still guard the page the browser renders.
+
+The daemon's own refusal answers (A5) are unchanged, and the backend passes the daemon's CSP and
+security headers through with each page.
 
 ## Amendments this needs
 
