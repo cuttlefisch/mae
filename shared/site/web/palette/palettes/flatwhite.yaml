@@ -113,6 +113,6 @@ emphasis:
   defaultId: teal
   swatches:
     - id: teal
-      name: green azulado
+      name: teal
       light: { graphic: "#5f8c7d", text: "#487466", graph: "#009778" }
       dark: { graphic: "#95c4b3", text: "#95c4b3", graph: "#1ca382" }
