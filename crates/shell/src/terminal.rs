@@ -58,8 +58,10 @@ type PtyHold = std::convert::Infallible;
 /// #965's blank terminal. With this handle open, the read reports
 /// "would block" instead, and the reader keeps its bytes until it gets the
 /// lock. The child's exit is still seen: alacritty watches the process, not
-/// the hang-up. macOS reports end-of-file there, which keeps the bytes, so
-/// nothing is needed elsewhere. Proven by
+/// the hang-up. macOS reports end-of-file there, which the same loop treats
+/// as "keep reading" and so keeps the bytes; that is read from alacritty's
+/// code, not tested on a Mac, since the test below is Linux-only. Proven on
+/// Linux by
 /// `output_written_while_the_terminal_is_locked_survives_the_childs_exit`.
 #[cfg(target_os = "linux")]
 fn open_pty(
