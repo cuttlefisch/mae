@@ -3199,24 +3199,23 @@ mod tests {
     }
 
     /// Stepping through a program costs a constant per line, so total time is
-    /// linear in program length. 100 -> 1,600 lines (16x) costs ~16x if linear,
-    /// ~256x if the per-step work scans the program. A ratio, not a budget
-    /// (issue #947).
-    ///
-    /// Calibrated 2026-11-18: real code grew 14.3x-15.3x in release and
-    /// 14.5x-15.0x in debug; a mutant that copies the source map on every step
-    /// (release) grew 229x-239x. 64x sits between them.
+    /// linear in program length. 8,000 -> 32,000 lines (4x) costs ~4x if linear,
+    /// ~16x if the per-step work scans the program. Both sizes are past the
+    /// last-level cache (#961): the old 100 -> 1,600 pair mixed in the
+    /// cache-to-memory step. The cost is spread over the whole VM, so no single
+    /// counter covers it; this stays a non-gating timing test. Bound 8x,
+    /// midway between 4x and 16x.
     #[test]
     #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn stepping_grows_linearly_not_quadratically() {
-        const STEP_MAX_RATIO: f64 = 64.0;
+        const STEP_MAX_RATIO: f64 = 8.0;
         let (ratio, s, l) =
-            crate::timing::growth_ratio(5, 16, || step_through(100), || step_through(1600));
-        eprintln!("stepping growth 100->1600 lines: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
+            crate::timing::growth_ratio(3, 1, || step_through(8_000), || step_through(32_000));
+        eprintln!("stepping growth 8000->32000 lines: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
             ratio < STEP_MAX_RATIO,
-            "stepping time grew {ratio:.0}x for 16x lines ({s:.5}s -> {l:.5}s); \
-             linear ~16x, quadratic ~256x"
+            "stepping time grew {ratio:.1}x for 4x lines ({s:.5}s -> {l:.5}s); \
+             linear ~4x, quadratic ~16x"
         );
     }
 
