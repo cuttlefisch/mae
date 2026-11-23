@@ -1015,6 +1015,22 @@ jobs:
           sccache: "true"
           incremental: "false"
           mold: "true"
+      # Compile every editor-workspace test binary this job runs, in its own
+      # step, so each capped step below times its tests alone. With compilation
+      # inside the caps, a slow compile cache (2026-11-23: sccache spent 370 s
+      # on cache writes) failed 3- and 5-minute steps before a test ran, on
+      # several PRs at once, a docs-only one included. Same remedy as "Build
+      # daemon tests" below.
+      - name: Build integration test binaries
+        run: >-
+          cargo test --no-run
+          --package mae-mcp --package mae-kb --package mae-core --lib
+          && cargo test --no-run --package mae
+          --test collab_tcp_e2e_psk_auth --test collab_tcp_e2e_kb_protocol
+          --test collab_tcp_e2e_kb_stress --test collab_tcp_e2e_tests
+          --test kb_lifecycle_e2e --bin mae
+          && cargo build --bin build-manual-kb
+        timeout-minutes: 30
       - name: Multi-client integration tests
         run: cargo test --package mae-mcp --lib -- --test-threads=1
         timeout-minutes: 5
@@ -1257,6 +1273,15 @@ jobs:
           sccache: "true"
           incremental: "false"
           mold: "true"
+      # Compile the test binaries first, so each capped step below times its
+      # tests alone; a slow compile cache once failed the 10-minute R7RS step
+      # mid-build (2026-11-23). nextest reuses what `cargo test --no-run` built.
+      - name: Build scheme test binaries
+        run: >-
+          cargo test --no-run -p mae-scheme --lib
+          --test r7rs_compliance --test scheme_torture --test scheme_benchmarks
+          --test scheme_programs --test scheme_io_ports
+        timeout-minutes: 20
       - name: R7RS compliance tests
         run: cargo nextest run -p mae-scheme --test r7rs_compliance --nocapture
         timeout-minutes: 10
