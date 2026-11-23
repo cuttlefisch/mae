@@ -663,6 +663,18 @@ The chrome takes its words from `mae_site::strings` by the configured locale, ne
 `en-US`. Proper names the engine never translates (palette and product names) are declared as such
 and are not in the catalogue.
 
+*(owner, 2026-11-23)* The reader ships four catalogues: `en-US`, `fr-FR`, `es-ES` and `eo`; `es-ES`
+and `eo` are complete, and `eo` awaits a speaker's review. A catalogue is complete by construction (a
+missing string does not compile), so a locale either has every string or falls back whole.
+Translations are written fresh for the catalogue, never copied from another site generator's locale
+files (the Context's clean-room rule). Locale data (dates, numbers, plural rules, language names) will come from
+Unicode CLDR, through ICU4X in Rust and `Intl` in the browser, when the reader first renders any;
+nothing in it does today, so no dependency is added yet. A locale with no catalogue renders the
+chrome in `en-US`, and `mae_site::strings::resolve` reports that it fell back: every chrome element
+written from the fallback carries `lang="en-US"`, so a screen reader voices it as English, while
+`<html lang>` stays the configured locale and content inside such an element carries that locale
+back. The one exception is a listing's `<title>`, plain text that cannot mark part of itself.
+
 ### A5. The live route's answers
 
 `GET /kb/<kb-id>/<id>` (and the tag views) answer with the same not-found for every refusal and
