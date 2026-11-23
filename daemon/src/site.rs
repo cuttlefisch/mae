@@ -78,6 +78,9 @@ pub enum View {
     Tag(String),
     /// `/kb/<kb-id>/index.json`.
     Index,
+    /// `/kb/<kb-id>/`: the KB's home page, the node the operator declared
+    /// for it (ADR-119 Amendment 2 B3).
+    Home(Option<String>),
 }
 
 /// What one page request may read (D21).
@@ -182,6 +185,13 @@ async fn readable_sources(
 /// The answer to `view` from a derived KB.
 fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePage {
     match view {
+        // The declared node when this reader has it as a page; otherwise the
+        // tag index. Unpublished, withheld and undeclared all answer alike, so
+        // the home address says nothing about a node the reader cannot see.
+        View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {
+            Some(id) => answer(site, addressing, View::Page(id)),
+            None => answer(site, addressing, View::Tags),
+        },
         View::Page(id) => match site.pages.get(&id) {
             Some(p) => SitePage::Found {
                 title: p.title.clone(),
@@ -247,17 +257,18 @@ pub fn document(
     toc: &[mae_site::TocEntry],
 ) -> String {
     let words = mae_site::strings::for_locale(lang);
-    shell(
-        lang,
-        title,
-        &format!(
-            "{}<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>{}",
-            toc_nav(words.contents, toc),
-            escape(title),
-            tags_list(words.tags, tags),
-            backlinks_nav(words.backlinks, backlinks),
-        ),
-    )
+    let article = format!(
+        "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
+        escape(title),
+        tags_list(words.tags, tags),
+    );
+    // The side panels sit outside the main landmark (P-165).
+    let panels = format!(
+        "{}{}",
+        toc_nav(words.contents, toc),
+        backlinks_nav(words.backlinks, backlinks)
+    );
+    shell(lang, title, &article, &panels)
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the
@@ -302,19 +313,28 @@ pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) 
             "<section id=\"mae-listing\"><h1>{}</h1><ul>{list}</ul></section>",
             escape(&heading)
         ),
+        "",
     )
 }
 
 /// The document around a page's main content: lang, the palette, the title,
-/// one main landmark (P-165).
-fn shell(lang: &str, title: &str, main: &str) -> String {
+/// one main landmark holding the content, and the side panels after it, in an
+/// `aside`, never inside `main` (P-165). No panels, no `aside`.
+fn shell(lang: &str, title: &str, main: &str, panels: &str) -> String {
+    let aside = if panels.is_empty() {
+        String::new()
+    } else {
+        format!("<aside id=\"mae-panels\">{panels}</aside>")
+    };
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <link rel=\"stylesheet\" href=\"{}\">\
-         <title>{}</title></head><body><main id=\"mae-main\">{main}</main></body></html>\n",
+         <link rel=\"stylesheet\" href=\"{}\">\
+         <title>{}</title></head><body><main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
         escape(lang),
         mae_site::assets::href(mae_site::assets::PALETTE),
+        mae_site::assets::href(mae_site::assets::BASE),
         escape(title),
     )
 }

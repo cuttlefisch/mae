@@ -1,0 +1,31 @@
+/* MAE site base rules (ADR-119 A2): the page's own colours, written over the
+   palette's tokens only, so every palette and both modes apply and the
+   contrast the palette tests guarantee is the contrast a reader gets (P-102).
+   Hand-written source; served as an immutable, content-addressed asset after
+   the palette. A colour here is always a var(--ui-*) the palette defines:
+   mae_site's tests refuse a literal colour or an unknown token. */
+
+:root {
+  color-scheme: light;
+  background: var(--ui-background);
+  color: var(--ui-foreground);
+}
+
+:root[data-mode="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--ui-background);
+  color: var(--ui-foreground);
+}
+
+a:link,
+a:visited {
+  color: var(--ui-link);
+}
+
+#mae-panels {
+  background: var(--ui-panel);
+}

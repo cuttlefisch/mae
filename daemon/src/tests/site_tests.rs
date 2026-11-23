@@ -225,6 +225,10 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
         "{html}"
     );
     assert_eq!(mae_site::assets::at(&href), Some(mae_site::assets::PALETTE));
+    // The base rules come after the palette, whose tokens they use (P-102).
+    let base = mae_site::assets::href(mae_site::assets::BASE);
+    let link = |h: &str| html.find(&format!(r#"<link rel="stylesheet" href="{h}">"#));
+    assert!(link(&href) < link(&base) && link(&base).is_some(), "{html}");
 }
 
 #[tokio::test]
@@ -434,4 +438,78 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
         .await,
         SitePage::NotFound
     );
+}
+
+/// Amendment 2 B3: `/kb/<kb-id>/` is the node the operator declared, when the
+/// reader has it as a page. Undeclared, unknown or unpublished all answer the
+/// same tag index, so the home address says nothing about a node the reader
+/// cannot see; a reader without access gets the not-found every route gives.
+#[tokio::test]
+async fn the_home_page_is_the_declared_node_or_else_the_tag_index() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-home",
+        &[
+            ("home", "Welcome", "#+filetags: :t:\nhello\n"),
+            ("other", "Other", "x\n"),
+        ],
+    )
+    .await;
+    let view = |v: site::View, who: &'static str| {
+        let s = store.clone();
+        async move { site::view(&s, "kb-home", &v, Some(who), LIMITS, &Default::default()).await }
+    };
+    let declared = view(site::View::Home(Some("home".into())), READER).await;
+    let SitePage::Found { title, .. } = &declared else {
+        panic!("the declared home page: {declared:?}");
+    };
+    assert_eq!(title, "Welcome");
+    let tag_index = view(site::View::Tags, READER).await;
+    assert!(matches!(tag_index, SitePage::Listing { .. }));
+    for fallback in [None, Some("absent".to_string())] {
+        assert_eq!(
+            view(site::View::Home(fallback.clone()), READER).await,
+            tag_index,
+            "{fallback:?}"
+        );
+    }
+    assert_eq!(
+        view(site::View::Home(Some("home".into())), STRANGER).await,
+        SitePage::NotFound
+    );
+}
+
+/// P-165: one main landmark holding the article; the side panels (TOC,
+/// backlinks) after it, never inside it.
+#[test]
+fn the_side_panels_sit_outside_the_main_landmark() {
+    let toc = vec![
+        mae_site::TocEntry {
+            level: 2,
+            text: "A".into(),
+            anchor: "a".into(),
+        },
+        mae_site::TocEntry {
+            level: 2,
+            text: "B".into(),
+            anchor: "b".into(),
+        },
+    ];
+    let backlinks = vec![mae_site::Backlink {
+        id: "x".into(),
+        title: "X".into(),
+        href: "/kb/k/x".into(),
+    }];
+    let doc = site::document("en-US", "T", "<p>body</p>", &backlinks, &[], &toc);
+    assert_eq!(doc.matches("<main").count(), 1);
+    let (main, after) = doc.split_once("</main>").expect("a main landmark");
+    assert!(main.contains("mae-article") && main.contains("<p>body</p>"));
+    for panel in ["mae-toc", "mae-backlinks"] {
+        assert!(!main.contains(panel), "{panel} inside main");
+        assert!(after.contains(panel), "{panel} missing");
+    }
+    assert!(after.starts_with("<aside id=\"mae-panels\">"));
+    // A page with no panels has no empty aside.
+    assert!(!site::document("en-US", "T", "<p>b</p>", &[], &[], &[]).contains("<aside"));
 }

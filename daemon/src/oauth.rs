@@ -68,6 +68,8 @@ pub struct ResourceServerConfig {
     pub site_locale: String,
     /// `config::OAuthConfig::site_hidden_namespaces`.
     pub site_hidden_namespaces: Vec<String>,
+    /// `config::OAuthConfig::site_home`.
+    pub site_home: std::collections::BTreeMap<String, String>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -719,10 +721,13 @@ pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> 
     use mae_daemon::site::View;
     let rest = path.strip_prefix("/kb/")?;
     let (kb, rest) = rest.split_once('/')?;
-    if kb.is_empty() || rest.is_empty() {
+    if kb.is_empty() {
         return None;
     }
     let view = match rest.split_once('/') {
+        // `/kb/<kb-id>/`: the KB's home page (Amendment 2 B3). Which node
+        // is the route's to look up, from configuration.
+        None if rest.is_empty() => View::Home(None),
         // `tags` is reserved (a page cannot hold it, P-166): the tag index.
         None if rest == "tags" => View::Tags,
         // Also reserved: the content index (P-77).
@@ -789,6 +794,15 @@ async fn site_route(
     ) {
         Ok(lease) => lease,
         Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
+    };
+    // The home page is the operator's choice per KB (B3), never content's.
+    let declared;
+    let view = match view {
+        site::View::Home(_) => {
+            declared = site::View::Home(config.site_home.get(kb_id).cloned());
+            &declared
+        }
+        other => other,
     };
     match site::view(
         store,

@@ -130,6 +130,7 @@ mod tests {
             site_enabled: false,
             site_locale: "en-US".to_string(),
             site_hidden_namespaces: Vec::new(),
+            site_home: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
@@ -676,6 +677,8 @@ mod tests {
         );
         // The tag index and a tag's page (P-70, P-71); `tags` is reserved.
         assert_eq!(site_path("/kb/k/tags"), Some(("k".into(), View::Tags)));
+        // The KB's home (Amendment 2 B3): which node is the route's lookup.
+        assert_eq!(site_path("/kb/k/"), Some(("k".into(), View::Home(None))));
         assert_eq!(
             site_path("/kb/k/index.json"),
             Some(("k".into(), View::Index))
@@ -686,7 +689,7 @@ mod tests {
         );
         for bad in [
             "/kb/k",
-            "/kb/k/",
+            "/kb//",
             "/kb//n",
             "/kb/k/a/b",
             "/kbx/k/n",

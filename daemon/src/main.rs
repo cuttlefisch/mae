@@ -563,6 +563,7 @@ async fn spawn_oauth_listener(
         site_enabled: config.oauth.site_enabled,
         site_locale: config.oauth.site_locale.clone(),
         site_hidden_namespaces: config.oauth.site_hidden_namespaces.clone(),
+        site_home: config.oauth.site_home.clone(),
         max_request_body_bytes: config.oauth.max_request_body_bytes,
         kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
         kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,

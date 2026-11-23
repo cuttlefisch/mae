@@ -97,6 +97,11 @@ pub struct OAuthConfig {
     /// Namespaces whose references (`ns:rest`) the live site removes from every
     /// page and index (P-13, P-78). Default none.
     pub site_hidden_namespaces: Vec<String>,
+    /// Each KB's home page, served at `/kb/<kb-id>/`: KB ID → node ID, under
+    /// `[oauth.site_home]` (ADR-119 Amendment 2 B3). Operator configuration,
+    /// never content (D3). A KB with no entry, or whose home node the reader
+    /// cannot read, gets the tag index there. Default none.
+    pub site_home: std::collections::BTreeMap<String, String>,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -255,6 +260,7 @@ impl Default for OAuthConfig {
             site_enabled: false,
             site_locale: "en-US".to_string(),
             site_hidden_namespaces: Vec::new(),
+            site_home: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,

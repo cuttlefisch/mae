@@ -10,6 +10,10 @@
 /// The palettes' CSS variables (`shared/site/web/palette/dist/palette.css`).
 pub const PALETTE_CSS: &str = include_str!("../web/palette/dist/palette.css");
 
+/// The base rules: the page's colours over the palette's tokens
+/// (`shared/site/web/base/base.css`, hand-written).
+pub const BASE_CSS: &str = include_str!("../web/base/base.css");
+
 /// The URL prefix every asset is served under.
 pub const PREFIX: &str = "/site-assets/";
 
@@ -47,30 +51,45 @@ const fn hex16(mut v: u64) -> [u8; 16] {
     out
 }
 
-const PALETTE_HASH: [u8; 16] = hex16(fnv1a(PALETTE_CSS.as_bytes()));
-const PALETTE_NAME_BYTES: [u8; 28] = {
-    let mut n = *b"palette-0000000000000000.css";
+/// `template` with the content hash of `body` written over its 16 zeros at
+/// `at`: `<stem>-<fnv64 hex>.<ext>`.
+const fn named<const N: usize>(mut template: [u8; N], at: usize, body: &str) -> [u8; N] {
+    let hash = hex16(fnv1a(body.as_bytes()));
     let mut i = 0;
     while i < 16 {
-        n[8 + i] = PALETTE_HASH[i];
+        template[at + i] = hash[i];
         i += 1;
     }
-    n
-};
+    template
+}
+
+const fn ascii(bytes: &'static [u8]) -> &'static str {
+    // ASCII by construction: a fixed ASCII template and lowercase hex digits.
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => panic!("ASCII by construction"),
+    }
+}
+
+const PALETTE_NAME_BYTES: [u8; 28] = named(*b"palette-0000000000000000.css", 8, PALETTE_CSS);
+const BASE_NAME_BYTES: [u8; 25] = named(*b"base-0000000000000000.css", 5, BASE_CSS);
 
 /// The palette stylesheet.
 pub const PALETTE: Asset = Asset {
-    // ASCII by construction: a fixed ASCII template and lowercase hex digits.
-    name: match std::str::from_utf8(&PALETTE_NAME_BYTES) {
-        Ok(s) => s,
-        Err(_) => panic!("ASCII by construction"),
-    },
+    name: ascii(&PALETTE_NAME_BYTES),
     content_type: "text/css; charset=utf-8",
     body: PALETTE_CSS,
 };
 
+/// The base stylesheet, linked after the palette so its tokens are defined.
+pub const BASE: Asset = Asset {
+    name: ascii(&BASE_NAME_BYTES),
+    content_type: "text/css; charset=utf-8",
+    body: BASE_CSS,
+};
+
 /// Every embedded asset.
-pub const ALL: &[Asset] = &[PALETTE];
+pub const ALL: &[Asset] = &[PALETTE, BASE];
 
 /// The asset served at `path`, if any (`/site-assets/<name>`, exactly).
 pub fn at(path: &str) -> Option<Asset> {
@@ -111,5 +130,60 @@ mod tests {
             assert_eq!(at(bad), None, "{bad}");
         }
         assert_eq!(at(&format!("{}/", href(PALETTE))), None);
+        assert_eq!(at(&href(BASE)), Some(BASE));
+        assert!(BASE.name.starts_with("base-") && BASE.name.len() == 25);
+    }
+
+    /// P-102 rests on the palette's contrast tests, so the base rules may
+    /// colour the page with the palette's tokens only: no literal colour, and
+    /// no token the palette does not define (a typo would fall back to the
+    /// browser's default, the gap this stylesheet exists to close).
+    #[test]
+    fn the_base_rules_colour_the_page_with_palette_tokens_only() {
+        let mut code = String::new();
+        let mut rest = BASE_CSS;
+        while let Some((before, after)) = rest.split_once("/*") {
+            code.push_str(before);
+            rest = after.split_once("*/").map_or("", |(_, a)| a);
+        }
+        code.push_str(rest);
+        // Every declaration of a colour-bearing property, in every rule body.
+        let colour_props = |p: &str| {
+            p == "color"
+                || p == "background"
+                || p == "fill"
+                || p == "stroke"
+                || p.ends_with("-color")
+        };
+        let mut coloured = 0;
+        for body in code.split('{').skip(1) {
+            let body = body.split('}').next().unwrap_or("");
+            for decl in body.split(';') {
+                let Some((prop, value)) = decl.split_once(':') else {
+                    continue;
+                };
+                let (prop, value) = (prop.trim(), value.trim());
+                if !colour_props(prop) {
+                    continue;
+                }
+                coloured += 1;
+                let token = value
+                    .strip_prefix("var(")
+                    .and_then(|v| v.strip_suffix(')'))
+                    .unwrap_or_else(|| panic!("{prop}: {value}: not a palette token"));
+                assert!(
+                    token.starts_with("--ui-"),
+                    "{prop}: {token}: not a page token"
+                );
+                assert!(
+                    PALETTE_CSS.contains(&format!("{token}:")),
+                    "{prop}: {token}: not in the palette"
+                );
+            }
+        }
+        assert!(coloured >= 6, "the page, its text, links and panels");
+        for rule in ["a:link", "a:visited", "body", ":root[data-mode=\"dark\"]"] {
+            assert!(code.contains(rule), "{rule} has no rule");
+        }
     }
 }

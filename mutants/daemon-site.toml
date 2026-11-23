@@ -42,3 +42,13 @@ filter = "test(a_site_path_is_one_kb_and_one_decoded_id)"
 file = "daemon/src/oauth.rs"
 find = '''            if !h.iter().all(u8::is_ascii_hexdigit) {'''
 replace = '''            if false && !h.iter().all(u8::is_ascii_hexdigit) {'''
+
+[[mutant]]
+id = "daemon-site/home-unfiltered"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(the_home_page_is_the_declared_node_or_else_the_tag_index)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {'''
+replace = '''        View::Home(declared) => match declared {'''
