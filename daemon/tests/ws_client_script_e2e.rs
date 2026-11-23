@@ -1,13 +1,13 @@
 //! Conformance with the browser client's scripted conversation (ADR-099
 //! Amendment 1, B1–B6).
 //!
-//! The web client is built against a mock that plays `c-guion-v2`: per
+//! The web client is built against a mock that plays `c-script-v3`: per
 //! scenario, the frames and HTTP requests the client sends and exactly what it
 //! expects back. This test replays every scenario against a real daemon over
 //! the real TLS listener and checks each answer against the script's own
 //! template, so the daemon and the mock cannot drift apart unnoticed.
 //!
-//! The script is vendored byte for byte (`tests/data/c-guion-v2.json`) and its
+//! The script is vendored byte for byte (`tests/data/c-script-v3.json`) and its
 //! hash is pinned: a changed script fails here first, and the new version is
 //! adopted deliberately. Its text is data: field names, values and placeholders
 //! are read from it, nothing else.
@@ -32,14 +32,14 @@ use ws_common::*;
 
 const SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/data/c-guion-v2.json"
+    "/tests/data/c-script-v3.json"
 ));
-const SCRIPT_SHA256: &str = "9fa82e4ad50869d02eeab2fd9599a76ee4c7432162d276fa29555e3ac49e491e";
+const SCRIPT_SHA256: &str = "ed0efe2aab1bd042d52114d26c7d27c5b8dd2c75f213d2ecb1a37fefe0c2ea25";
 
 /// The script's example ticket, replaced by a live one wherever it appears.
-const EXAMPLE_TICKET: &str = "TICKET-43-caracteres-base64url-de-256-bits-x";
+const EXAMPLE_TICKET: &str = "TICKET-43-base64url-characters-of-256-bits";
 /// The script's example principal.
-const EXAMPLE_PRINCIPAL: &str = "principal-de-prueba";
+const EXAMPLE_PRINCIPAL: &str = "test-principal";
 /// The script's KB and node ids, used as the live ids.
 const KB: &str = "kb-a";
 
@@ -48,29 +48,29 @@ fn script() -> Value {
     assert_eq!(
         hex::encode(digest),
         SCRIPT_SHA256,
-        "tests/data/c-guion-v2.json is not the pinned copy of the client's script"
+        "tests/data/c-script-v3.json is not the pinned copy of the client's script"
     );
     let v: Value = serde_json::from_str(SCRIPT).unwrap();
-    assert_eq!(v["formato"], "c-guion-v2");
+    assert_eq!(v["format"], "c-script-v3");
     v
 }
 
 fn scenario<'a>(script: &'a Value, name: &str) -> &'a Value {
-    script["escenarios"]
+    script["scenarios"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["nombre"] == name)
+        .find(|s| s["name"] == name)
         .unwrap_or_else(|| panic!("the script has no scenario '{name}'"))
 }
 
-/// Step `i` of a scenario, which must be a `side` ("cliente"/"demonio") step.
+/// Step `i` of a scenario, which must be a `side` ("client"/"daemon") step.
 fn step<'a>(sc: &'a Value, i: usize, side: &str) -> &'a Value {
-    let s = &sc["pasos"][i];
+    let s = &sc["steps"][i];
     assert!(
         s.get(side).is_some(),
         "step {i} of '{}' is not a '{side}' step: {s}",
-        sc["nombre"]
+        sc["name"]
     );
     &s[side]
 }
@@ -205,13 +205,13 @@ fn assert_conforms(want: &Value, got: &Value, subs: &Subs, extra: &[&str]) {
     );
 }
 
-/// An HTTP answer against a `demonio` step: `estado`, `json`, and
+/// An HTTP answer against a `daemon` step: `status`, `json`, and
 /// `www_authenticate` when the step asks for it.
 #[track_caller]
 fn assert_http(want: &Value, r: &Reply, subs: &Subs) {
     assert_eq!(
         u64::from(r.status),
-        want["estado"].as_u64().unwrap(),
+        want["status"].as_u64().unwrap(),
         "{}",
         r.body
     );
@@ -227,11 +227,11 @@ fn assert_http(want: &Value, r: &Reply, subs: &Subs) {
     }
 }
 
-/// A `demonio.cierre` step against the close the socket ended with.
+/// A `daemon.close` step against the close the socket ended with.
 #[track_caller]
 fn assert_close(want: &Value, got: &(u16, String)) {
-    assert_eq!(u64::from(got.0), want["codigo"].as_u64().unwrap());
-    if let Some(reason) = want.get("motivo") {
+    assert_eq!(u64::from(got.0), want["code"].as_u64().unwrap());
+    if let Some(reason) = want.get("reason") {
         assert_eq!(got.1, reason.as_str().unwrap());
     }
 }
@@ -253,9 +253,9 @@ fn frame(template: &Value, replace: &[(&str, Value)]) -> Value {
     }
 }
 
-/// A `cliente` HTTP/WebSocket step's headers, with placeholders replaced.
+/// A `client` HTTP/WebSocket step's headers, with placeholders replaced.
 fn headers(step: &Value, replace: &[(&str, &str)]) -> Vec<(String, String)> {
-    step["cabeceras"]
+    step["headers"]
         .as_object()
         .map(|m| {
             m.iter()
@@ -275,9 +275,9 @@ fn as_refs(h: &[(String, String)]) -> Vec<(&str, &str)> {
     h.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
 }
 
-/// A `cliente.subprotocolos` list, joined for `Sec-WebSocket-Protocol`.
+/// A `client.subprotocols` list, joined for `Sec-WebSocket-Protocol`.
 fn protocols(step: &Value, ticket: &str) -> String {
-    step["subprotocolos"]
+    step["subprotocols"]
         .as_array()
         .unwrap()
         .iter()
@@ -340,7 +340,7 @@ fn random_b64url_43() -> String {
 // The scenarios, one runner each
 // ---------------------------------------------------------------------------
 
-/// "ticket y conexión": mint, connect, `mae.v1` selected without the ticket,
+/// "ticket and connection": mint, connect, `mae.v1` selected without the ticket,
 /// and `session/hello` as the first frame. Also the CORS a browser needs to
 /// make the mint call at all.
 async fn ticket_and_connect(sc: Value) {
@@ -351,17 +351,17 @@ async fn ticket_and_connect(sc: Value) {
     .await;
     let token = d.token(EXAMPLE_PRINCIPAL, 3600);
     let bearer = format!("Bearer {token}");
-    let mint_step = step(&sc, 0, "cliente");
-    assert_eq!(mint_step["ruta"], "/ws/ticket");
+    let mint_step = step(&sc, 0, "client");
+    assert_eq!(mint_step["path"], "/ws/ticket");
     let replace = [
         ("Bearer <token>", bearer.as_str()),
-        ("<origen de la página>", ORIGIN_A),
-        ("<el mismo origen>", ORIGIN_A),
+        ("<page origin>", ORIGIN_A),
+        ("<the same origin>", ORIGIN_A),
     ];
     let h = headers(mint_step, &replace);
     let minted = request(&d, "POST", "/ws/ticket", &as_refs(&h), false).await;
     let subs = Subs::default().with(EXAMPLE_TICKET, Check::Ticket);
-    assert_http(step(&sc, 1, "demonio"), &minted, &subs);
+    assert_http(step(&sc, 1, "daemon"), &minted, &subs);
     assert_eq!(
         minted.header("access-control-allow-origin").as_deref(),
         Some(ORIGIN_A),
@@ -386,11 +386,11 @@ async fn ticket_and_connect(sc: Value) {
     );
 
     let ticket = ticket_of(&minted);
-    let ws_step = step(&sc, 2, "cliente");
+    let ws_step = step(&sc, 2, "client");
     let h = headers(ws_step, &replace);
     let mut r = upgrade(&d, &protocols(ws_step, &ticket), &as_refs(&h)).await;
     assert_eq!(r.status, 101, "{}", r.body);
-    let chosen = step(&sc, 3, "demonio")["subprotocolo_elegido"]
+    let chosen = step(&sc, 3, "daemon")["chosen_subprotocol"]
         .as_str()
         .unwrap();
     assert_eq!(r.header("sec-websocket-protocol").as_deref(), Some(chosen));
@@ -404,14 +404,14 @@ async fn ticket_and_connect(sc: Value) {
     let subs = Subs::default()
         .deadlines()
         .with(EXAMPLE_PRINCIPAL, Check::Eq(json!(EXAMPLE_PRINCIPAL)));
-    assert_conforms(&step(&sc, 4, "demonio")["trama"], &first, &subs, &[]);
+    assert_conforms(&step(&sc, 4, "daemon")["frame"], &first, &subs, &[]);
 }
 
-/// "ticket usado, caducado o desconocido": the three refusals conform and are
+/// "used, expired or unknown ticket": the three refusals conform and are
 /// byte for byte the same.
 ///
 /// The daemon's tickets live `TICKET_TTL_SECS` (`ws_ticket_ttl_secs`) rather
-/// than B1's 30, so "caducado" costs that long instead of 31 s. The expired
+/// than B1's 30, so "expired" costs that long instead of 31 s. The expired
 /// ticket is minted first and its lifetime waited out from the mint's answer
 /// (the daemon mints before answering), while the used one is minted and
 /// spent in between: the spend has the whole lifetime to finish, which is the
@@ -425,13 +425,13 @@ async fn ticket_refusals(sc: Value) {
     .await;
     let token = d.token("SHA256:alice", 3600);
     let origin = [("Origin", ORIGIN_A)];
-    let ask = step(&sc, 0, "cliente");
+    let ask = step(&sc, 0, "client");
     let offered = |t: &str| {
-        ask["subprotocolos"]
+        ask["subprotocols"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|p| p.as_str().unwrap().replace("<usado|caducado|inventado>", t))
+            .map(|p| p.as_str().unwrap().replace("<used|expired|made-up>", t))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -445,7 +445,7 @@ async fn ticket_refusals(sc: Value) {
     drop(first);
     tokio::time::sleep_until(expires_after).await;
 
-    let want = step(&sc, 1, "demonio");
+    let want = step(&sc, 1, "daemon");
     let mut seen: Vec<Reply> = Vec::new();
     for t in [used, expired, random_b64url_43()] {
         let r = upgrade(&d, &offered(&t), &origin).await;
@@ -465,12 +465,12 @@ async fn ticket_refusals(sc: Value) {
     );
 }
 
-/// "credencial en la URL": a live ticket in the query string is refused.
+/// "credential in the URL": a live ticket in the query string is refused.
 async fn credential_in_url(sc: Value) {
     let d = spawn(Opts::default()).await;
     let token = d.token("SHA256:alice", 3600);
     let t = ticket_of(&mint_ticket(&d, &token, None).await);
-    let ask = step(&sc, 0, "cliente");
+    let ask = step(&sc, 0, "client");
     let path = ask["websocket"]
         .as_str()
         .unwrap()
@@ -478,33 +478,33 @@ async fn credential_in_url(sc: Value) {
     assert!(path.starts_with("/ws?"));
     let h = [("Sec-WebSocket-Protocol".to_string(), protocols(ask, &t))];
     let r = request(&d, "GET", &path, &as_refs(&h), true).await;
-    assert_http(step(&sc, 1, "demonio"), &r, &Subs::default());
+    assert_http(step(&sc, 1, "daemon"), &r, &Subs::default());
 }
 
-/// "sin versión en común": a valid ticket, no version in common.
+/// "no version in common": a valid ticket, no version in common.
 async fn no_common_version(sc: Value) {
     let d = spawn(Opts::default()).await;
     let token = d.token("SHA256:alice", 3600);
     let t = ticket_of(&mint_ticket(&d, &token, None).await);
-    let r = upgrade(&d, &protocols(step(&sc, 0, "cliente"), &t), &[]).await;
-    assert_http(step(&sc, 1, "demonio"), &r, &Subs::default());
+    let r = upgrade(&d, &protocols(step(&sc, 0, "client"), &t), &[]).await;
+    assert_http(step(&sc, 1, "daemon"), &r, &Subs::default());
 }
 
-/// "origen fuera de la lista": a mint from an origin not on the list.
+/// "origin not on the list": a mint from an origin not on the list.
 async fn origin_not_allowed(sc: Value) {
     let d = spawn(Opts::default()).await;
-    let ask = step(&sc, 0, "cliente");
-    assert_eq!(ask["ruta"], "/ws/ticket");
+    let ask = step(&sc, 0, "client");
+    assert_eq!(ask["path"], "/ws/ticket");
     let h = headers(ask, &[]);
     let r = request(&d, "POST", "/ws/ticket", &as_refs(&h), false).await;
-    assert_http(step(&sc, 1, "demonio"), &r, &Subs::default());
+    assert_http(step(&sc, 1, "daemon"), &r, &Subs::default());
     assert!(
         r.header("access-control-allow-origin").is_none(),
         "no CORS for an origin off the list"
     );
 }
 
-/// "renovar antes del plazo": `session/renew_needed`, then the script's
+/// "renew before the deadline": `session/renew_needed`, then the script's
 /// `session/renew` with its string id, answered with the new deadline.
 ///
 /// Timing: the token lives `RENEW_TOKEN_SECS` and the lead is one second
@@ -530,7 +530,7 @@ async fn renew_in_time(sc: Value) {
     .await
     .expect("session/renew_needed by the token's deadline");
     let subs = Subs::default().deadlines();
-    assert_conforms(&step(&sc, 0, "demonio")["trama"], &needed, &subs, &[]);
+    assert_conforms(&step(&sc, 0, "daemon")["frame"], &needed, &subs, &[]);
     assert!(
         now_unix() < first_deadline,
         "renew_needed precedes the deadline"
@@ -538,28 +538,28 @@ async fn renew_in_time(sc: Value) {
 
     let fresh = d.token("SHA256:alice", 3600);
     let req = frame(
-        &step(&sc, 1, "cliente")["trama"],
-        &[("<token nuevo>", json!(fresh))],
+        &step(&sc, 1, "client")["frame"],
+        &[("<new token>", json!(fresh))],
     );
     let answer = call_str(&mut ws, req).await;
-    assert_conforms(&step(&sc, 2, "demonio")["trama"], &answer, &subs, &[]);
+    assert_conforms(&step(&sc, 2, "daemon")["frame"], &answer, &subs, &[]);
     assert!(deadline_unix(&answer["result"]["auth_deadline"]) > first_deadline + 60);
 }
 
-/// "renovar con otra identidad": closed `4403 principal_changed`.
+/// "renew as another identity": closed `4403 principal_changed`.
 async fn renew_other_identity(sc: Value) {
     let d = spawn(Opts::default()).await;
     let (mut ws, _) = connect_ticket(&d, &d.token("SHA256:alice", 3600)).await;
     let bob = d.token("SHA256:bob", 3600);
     let req = frame(
-        &step(&sc, 0, "cliente")["trama"],
-        &[("<token de otro sujeto>", json!(bob))],
+        &step(&sc, 0, "client")["frame"],
+        &[("<token for another subject>", json!(bob))],
     );
     ws.send(req).await;
-    assert_close(&step(&sc, 1, "demonio")["cierre"], &ws.closed().await);
+    assert_close(&step(&sc, 1, "daemon")["close"], &ws.closed().await);
 }
 
-/// "plazo vencido": no renewal, closed `4401 token_expired`. The token's
+/// "deadline passed": no renewal, closed `4401 token_expired`. The token's
 /// lifetime is the wait under test; the close is awaited until the session's
 /// own deadline plus a grace, not a fixed guess.
 async fn deadline_missed(sc: Value) {
@@ -575,7 +575,7 @@ async fn deadline_missed(sc: Value) {
         now_unix() >= deadline,
         "closed no earlier than the deadline"
     );
-    assert_close(&step(&sc, 0, "demonio")["cierre"], &close);
+    assert_close(&step(&sc, 0, "daemon")["close"], &close);
 }
 
 /// Seeded filler, so each flood update replaces its value outright.
@@ -650,7 +650,7 @@ async fn read_slowly_until_closed(r: &mut Ws, done: &std::sync::atomic::AtomicBo
     r.until(closed).await
 }
 
-/// "dos documentos en un socket; uno lento": the script's join and updates,
+/// "two documents on one socket; one slow": the script's join and updates,
 /// then a document that cannot keep up is closed for its session alone,
 /// `slow_consumer`, while the session's other document keeps flowing; the
 /// closed one re-opens and resyncs.
@@ -662,7 +662,7 @@ async fn slow_document(sc: Value) {
     let share = kb_share(KB, &[("n1", "uno", "a"), ("n2", "dos", "b")]);
     assert!(ok(&r.call(1, "kb/share", share).await));
 
-    let joined = call_str(&mut r, step(&sc, 0, "cliente")["trama"].clone()).await;
+    let joined = call_str(&mut r, step(&sc, 0, "client")["frame"].clone()).await;
     assert!(ok(&joined), "{joined}");
     assert_eq!(joined["id"], "j-1");
     // The script's identity rule: principal as in session/hello, epoch from kb/join.
@@ -673,7 +673,7 @@ async fn slow_document(sc: Value) {
     for (i, (node, doc)) in [("n1", &mut n1), ("n2", &mut n2)].into_iter().enumerate() {
         let update = update_to_base64(&doc.set_title(&format!("{node} editado")));
         let req = frame(
-            &step(&sc, 1 + i, "cliente")["trama"],
+            &step(&sc, 1 + i, "client")["frame"],
             &[("<base64>", json!(update))],
         );
         assert_eq!(req["params"]["node_id"], node);
@@ -687,13 +687,13 @@ async fn slow_document(sc: Value) {
     let mut wn1 = node_writer(&wj, "n1", me, epoch);
     let mut wn2 = node_writer(&wj, "n2", me, epoch);
     let done = std::sync::atomic::AtomicBool::new(false);
-    let want = &step(&sc, 3, "demonio")["trama"];
+    let want = &step(&sc, 3, "daemon")["frame"];
     let (notice, ()) = tokio::join!(
         read_slowly_until_closed(&mut r, &done),
         flood(&mut w, &mut wn1, &done)
     );
     let subs = Subs::default().with(
-        "<nombre del documento en el sobre>",
+        "<document name in the envelope>",
         Check::Eq(json!(format!("kbn:{KB}:n1"))),
     );
     assert_conforms(want, &notice, &subs, &[]);
@@ -733,7 +733,7 @@ async fn slow_document(sc: Value) {
     assert_eq!(resynced.title(), "n1 editado");
 }
 
-/// "miembro quitado entre renovaciones": at the next renewal Bob loses that
+/// "member removed between renewals": at the next renewal Bob loses that
 /// KB's documents, one notice each, and keeps the session and his own KB.
 ///
 /// Bob's token and the lead are timed like [`renew_in_time`]'s. With a 4 s
@@ -772,7 +772,7 @@ async fn member_removed(sc: Value) {
     let renew = json!({"token": d.token("SHA256:bob", 3600)});
     assert!(ok(&bob.call(3, "session/renew", renew).await));
 
-    let want = &step(&sc, 0, "demonio")["trama"];
+    let want = &step(&sc, 0, "daemon")["frame"];
     // The collection document's notice is the node one's without `node_id`.
     let mut want_coll = want.clone();
     want_coll["params"]
@@ -788,8 +788,7 @@ async fn member_removed(sc: Value) {
         } else {
             &want_coll
         };
-        let subs =
-            Subs::default().with("<nombre del documento en el sobre>", Check::Eq(json!(doc)));
+        let subs = Subs::default().with("<document name in the envelope>", Check::Eq(json!(doc)));
         assert_conforms(template, &v, &subs, &[]);
         closed.insert(doc);
     }
@@ -802,7 +801,7 @@ async fn member_removed(sc: Value) {
     assert!(ok(&own), "his other KB and the session stay open: {own}");
 }
 
-/// "trama demasiado grande": a frame of exactly `limits.max_frame_bytes` is
+/// "frame too large": a frame of exactly `limits.max_frame_bytes` is
 /// served; one byte more closes the socket `1009`.
 ///
 /// The client's send buffer is small, so it is still writing the oversized
@@ -836,7 +835,7 @@ async fn frame_too_large(sc: Value) {
         "a frame of exactly the cap is served: {at_cap}"
     );
     ws.send_raw(sized(cap + 1, 2)).await;
-    assert_close(&step(&sc, 1, "demonio")["cierre"], &ws.closed().await);
+    assert_close(&step(&sc, 1, "daemon")["close"], &ws.closed().await);
 }
 
 fn awareness_update(client_id: u64, state: &str) -> String {
@@ -855,7 +854,7 @@ fn awareness_update(client_id: u64, state: &str) -> String {
     update_to_base64(&u.encode_v1())
 }
 
-/// "presencia": the script's `sync/awareness` notification, relayed to another
+/// "presence": the script's `sync/awareness` notification, relayed to another
 /// member as `sync/awareness` with the sender's stamped principal per client
 /// id, whatever `user` the sender claimed.
 async fn presence(sc: Value) {
@@ -869,7 +868,7 @@ async fn presence(sc: Value) {
     let (mut bob, _) = connect_ticket(&d, &d.token("SHA256:bob", 3600)).await;
     assert!(ok(&bob.call(1, "kb/join", json!({"kb_id": KB})).await));
 
-    let send = &step(&sc, 0, "cliente")["trama"];
+    let send = &step(&sc, 0, "client")["frame"];
     assert!(
         send.get("id").is_none(),
         "the script sends presence as a notification"
@@ -894,11 +893,11 @@ async fn presence(sc: Value) {
     let subs = Subs::default()
         .with("<base64>", Check::Eq(json!(lie)))
         .with("<clientID>", Check::Eq(json!("1001")))
-        .with("<principal sellado>", Check::Eq(json!("SHA256:alice")));
-    assert_conforms(&step(&sc, 1, "demonio")["trama"], &got, &subs, &["doc"]);
+        .with("<sealed principal>", Check::Eq(json!("SHA256:alice")));
+    assert_conforms(&step(&sc, 1, "daemon")["frame"], &got, &subs, &["doc"]);
 }
 
-/// "emisor externo en el primer corte": a token from another issuer is
+/// "external issuer in the first slice": a token from another issuer is
 /// refused at the mint.
 async fn external_issuer(sc: Value) {
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -909,13 +908,13 @@ async fn external_issuer(sc: Value) {
         "iss": "https://idp.example.com", "exp": 4_000_000_000u64});
     let external = encode(&header, &claims, &EncodingKey::from_secret(b"k").unwrap()).unwrap();
     let bearer = format!("Bearer {external}");
-    let ask = step(&sc, 0, "cliente");
+    let ask = step(&sc, 0, "client");
     let h = headers(
         ask,
-        &[("Bearer <token de un emisor externo>", bearer.as_str())],
+        &[("Bearer <token from an external issuer>", bearer.as_str())],
     );
     let r = request(&d, "POST", "/ws/ticket", &as_refs(&h), false).await;
-    assert_http(step(&sc, 1, "demonio"), &r, &Subs::default());
+    assert_http(step(&sc, 1, "daemon"), &r, &Subs::default());
 }
 
 type Runner = fn(Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
@@ -933,38 +932,32 @@ macro_rules! runner {
 async fn the_daemon_plays_the_client_script() {
     let script = script();
     let runners: Vec<(&str, Runner)> = vec![
-        ("ticket y conexión", runner!(ticket_and_connect)),
+        ("ticket and connection", runner!(ticket_and_connect)),
+        ("used, expired or unknown ticket", runner!(ticket_refusals)),
+        ("credential in the URL", runner!(credential_in_url)),
+        ("no version in common", runner!(no_common_version)),
+        ("origin not on the list", runner!(origin_not_allowed)),
+        ("renew before the deadline", runner!(renew_in_time)),
+        ("renew as another identity", runner!(renew_other_identity)),
+        ("deadline passed", runner!(deadline_missed)),
         (
-            "ticket usado, caducado o desconocido",
-            runner!(ticket_refusals),
-        ),
-        ("credencial en la URL", runner!(credential_in_url)),
-        ("sin versión en común", runner!(no_common_version)),
-        ("origen fuera de la lista", runner!(origin_not_allowed)),
-        ("renovar antes del plazo", runner!(renew_in_time)),
-        ("renovar con otra identidad", runner!(renew_other_identity)),
-        ("plazo vencido", runner!(deadline_missed)),
-        (
-            "dos documentos en un socket; uno lento",
+            "two documents on one socket; one slow",
             runner!(slow_document),
         ),
+        ("member removed between renewals", runner!(member_removed)),
+        ("frame too large", runner!(frame_too_large)),
+        ("presence", runner!(presence)),
         (
-            "miembro quitado entre renovaciones",
-            runner!(member_removed),
-        ),
-        ("trama demasiado grande", runner!(frame_too_large)),
-        ("presencia", runner!(presence)),
-        (
-            "emisor externo en el primer corte",
+            "external issuer in the first slice",
             runner!(external_issuer),
         ),
     ];
     // Every scenario in the script has a runner, and nothing runs unscripted.
-    let names: Vec<&str> = script["escenarios"]
+    let names: Vec<&str> = script["scenarios"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| s["nombre"].as_str().unwrap())
+        .map(|s| s["name"].as_str().unwrap())
         .collect();
     let ours: Vec<&str> = runners.iter().map(|(n, _)| *n).collect();
     assert_eq!(
@@ -974,7 +967,7 @@ async fn the_daemon_plays_the_client_script() {
 
     // The slow-document scenario is CPU-bound (a flood through a debug
     // build), so it runs alone, after the rest, not competing with them.
-    const ALONE: &str = "dos documentos en un socket; uno lento";
+    const ALONE: &str = "two documents on one socket; one slow";
     let (alone, together): (Vec<_>, Vec<_>) = runners.into_iter().partition(|(n, _)| *n == ALONE);
     let mut set = tokio::task::JoinSet::new();
     for (name, run) in together {

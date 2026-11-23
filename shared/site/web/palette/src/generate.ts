@@ -17,6 +17,8 @@ import {
   type Swatch,
   type Palette,
   type EmphasisHues,
+  SUCCESSORS,
+  checkSuccessors,
 } from "./tokens.ts"
 
 const WARNING = "Generated from palettes/"
@@ -98,6 +100,7 @@ export function css(palettes: Palette[]): string {
       `   another emphasis swatch of that palette: ${EMPHASIS_ATTRIBUTE}="<id>" (tokens.json). */\n`,
     block(":root", [...variablesCss(pred, "light", "del-mode", true), ...variablesCss(pred, "light", "fixed")]),
     block(`:root${DARK}`, variablesCss(pred, "dark", "del-mode", true)),
+    systemDark(pred),
   ]
   for (const p of palettes) {
     const sel = `:root[data-theme="${p.name}"]`
@@ -112,6 +115,19 @@ export function css(palettes: Palette[]): string {
     }
   }
   return parts.join("\n")
+}
+
+/**
+ * Without the pre-paint script (no JavaScript) nothing sets data-mode, so the default
+ * palette follows the system's preference (P-91): its dark values on `:root` without
+ * data-mode (0,2,0, over the plain :root), inside a prefers-color-scheme query. The
+ * script always sets data-mode, so with it this block never applies. Indented, as a
+ * block inside a query is.
+ */
+export function systemDark(pred: Palette): string {
+  const vars = variablesCss(pred, "dark", "del-mode", true)
+  const body = vars.map(([k, v]) => `    ${k}: ${v};\n`).join("")
+  return `@media (prefers-color-scheme: ${DARK_VALUE}) {\n  :root:not([${MODE_ATTRIBUTE}]) {\n${body}  }\n}\n`
 }
 
 /**
@@ -213,10 +229,51 @@ export function tokensJson(palettes: Palette[]): string {
   return JSON.stringify(data, null, 2) + "\n"
 }
 
+/** A palette's display name: a proper name (ADR-119 A4), never translated. */
+export function displayName(name: string): string {
+  return name
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+}
+
+/** The page roles a palette's menu entry shows as swatches, in this order. */
+export const MENU_SWATCHES = ["background", "foreground", "link", "accent"] as const
+
+/**
+ * themes.json: what the site's runtime needs to offer and validate a reader's choice
+ * (P-91 to P-99): the default palette; the removed palettes' successors; and each
+ * palette by name, with its display name, its menu swatches per mode and its accents
+ * (null if none): the default first, then the others in the order offered, each with
+ * its text tone per mode. Accent display names are the locale's (mae_site::strings).
+ */
+export function themesJson(palettes: Palette[], successors: Readonly<Record<string, string>> = SUCCESSORS): string {
+  const accents = (p: Palette) => {
+    if (!p.emphasis) return null
+    const { defaultId, swatches } = p.emphasis
+    const first = swatches.filter((m) => m.id === defaultId)
+    const ordered = [...first, ...swatches.filter((m) => m.id !== defaultId)]
+    const items = ordered.map((m) => [m.id, { light: m.light.text, dark: m.dark.text }])
+    return { default: defaultId, items: Object.fromEntries(items) }
+  }
+  const entry = (p: Palette) => ({
+    name: displayName(p.name),
+    swatches: Object.fromEntries(MODES.map((m) => [m, MENU_SWATCHES.map((r) => p[m].ui[r])])),
+    accents: accents(p),
+  })
+  const data = {
+    default: palettes.find((p) => p.isDefault)!.name,
+    successors: checkSuccessors(palettes, successors),
+    palettes: Object.fromEntries(palettes.map((p) => [p.name, entry(p)])),
+  }
+  return JSON.stringify(data, null, 2) + "\n"
+}
+
 /** All of dist/: relative path -> content. */
 export function generate(palettes: Palette[]): Map<string, string> {
   const files = new Map<string, string>()
   files.set("palette.css", css(palettes))
+  files.set("themes.json", themesJson(palettes))
   files.set("tokens.json", tokensJson(palettes))
   return files
 }

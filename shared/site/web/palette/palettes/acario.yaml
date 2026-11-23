@@ -125,7 +125,7 @@ emphasis:
       light: { graphic: "#005f00", text: "#005f00", graph: "#156b13" }
       dark: { graphic: "#79d836", text: "#79d836", graph: "#52a400" }
     - id: teal
-      name: green azulado
+      name: teal
       light: { graphic: "#00987a", text: "#00785f", graph: "#00987a" }
       dark: { graphic: "#2d9574", text: "#2d9574", graph: "#0d9772" }
     - id: violet

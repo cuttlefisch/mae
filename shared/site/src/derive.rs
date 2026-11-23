@@ -131,8 +131,14 @@ fn withholds(kind: &str) -> bool {
     kind.starts_with("macro_") && kind != "fragment_macro" || kind == "footnote_undefined"
 }
 
+/// How every page renders. A top-level headline is an `h2`: the page title
+/// is the page's one `h1`, written by the chrome (P-17), as ox-html's
+/// `org-html-toplevel-hlevel` 2 does.
 fn options() -> RenderOptions {
-    RenderOptions::default().with_headline_ids(HeadlineIds::Explicit)
+    let below_the_title = mae_org::ToplevelHlevel::new(2).expect("2 is a heading level");
+    RenderOptions::default()
+        .with_headline_ids(HeadlineIds::Explicit)
+        .with_toplevel_hlevel(below_the_title)
 }
 
 struct Parsed<'a> {

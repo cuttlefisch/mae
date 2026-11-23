@@ -1,0 +1,34 @@
+#+title: Golden fixture: the mode toggle and palette menu (P-91, P-93, P-94, P-99)
+
+The contract test of ADR-119 Amendment 1 (A2) for the site's theme controls: an input page, a
+stored choice, steps, and the expected normalised accessibility tree after each. MAE runs it
+against its own behaviour (=shared/site/web/router/test/fixture.test.ts=); the browser client
+runs the same files against its tests.
+
+* Files
+
+- =input.html= :: the page exactly as the daemon writes it (=daemon/src/site.rs=, pinned by the
+  daemon's test =the_palette_menu_fixture_is_the_daemons_page=), with each asset's content hash
+  replaced by sixteen zeros.
+- =scenario.json= :: the locale, the system's colour scheme, the storage before the page loads,
+  and each state's steps: =focus= (a selector) then =key= (a =KeyboardEvent.key=, dispatched on
+  the focused element; on a focused button, Enter and Space activate it as a browser does).
+- =tree-closed.json=, =tree-menu-open.json=, =tree-submenu-open.json= :: the expected tree of the
+  page's banner in each state.
+
+* The normalised tree
+
+A node is an element with a role: its =role= attribute, else the implicit role of =<header>=
+(banner), =<button>= (button) and =<a href>= (link). Role =none= and elements without a role pass
+their children up. Subtrees with =hidden= or =aria-hidden="true"= are absent. The name is
+=aria-label=, else, for button, link and menu items, the visible text with whitespace collapsed.
+States, when the attribute is present: =pressed=, =expanded=, =checked= (booleans), =haspopup=
+(its value), and =focused= on the active element. Children are in document order. Empty names
+and childless lists are omitted.
+
+* Notes
+
+- The palette list is the palette package's current set; it changes when a palette is added or
+  removed, and MAE's test fails until these files are regenerated from the behaviour.
+- Accent names come from the locale's catalogue (=mae_site::strings=); palette names are proper
+  names from the palette data and are never translated.

@@ -1,0 +1,958 @@
+{
+  "default": "neutral",
+  "successors": {},
+  "palettes": {
+    "acario": {
+      "name": "Acario",
+      "swatches": {
+        "light": [
+          "#f5f5f9",
+          "#0f1019",
+          "#1f55a0",
+          "#8700af"
+        ],
+        "dark": [
+          "#0d0e16",
+          "#cedbe5",
+          "#377ad9",
+          "#bf34ed"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#8700af",
+            "dark": "#bf34ed"
+          },
+          "orange": {
+            "light": "#af4c00",
+            "dark": "#d85f00"
+          },
+          "yellow": {
+            "light": "#846500",
+            "dark": "#d8b941"
+          },
+          "green": {
+            "light": "#005f00",
+            "dark": "#79d836"
+          },
+          "teal": {
+            "light": "#00785f",
+            "dark": "#2d9574"
+          }
+        }
+      }
+    },
+    "ayu": {
+      "name": "Ayu",
+      "swatches": {
+        "light": [
+          "#fafafa",
+          "#575f66",
+          "#0073b4",
+          "#597900"
+        ],
+        "dark": [
+          "#0d1017",
+          "#bfbdb6",
+          "#59c2ff",
+          "#7fd962"
+        ]
+      },
+      "accents": {
+        "default": "green",
+        "items": {
+          "green": {
+            "light": "#597900",
+            "dark": "#7fd962"
+          },
+          "orange": {
+            "light": "#af5600",
+            "dark": "#ff8f40"
+          },
+          "teal": {
+            "light": "#007e5f",
+            "dark": "#95e6cb"
+          }
+        }
+      }
+    },
+    "bluloco": {
+      "name": "Bluloco",
+      "swatches": {
+        "light": [
+          "#f9f9f9",
+          "#383a42",
+          "#006ea1",
+          "#b914ad"
+        ],
+        "dark": [
+          "#282c34",
+          "#abb2bf",
+          "#10b1fe",
+          "#ff78f8"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#b914ad",
+            "dark": "#ff78f8"
+          },
+          "orange": {
+            "light": "#b04700",
+            "dark": "#ff936a"
+          },
+          "yellow": {
+            "light": "#7e6500",
+            "dark": "#f9c859"
+          },
+          "green": {
+            "light": "#007834",
+            "dark": "#3fc56b"
+          },
+          "violet": {
+            "light": "#7f3bed",
+            "dark": "#9f7efe"
+          }
+        }
+      }
+    },
+    "challenger-deep": {
+      "name": "Challenger Deep",
+      "swatches": {
+        "light": [
+          "#f6f6ff",
+          "#1e3235",
+          "#1b6e8c",
+          "#6b40d0"
+        ],
+        "dark": [
+          "#1e1c31",
+          "#cbe3e7",
+          "#91ddff",
+          "#906cff"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#6b40d0",
+            "dark": "#906cff"
+          },
+          "orange": {
+            "light": "#995512",
+            "dark": "#ffb378"
+          },
+          "yellow": {
+            "light": "#786427",
+            "dark": "#ffe9aa"
+          },
+          "green": {
+            "light": "#00762a",
+            "dark": "#95ffa4"
+          },
+          "magenta": {
+            "light": "#85509b",
+            "dark": "#c991e1"
+          }
+        }
+      }
+    },
+    "dark-plus": {
+      "name": "Dark Plus",
+      "swatches": {
+        "light": [
+          "#f7f7f7",
+          "#2e2e2e",
+          "#006ea4",
+          "#307525"
+        ],
+        "dark": [
+          "#1e1e1e",
+          "#d4d4d4",
+          "#339cdb",
+          "#579c4c"
+        ]
+      },
+      "accents": {
+        "default": "green",
+        "items": {
+          "green": {
+            "light": "#307525",
+            "dark": "#579c4c"
+          },
+          "yellow": {
+            "light": "#82672b",
+            "dark": "#d7ba7d"
+          },
+          "magenta": {
+            "light": "#8e538a",
+            "dark": "#c586c0"
+          }
+        }
+      }
+    },
+    "dracula": {
+      "name": "Dracula",
+      "swatches": {
+        "light": [
+          "#f5f6ff",
+          "#2e2e2a",
+          "#006ea5",
+          "#00792e"
+        ],
+        "dark": [
+          "#282a36",
+          "#f8f8f2",
+          "#61bfff",
+          "#50fa7b"
+        ]
+      },
+      "accents": {
+        "default": "green",
+        "items": {
+          "green": {
+            "light": "#00792e",
+            "dark": "#50fa7b"
+          },
+          "orange": {
+            "light": "#975b00",
+            "dark": "#ffb86c"
+          },
+          "yellow": {
+            "light": "#686d00",
+            "dark": "#f1fa8c"
+          },
+          "magenta": {
+            "light": "#b53485",
+            "dark": "#ff79c6"
+          }
+        }
+      }
+    },
+    "earl-grey": {
+      "name": "Earl Grey",
+      "swatches": {
+        "light": [
+          "#fcfbf9",
+          "#605a52",
+          "#556995",
+          "#6c7345"
+        ],
+        "dark": [
+          "#1f1e1d",
+          "#d7d0c7",
+          "#97addd",
+          "#b1b988"
+        ]
+      },
+      "accents": {
+        "default": "green",
+        "items": {
+          "green": {
+            "light": "#6c7345",
+            "dark": "#b1b988"
+          }
+        }
+      }
+    },
+    "flatwhite": {
+      "name": "Flatwhite",
+      "swatches": {
+        "light": [
+          "#f7f3ee",
+          "#605a52",
+          "#5d6b88",
+          "#487466"
+        ],
+        "dark": [
+          "#201e1a",
+          "#d7d0c7",
+          "#a8b8d8",
+          "#95c4b3"
+        ]
+      },
+      "accents": {
+        "default": "teal",
+        "items": {
+          "teal": {
+            "light": "#487466",
+            "dark": "#95c4b3"
+          }
+        }
+      }
+    },
+    "gruvbox": {
+      "name": "Gruvbox",
+      "swatches": {
+        "light": [
+          "#fbf1c7",
+          "#3c3836",
+          "#065e6e",
+          "#9e3403"
+        ],
+        "dark": [
+          "#282828",
+          "#ebdbb2",
+          "#96b2a7",
+          "#fe8019"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#9e3403",
+            "dark": "#fe8019"
+          },
+          "yellow": {
+            "light": "#905b00",
+            "dark": "#fabd2f"
+          },
+          "green": {
+            "light": "#6e6900",
+            "dark": "#b8bb26"
+          },
+          "violet": {
+            "light": "#8f3f71",
+            "dark": "#d3869b"
+          }
+        }
+      }
+    },
+    "henna": {
+      "name": "Henna",
+      "swatches": {
+        "light": [
+          "#f1f7ff",
+          "#2e2e28",
+          "#007681",
+          "#7c5ab0"
+        ],
+        "dark": [
+          "#21272e",
+          "#f8f8f0",
+          "#56b5c2",
+          "#c5a3ff"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#7c5ab0",
+            "dark": "#c5a3ff"
+          },
+          "yellow": {
+            "light": "#8d631c",
+            "dark": "#ecbe7b"
+          },
+          "magenta": {
+            "light": "#975870",
+            "dark": "#ffb8d1"
+          }
+        }
+      }
+    },
+    "horizon": {
+      "name": "Horizon",
+      "swatches": {
+        "light": [
+          "#f4f6ff",
+          "#2c2e2f",
+          "#007678",
+          "#8848a8"
+        ],
+        "dark": [
+          "#232530",
+          "#c7c9cb",
+          "#21bfc2",
+          "#b877db"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#8848a8",
+            "dark": "#b877db"
+          },
+          "yellow": {
+            "light": "#975b3c",
+            "dark": "#fab795"
+          },
+          "magenta": {
+            "light": "#55587a",
+            "dark": "#868aaf"
+          }
+        }
+      }
+    },
+    "material": {
+      "name": "Material",
+      "swatches": {
+        "light": [
+          "#eff9fd",
+          "#233131",
+          "#4165b4",
+          "#ac492a"
+        ],
+        "dark": [
+          "#263238",
+          "#eeffff",
+          "#82aaff",
+          "#f78c6c"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#ac492a",
+            "dark": "#f78c6c"
+          },
+          "yellow": {
+            "light": "#886100",
+            "dark": "#ffcb6b"
+          },
+          "green": {
+            "light": "#537211",
+            "dark": "#c3e88d"
+          }
+        }
+      }
+    },
+    "monokai": {
+      "name": "Monokai",
+      "swatches": {
+        "light": [
+          "#f9f8f5",
+          "#272822",
+          "#00748a",
+          "#b85400"
+        ],
+        "dark": [
+          "#272822",
+          "#f8f8f2",
+          "#66d9ef",
+          "#fd971f"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#b85400",
+            "dark": "#fd971f"
+          },
+          "red": {
+            "light": "#b9180e",
+            "dark": "#ff7664"
+          },
+          "yellow": {
+            "light": "#756b00",
+            "dark": "#e6db74"
+          },
+          "green": {
+            "light": "#527500",
+            "dark": "#a6e22e"
+          }
+        }
+      }
+    },
+    "neutral": {
+      "name": "Neutral",
+      "swatches": {
+        "light": [
+          "#ffffff",
+          "#242424",
+          "#0b5cad",
+          "#7a3fbf"
+        ],
+        "dark": [
+          "#1e1e1e",
+          "#e6e6e6",
+          "#6cb4ff",
+          "#c9a2ff"
+        ]
+      },
+      "accents": null
+    },
+    "nord": {
+      "name": "Nord",
+      "swatches": {
+        "light": [
+          "#e5e9f0",
+          "#3b4252",
+          "#32649e",
+          "#a84022"
+        ],
+        "dark": [
+          "#2e3440",
+          "#eceff4",
+          "#81a1c1",
+          "#d38972"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#a84022",
+            "dark": "#d38972"
+          },
+          "yellow": {
+            "light": "#7b5d00",
+            "dark": "#ebcb8b"
+          },
+          "green": {
+            "light": "#356e32",
+            "dark": "#a3be8c"
+          }
+        }
+      }
+    },
+    "nova": {
+      "name": "Nova",
+      "swatches": {
+        "light": [
+          "#eff8fe",
+          "#243037",
+          "#416b9c",
+          "#9e7341"
+        ],
+        "dark": [
+          "#3c4c55",
+          "#c5d4dd",
+          "#9bc8ff",
+          "#f2c38f"
+        ]
+      },
+      "accents": null
+    },
+    "oceanic-next": {
+      "name": "Oceanic Next",
+      "swatches": {
+        "light": [
+          "#eff8fe",
+          "#292e36",
+          "#3a6c9c",
+          "#af4e01"
+        ],
+        "dark": [
+          "#1b2b34",
+          "#d8dee9",
+          "#6699cc",
+          "#f99157"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#af4e01",
+            "dark": "#f99157"
+          },
+          "yellow": {
+            "light": "#896400",
+            "dark": "#fac863"
+          },
+          "green": {
+            "light": "#4b7547",
+            "dark": "#99c794"
+          },
+          "violet": {
+            "light": "#895b89",
+            "dark": "#c594c5"
+          }
+        }
+      }
+    },
+    "one": {
+      "name": "One",
+      "swatches": {
+        "light": [
+          "#fafafa",
+          "#383a42",
+          "#3066df",
+          "#a626a4"
+        ],
+        "dark": [
+          "#282c34",
+          "#bbc2cf",
+          "#51afef",
+          "#c678dd"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#a626a4",
+            "dark": "#c678dd"
+          },
+          "orange": {
+            "light": "#a95812",
+            "dark": "#da8548"
+          },
+          "green": {
+            "light": "#2a7d2b",
+            "dark": "#98be65"
+          }
+        }
+      }
+    },
+    "peacock": {
+      "name": "Peacock",
+      "swatches": {
+        "light": [
+          "#f8f7f3",
+          "#362c1e",
+          "#006ca4",
+          "#9145a7"
+        ],
+        "dark": [
+          "#2b2a27",
+          "#ede0ce",
+          "#51afef",
+          "#c678dd"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#9145a7",
+            "dark": "#c678dd"
+          },
+          "green": {
+            "light": "#4f7110",
+            "dark": "#98be65"
+          }
+        }
+      }
+    },
+    "rouge": {
+      "name": "Rouge",
+      "swatches": {
+        "light": [
+          "#f2f7ff",
+          "#2c2f28",
+          "#456a8d",
+          "#8b6342"
+        ],
+        "dark": [
+          "#172030",
+          "#fafff6",
+          "#6e94b9",
+          "#eabe9a"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#8b6342",
+            "dark": "#eabe9a"
+          },
+          "green": {
+            "light": "#636f5b",
+            "dark": "#a3b09a"
+          },
+          "magenta": {
+            "light": "#7f5c80",
+            "dark": "#b18bb1"
+          }
+        }
+      }
+    },
+    "solarized": {
+      "name": "Solarized",
+      "swatches": {
+        "light": [
+          "#fdf6e3",
+          "#556b72",
+          "#006dad",
+          "#c22274"
+        ],
+        "dark": [
+          "#002b36",
+          "#839496",
+          "#3093da",
+          "#ef5299"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#c22274",
+            "dark": "#ef5299"
+          },
+          "yellow": {
+            "light": "#846300",
+            "dark": "#b58900"
+          },
+          "green": {
+            "light": "#606f00",
+            "dark": "#859900"
+          }
+        }
+      }
+    },
+    "sourcerer": {
+      "name": "Sourcerer",
+      "swatches": {
+        "light": [
+          "#f7f7f7",
+          "#2f2f20",
+          "#446a8e",
+          "#965700"
+        ],
+        "dark": [
+          "#171717",
+          "#c2c2b0",
+          "#87afd7",
+          "#ff9800"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#965700",
+            "dark": "#ff9800"
+          },
+          "green": {
+            "light": "#65653e",
+            "dark": "#8b8b63"
+          }
+        }
+      }
+    },
+    "spacegrey": {
+      "name": "Spacegrey",
+      "swatches": {
+        "light": [
+          "#f3f7ff",
+          "#2a2e35",
+          "#596a7b",
+          "#9145a7"
+        ],
+        "dark": [
+          "#2b303b",
+          "#c0c5ce",
+          "#8fa1b3",
+          "#c779de"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#9145a7",
+            "dark": "#c779de"
+          },
+          "orange": {
+            "light": "#9a5640",
+            "dark": "#d08770"
+          },
+          "yellow": {
+            "light": "#896018",
+            "dark": "#ecbe7b"
+          },
+          "green": {
+            "light": "#576f41",
+            "dark": "#a3be8c"
+          },
+          "violet": {
+            "light": "#815d7b",
+            "dark": "#b48ead"
+          }
+        }
+      }
+    },
+    "tokyo-night": {
+      "name": "Tokyo Night",
+      "swatches": {
+        "light": [
+          "#f5f6ff",
+          "#292d3d",
+          "#4366b6",
+          "#a95007"
+        ],
+        "dark": [
+          "#1a1b26",
+          "#a9b1d6",
+          "#7aa2f7",
+          "#ff9e64"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#a95007",
+            "dark": "#ff9e64"
+          },
+          "yellow": {
+            "light": "#8d610f",
+            "dark": "#e0af68"
+          },
+          "green": {
+            "light": "#00776b",
+            "dark": "#73daca"
+          }
+        }
+      }
+    },
+    "tomorrow": {
+      "name": "Tomorrow",
+      "swatches": {
+        "light": [
+          "#ffffff",
+          "#4d4d4c",
+          "#4170ad",
+          "#ab5900"
+        ],
+        "dark": [
+          "#1d1f21",
+          "#c5c8c6",
+          "#81a2be",
+          "#de935f"
+        ]
+      },
+      "accents": {
+        "default": "orange",
+        "items": {
+          "orange": {
+            "light": "#ab5900",
+            "dark": "#de935f"
+          },
+          "yellow": {
+            "light": "#896a00",
+            "dark": "#f0c674"
+          },
+          "green": {
+            "light": "#607700",
+            "dark": "#b5bd68"
+          },
+          "magenta": {
+            "light": "#9b4fb1",
+            "dark": "#c9b4cf"
+          }
+        }
+      }
+    },
+    "vibrant": {
+      "name": "Vibrant",
+      "swatches": {
+        "light": [
+          "#f4f7ff",
+          "#292e38",
+          "#0070aa",
+          "#9048a4"
+        ],
+        "dark": [
+          "#242730",
+          "#bbc2cf",
+          "#51afef",
+          "#c57bdb"
+        ]
+      },
+      "accents": {
+        "default": "magenta",
+        "items": {
+          "magenta": {
+            "light": "#9048a4",
+            "dark": "#c57bdb"
+          },
+          "orange": {
+            "light": "#a5550f",
+            "dark": "#e69055"
+          },
+          "yellow": {
+            "light": "#8b6300",
+            "dark": "#fcce7b"
+          },
+          "green": {
+            "light": "#32792f",
+            "dark": "#7bc275"
+          }
+        }
+      }
+    },
+    "xcode": {
+      "name": "Xcode",
+      "swatches": {
+        "light": [
+          "#f5f6fe",
+          "#2e2e2e",
+          "#007591",
+          "#7a3eba"
+        ],
+        "dark": [
+          "#292a30",
+          "#ffffff",
+          "#5dd8ff",
+          "#ae74f5"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#7a3eba",
+            "dark": "#ae74f5"
+          },
+          "orange": {
+            "light": "#aa5300",
+            "dark": "#fd8f3f"
+          },
+          "yellow": {
+            "light": "#7b6b00",
+            "dark": "#d0bf68"
+          }
+        }
+      }
+    },
+    "zenburn": {
+      "name": "Zenburn",
+      "swatches": {
+        "light": [
+          "#f7f7f7",
+          "#2e2e2e",
+          "#307477",
+          "#6b639e"
+        ],
+        "dark": [
+          "#3f3f3f",
+          "#dcdcdc",
+          "#8cd0d3",
+          "#aaa2e2"
+        ]
+      },
+      "accents": {
+        "default": "violet",
+        "items": {
+          "violet": {
+            "light": "#6b639e",
+            "dark": "#aaa2e2"
+          },
+          "orange": {
+            "light": "#8c6143",
+            "dark": "#dfaf8f"
+          },
+          "yellow": {
+            "light": "#78693d",
+            "dark": "#f0dfaf"
+          }
+        }
+      }
+    }
+  }
+}

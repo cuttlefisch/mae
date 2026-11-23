@@ -12,13 +12,6 @@
 //! (principle #8). The page itself comes from `mae_site::derive`, the core the
 //! static export shares.
 //!
-//! @ai-caution: [architecture-debt] With `webview_enabled` too, the older
-//! web view (ADR-073) owns `/kb/<kb-id>/view` and answers it before
-//! authentication, so a node whose ID is `view` is not reachable at its own
-//! address while both are on: the shadowing P-166 forbids. The live app is
-//! ADR-119's successor to that view; the collision is to be resolved there
-//! (retire the view's path, or reserve the name and withhold such a page).
-//!
 //! One timing difference remains by design: a member asking for a missing
 //! node waits for a derivation, while a non-member is refused at the gate. It
 //! tells a caller only whether THEY may read the KB, which they know anyway.
@@ -78,6 +71,9 @@ pub enum View {
     Tag(String),
     /// `/kb/<kb-id>/index.json`.
     Index,
+    /// `/kb/<kb-id>/`: the KB's home page, the node the operator declared
+    /// for it (ADR-119 Amendment 2 B3).
+    Home(Option<String>),
 }
 
 /// What one page request may read (D21).
@@ -169,7 +165,7 @@ async fn readable_sources(
         if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
             return Err(SitePage::TooLarge);
         }
-        if let Some(text) = page_source(&node_id, &title, &body) {
+        if let Some(text) = page_source(&node_id, &doc) {
             sources.push(SourcePage {
                 origin: node_id,
                 text,
@@ -182,6 +178,13 @@ async fn readable_sources(
 /// The answer to `view` from a derived KB.
 fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePage {
     match view {
+        // The declared node when this reader has it as a page; otherwise the
+        // tag index. Unpublished, withheld and undeclared all answer alike, so
+        // the home address says nothing about a node the reader cannot see.
+        View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {
+            Some(id) => answer(site, addressing, View::Page(id)),
+            None => answer(site, addressing, View::Tags),
+        },
         View::Page(id) => match site.pages.get(&id) {
             Some(p) => SitePage::Found {
                 title: p.title.clone(),
@@ -218,46 +221,82 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
     }
 }
 
-/// A node as the Org text of its page: its ID and title, then its body. A
-/// node ID that could not be one property value (whitespace, nothing) has no
-/// page; a title's line breaks are folded so it stays one keyword line.
-fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
-    // The core's own rule for an address (controls, White_Space, bidi
-    // controls, U+FEFF): one rule on every side.
+/// A node as the Org text of its page: its ID, title and file tags, then its
+/// body. Any node has a page, however it was written (seed, editor, tool), so
+/// this is not the seed export's file, which refuses a node that would not
+/// seed back exactly.
+///
+/// The tags come from the node's own field, which is where `kb seed` and the
+/// editor keep `#+filetags`; a page built from title and body alone had none,
+/// so no tag page ever listed a seeded page. Only valid Org tags are written
+/// (P-73), so a tag cannot add a line, and a title's line breaks are folded so
+/// it stays one keyword line. No page for a node whose ID could not be an
+/// address (the core's own rule: controls, White_Space, bidi controls, U+FEFF).
+fn page_source(node_id: &str, doc: &KbNodeDoc) -> Option<String> {
     if node_id.is_empty() || node_id.chars().any(mae_site::address::refused_in_id) {
         return None;
     }
-    let title: String = title
+    let title: String = doc
+        .title()
         .chars()
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect();
+    let tags: Vec<String> = doc
+        .tags()
+        .into_iter()
+        .filter(|t| mae_site::address::valid_tag(t))
+        .collect();
+    let filetags = if tags.is_empty() {
+        String::new()
+    } else {
+        format!("#+filetags: :{}:\n", tags.join(":"))
+    };
     Some(format!(
-        ":PROPERTIES:\n:ID: {node_id}\n:END:\n#+title: {title}\n\n{body}\n"
+        ":PROPERTIES:\n:ID: {node_id}\n:END:\n#+title: {title}\n{filetags}\n{}\n",
+        doc.body()
     ))
+}
+
+/// What every page of one KB's site shares: its locale and, when the operator
+/// named one, the site's title (P-16) with the address of its home page. A
+/// plain locale string is a site without a title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chrome<'a> {
+    pub lang: &'a str,
+    /// `(site title, home href)`: operator configuration, never content (D3).
+    pub site: Option<(&'a str, &'a str)>,
+}
+
+impl<'a> From<&'a str> for Chrome<'a> {
+    fn from(lang: &'a str) -> Self {
+        Chrome { lang, site: None }
+    }
 }
 
 /// The HTML document for a found page: the core's fixed chrome around the
 /// sanitised article (added after sanitising, D19). `title` is escaped here.
-pub fn document(
-    lang: &str,
+pub fn document<'a>(
+    chrome: impl Into<Chrome<'a>>,
     title: &str,
     article: &str,
     backlinks: &[mae_site::Backlink],
     tags: &[(String, String)],
     toc: &[mae_site::TocEntry],
 ) -> String {
-    let words = mae_site::strings::for_locale(lang);
-    shell(
-        lang,
-        title,
-        &format!(
-            "{}<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>{}",
-            toc_nav(words.contents, toc),
-            escape(title),
-            tags_list(words.tags, tags),
-            backlinks_nav(words.backlinks, backlinks),
-        ),
-    )
+    let chrome = chrome.into();
+    let words = mae_site::strings::for_locale(chrome.lang);
+    let article = format!(
+        "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
+        escape(title),
+        tags_list(words.tags, tags),
+    );
+    // The side panels sit outside the main landmark (P-165).
+    let panels = format!(
+        "{}{}",
+        toc_nav(words.contents, toc),
+        backlinks_nav(words.backlinks, backlinks)
+    );
+    shell(chrome, title, &article, &panels)
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the
@@ -285,8 +324,13 @@ fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
 
 /// The HTML document for a generated listing: the tag index or one tag's
 /// pages (P-70, P-71), headed in the locale's words.
-pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) -> String {
-    let words = mae_site::strings::for_locale(lang);
+pub fn listing_document<'a>(
+    chrome: impl Into<Chrome<'a>>,
+    kind: &Listing,
+    items: &[(String, String)],
+) -> String {
+    let chrome = chrome.into();
+    let words = mae_site::strings::for_locale(chrome.lang);
     let heading = match kind {
         Listing::Tags => words.tags.to_string(),
         Listing::Tag(t) => format!("{}{t}{}", words.tag_page_open, words.tag_page_close),
@@ -296,26 +340,81 @@ pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) 
         .map(|(text, href)| format!("<li><a href=\"{}\">{}</a></li>", escape(href), escape(text)))
         .collect();
     shell(
-        lang,
+        chrome,
         &heading,
         &format!(
             "<section id=\"mae-listing\"><h1>{}</h1><ul>{list}</ul></section>",
             escape(&heading)
         ),
+        "",
     )
 }
 
-/// The document around a page's main content: lang, the palette, the title,
-/// one main landmark (P-165).
-fn shell(lang: &str, title: &str, main: &str) -> String {
+/// The document around a page's main content: lang, the pre-paint script,
+/// the palette, the title, the site's header, one main landmark holding the
+/// content, and the side panels after it, in an `aside`. Header and panels
+/// are never inside `main` (P-165). The header always holds the mode and
+/// palette controls, and the site's title first when there is one (a bare
+/// page title otherwise); no panels, no `aside`.
+///
+/// The pre-paint script is a classic script before the stylesheets (D17): it
+/// blocks rendering until the reader's choice is on `<html>`, so the first
+/// frame already has it (P-91, P-93).
+fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
+    let words = mae_site::strings::for_locale(chrome.lang);
+    let (doc_title, site_link) = match chrome.site {
+        Some((site, home)) => (
+            format!("{} \u{2014} {}", escape(title), escape(site)),
+            format!("<a href=\"{}\">{}</a>", escape(home), escape(site)),
+        ),
+        None => (escape(title), String::new()),
+    };
+    let header = format!(
+        "<header id=\"mae-header\">{site_link}{}</header>",
+        theme_controls(words)
+    );
+    let aside = if panels.is_empty() {
+        String::new()
+    } else {
+        format!("<aside id=\"mae-panels\">{panels}</aside>")
+    };
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <script src=\"{}\"></script>\
          <link rel=\"stylesheet\" href=\"{}\">\
-         <title>{}</title></head><body><main id=\"mae-main\">{main}</main></body></html>\n",
-        escape(lang),
+         <link rel=\"stylesheet\" href=\"{}\">\
+         <script type=\"module\" src=\"{}\"></script>\
+         <title>{doc_title}</title></head><body>{header}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
+        escape(chrome.lang),
+        mae_site::assets::href(mae_site::assets::PREPAINT),
         mae_site::assets::href(mae_site::assets::PALETTE),
-        escape(title),
+        mae_site::assets::href(mae_site::assets::BASE),
+        mae_site::assets::href(mae_site::assets::ROUTER),
+    )
+}
+
+/// The mode toggle and the palette button (P-91, P-93), in the locale's
+/// words, inside a box that ships `hidden`: the router's behaviour builds the
+/// menu from the palette data the pre-paint script published, and shows the
+/// box once it works, so without JavaScript the controls are absent. The box
+/// carries the words the menu needs (the default accent's label, each
+/// accent's name) for the behaviour to read; core chrome, never content.
+fn theme_controls(words: &mae_site::strings::Strings) -> String {
+    let accents: String = words
+        .accents
+        .iter()
+        .map(|(id, name)| format!(" data-accent-{}=\"{}\"", escape(id), escape(name)))
+        .collect();
+    format!(
+        "<div id=\"mae-theme\" class=\"mae-theme\" hidden data-default-label=\"{}\"{accents}>\
+         <button type=\"button\" id=\"mae-mode-toggle\" aria-pressed=\"false\">\
+         <span class=\"mae-mode-icon\" aria-hidden=\"true\"></span>{}</button>\
+         <button type=\"button\" id=\"mae-palette-button\" aria-haspopup=\"menu\" \
+         aria-expanded=\"false\" aria-controls=\"mae-palette-menu\">{}</button></div>",
+        escape(words.accent_default),
+        escape(words.mode_toggle),
+        escape(words.palette_menu),
     )
 }
 
@@ -361,7 +460,8 @@ fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
 /// styles from this origin only, no inline script, nothing framed or framing,
 /// no base or form target.
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
-                       connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+                       connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; \
+                       require-trusted-types-for 'script'; trusted-types mae-router";
 
 fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -394,13 +494,23 @@ mod tests {
         );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/title&gt;"), "{html}");
-        let src = page_source("n", "T\n#+title: evil\n:END:", "b").unwrap();
+        // Neither a title nor a tag can add a keyword line.
+        let evil = KbNodeDoc::new(
+            "n",
+            "T\n#+title: evil\n:END:",
+            "b",
+            &["ok".into(), "x:\n#+title: evil".into(), "a b".into()],
+        );
+        let src = page_source("n", &evil).unwrap();
         assert_eq!(
             src.lines().filter(|l| l.starts_with("#+title:")).count(),
             1,
             "{src}"
         );
-        assert_eq!(page_source("a b", "t", "b"), None);
-        assert_eq!(page_source("", "t", "b"), None);
+        assert!(src.contains("#+filetags: :ok:\n"), "{src}");
+        let plain = KbNodeDoc::new("n", "t", "b", &[]);
+        assert!(page_source("n", &plain).is_some());
+        assert_eq!(page_source("a b", &plain), None);
+        assert_eq!(page_source("", &plain), None);
     }
 }

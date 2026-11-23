@@ -563,7 +563,26 @@ fn the_toc_lists_every_rendered_heading_with_a_real_anchor() {
         .iter()
         .map(|e| (e.level, e.text.as_str()))
         .collect();
-    assert_eq!(texts, vec![(1, "One"), (2, "Two"), (1, "Three")]);
+    // A top-level headline is an h2, below the page title (P-17).
+    assert_eq!(texts, vec![(2, "One"), (3, "Two"), (2, "Three")]);
+}
+
+/// P-17: the page title is the page's one `h1`, written by the chrome, so no
+/// rendered body has one, and a top-level headline is an `h2`. Checked on
+/// every fixture page, and on a page whose headlines are all top-level.
+#[test]
+fn a_body_has_no_h1_and_its_top_level_headlines_are_h2() {
+    for p in bundle().pages.values() {
+        assert!(!p.html.contains("<h1"), "{}: an h1 in the body", p.id);
+    }
+    let site = derive(
+        &[SourcePage {
+            origin: "t.org".into(),
+            text: ":PROPERTIES:\n:ID: t\n:END:\n#+title: T\n\n* A\n* B\n".into(),
+        }],
+        &export(),
+    );
+    assert_eq!(site.pages["t"].html.matches("<h2 ").count(), 2);
 }
 
 /// P-13, P-78: a hidden namespace's references are absent from every output,
