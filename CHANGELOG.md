@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.184] - 2026-11-23
+
+
+
+
+### Features
+
+- *(site)* The KB home page, one h1 per page, panels outside main, base colours ([c367c6c](https://github.com/cuttlefisch/mae/commit/c367c6c7ac6c8d279d57fe877f7451d2ebe406db))
+- *(daemon)* Retire ADR-073's live view (ADR-119 Amendment 2 B4) ([888e755](https://github.com/cuttlefisch/mae/commit/888e7559369c986a0e54586bfed14f79afb89c99))
+- *(site)* The in-page router (ADR-119 D16) and the site title (P-16) ([8cabfff](https://github.com/cuttlefisch/mae/commit/8cabfffdd088c3c4426b0b324e1184ba58a2fc3c))
+- *(site)* The mode toggle and palette menu (ADR-119 D17, P-91 to P-99) ([b257fd9](https://github.com/cuttlefisch/mae/commit/b257fd95852e5e9a21a7de378cd3edbc0f6b256a))
+- *(org)* Honour #+OPTIONS: H:N in mae-org rendering and org export (#951) ([1909a41](https://github.com/cuttlefisch/mae/commit/1909a41034280d8ed438a431382e0619b39e35ab))
+
+### Bug Fixes
+
+- *(site)* A seeded page's file tags reach its page and the tag pages ([31bec78](https://github.com/cuttlefisch/mae/commit/31bec78d2c319a969574aa646fab47154504bf61))
+- *(daemon)* Every /kb/ path is the site's; pin the group refusal's body ([e259897](https://github.com/cuttlefisch/mae/commit/e25989739febea209cc42fb58be98c692cfbc635))
+- *(site)* Router review fixes; a refusal never carries the site title ([8b2efe8](https://github.com/cuttlefisch/mae/commit/8b2efe81d70accc00d58a7158683842409612957))
+- *(palette)* Name the teal swatch in English ([ea4ca2b](https://github.com/cuttlefisch/mae/commit/ea4ca2b7a41668a2b057343e5e18ed819afe9df6))
+- *(graph)* Ports face their subfolders in the balloon layout ([6e7258c](https://github.com/cuttlefisch/mae/commit/6e7258c6baf34dadef10a701c212c41f4b28aacb))
+- *(shell)* Keep a fast child's last output when the terminal lock is held (#965) ([35ae2ad](https://github.com/cuttlefisch/mae/commit/35ae2ad0a91c25dfbb0dbfd5c6eb918d2ca43068))
+
+### Refactor
+
+- *(daemon)* Split the home lookup and content index out of site_route ([8f1f977](https://github.com/cuttlefisch/mae/commit/8f1f9774bfed362a1149923e0748767ab3d8063c))
+- *(core)* One agenda line per TODO node, in its own function ([635a032](https://github.com/cuttlefisch/mae/commit/635a0329021f9e48d00ac776de8313b5677086f2))
+
+### Documentation
+
+- *(site)* Name the browser client generically in the router's header ([3bcbb38](https://github.com/cuttlefisch/mae/commit/3bcbb38f8b825dfdd04c3a42c1ae7c44b3ce73cc))
+- Name the browser client generically in ADR-099 and a test comment ([ab20d1d](https://github.com/cuttlefisch/mae/commit/ab20d1d32b877e1d513d842a74e5dfbef724ecbd))
+- *(adr-119)* Amendment 2, what the live app does not serve and its home page ([673d93f](https://github.com/cuttlefisch/mae/commit/673d93f168ee26a1a63545d0200217b1e9dd5b79))
+- *(adr-119)* Amendment 2 B2 names P-01 to P-08's live and export halves ([c29fa74](https://github.com/cuttlefisch/mae/commit/c29fa7452b1973726f6f260a43b1402b56a32216))
+- *(adr-119)* Amendment 2 B4 retires ADR-073's live view ([13c58d1](https://github.com/cuttlefisch/mae/commit/13c58d1c00ebad6e7885f5b97602ffe61cad8b92))
+- *(shell)* Say the macOS half of #965's reasoning is read, not tested ([0de99ac](https://github.com/cuttlefisch/mae/commit/0de99ac7563a9f2e393f7acbd943502374de72c5))
+
+### Testing
+
+- *(ws)* Vendor the browser client's neutral English script (c-script-v3) ([2c51172](https://github.com/cuttlefisch/mae/commit/2c511724fc11270abf0e5747fdd421fbb3a1b261))
+- *(daemon)* The retired view's integration tests assert what holds now ([eb7e6e8](https://github.com/cuttlefisch/mae/commit/eb7e6e891c51c6167729cdd0051f090371d3cc83))
+- *(mutants)* Two jsonwebtoken mutants had stopped testing anything ([ec501b4](https://github.com/cuttlefisch/mae/commit/ec501b4e44717db8401b2b56019b7735ed1af279))
+- Replace cache-sensitive growth-ratio timing with work counters and large sizes (#961) ([b015aea](https://github.com/cuttlefisch/mae/commit/b015aeacc0b4e4699076d21c2245779665585864))
+
+### CI
+
+- Build test binaries before the capped test steps ([349a12a](https://github.com/cuttlefisch/mae/commit/349a12ae928e124a31660eae76aec413371d7eab))
+- Build without the compile cache when sccache cannot start ([21aa22d](https://github.com/cuttlefisch/mae/commit/21aa22dddbbcb7c4c983ee8103109e595f4116af))
+- Build the test binaries before stable/test's 30-minute test step ([7d84945](https://github.com/cuttlefisch/mae/commit/7d84945a6893beaac4ceeb22ad80163828e8e07c))
+- *(perf)* Give the growth-ratio job room for the larger sizes (#961) ([235f588](https://github.com/cuttlefisch/mae/commit/235f5889bb6ab41676bd59e9833dcfb3303621a0))
+
+### Miscellaneous
+
+- Regenerate the ADR KB checksum ([5f6201d](https://github.com/cuttlefisch/mae/commit/5f6201d205b3029b6f19bcc1cee329c4f005189d))
+
 ## [0.14.183] - 2026-11-23
 
 
@@ -19,9 +73,9 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(daemon)* The live site's review findings: byte bound, lease, blocking derive, strict escapes ([0e8917e](https://github.com/cuttlefisch/mae/commit/0e8917e2ad7ef291c0bd892fc12dee8c10cc242e))
+- *(site)* An address refuses controls, White_Space, bidi controls and U+FEFF ([e58668e](https://github.com/cuttlefisch/mae/commit/e58668e1a1c2388e294c94f206032fd7637f8cdb))
 - *(ai)* Confine the test sandbox at the effect; one refusal for every save (#969) ([c44e525](https://github.com/cuttlefisch/mae/commit/c44e525ab81f5ba912be820ed9b7c1bd9e6f437c))
 - *(ai)* Confine org tangle, org export and ai_save too (#969 review) ([86bce71](https://github.com/cuttlefisch/mae/commit/86bce7146f1a38ad974efa1f7ac5a6115a918103))
-- *(site)* An address refuses controls, White_Space, bidi controls and U+FEFF ([e58668e](https://github.com/cuttlefisch/mae/commit/e58668e1a1c2388e294c94f206032fd7637f8cdb))
 
 ### Refactor
 
@@ -30,10 +84,10 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- *(daemon)* Record the live site's /kb/<kb-id>/view collision with the web view ([e485ec0](https://github.com/cuttlefisch/mae/commit/e485ec06451de7c53bd26f79851d25c1155312b6))
-- *(roadmap)* Track the live site's /kb/<kb-id>/view collision as architecture debt ([b255a88](https://github.com/cuttlefisch/mae/commit/b255a88ffe799ca963e1909173679ffd687ac96b))
 - *(adr-119)* Amendment 1, what building S0 and L1a's first slices decided ([49c033c](https://github.com/cuttlefisch/mae/commit/49c033c30c10cd1c4fbd0cc5239d3d9634125890))
 - *(adr-119)* A6, the reader authenticates through the browser client's backend (owner) ([1301ac7](https://github.com/cuttlefisch/mae/commit/1301ac740fef514f14ede9365ff89f5c22bc6ee3))
+- *(daemon)* Record the live site's /kb/<kb-id>/view collision with the web view ([e485ec0](https://github.com/cuttlefisch/mae/commit/e485ec06451de7c53bd26f79851d25c1155312b6))
+- *(roadmap)* Track the live site's /kb/<kb-id>/view collision as architecture debt ([b255a88](https://github.com/cuttlefisch/mae/commit/b255a88ffe799ca963e1909173679ffd687ac96b))
 
 ### Testing
 
@@ -47,6 +101,10 @@ All notable changes to this project will be documented in this file.
 ### CI
 
 - The Windows test step's hang guard absorbs runner variance (20 → 30 min) ([6612e17](https://github.com/cuttlefisch/mae/commit/6612e174d2e8a4deb32a2074084ee0e0f4aa8c2e))
+
+### Miscellaneous
+
+- Bump version to 0.14.183 ([e5910cd](https://github.com/cuttlefisch/mae/commit/e5910cd9ad3ad1cf3f226ef6490d428a7ad4ef03))
 
 ## [mae-org-v0.10.0] - 2026-11-22
 
@@ -85,16 +143,16 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- *(org)* [[id:X::#CUSTOM_ID]] lands on the custom id's anchor (ADR-119 S0; mae-org 0.10.0) ([4de395a](https://github.com/cuttlefisch/mae/commit/4de395ae67e666111677b1231302b14f241f7584))
 - *(kb)* KB ingest and stored edges on mae-org, with a one-time repair (#941, #854) ([85c2824](https://github.com/cuttlefisch/mae/commit/85c28242fa8aea51d660e144e05b7c965cf556d7))
+- *(org)* [[id:X::#CUSTOM_ID]] lands on the custom id's anchor (ADR-119 S0; mae-org 0.10.0) ([4de395a](https://github.com/cuttlefisch/mae/commit/4de395ae67e666111677b1231302b14f241f7584))
 
 ### Bug Fixes
 
-- *(org)* The outside-the-edit comparison does not carry the page's CUSTOM_ID map ([652ccee](https://github.com/cuttlefisch/mae/commit/652ccee4ece053077f1bfd1acd9e44ed31e2f350))
 - *(kb)* Two tests that relied on the old ingest's header-in-body; fn-length ratchet (#941) ([662078e](https://github.com/cuttlefisch/mae/commit/662078e9f36776e5719914d5a04dbc24b464468d))
 - *(ai)* Guidance states the KB index's title, now that bodies hold content only (#941) ([b852595](https://github.com/cuttlefisch/mae/commit/b852595fbd84a9a905f4371014b4cd1518767f78))
 - *(ai)* Confine sandboxed writes on the resolved path (#967); idle-CPU waits for boot (#968) ([2778181](https://github.com/cuttlefisch/mae/commit/27781811e5c2b05d5f7dc729b0c9afd53036c838))
 - *(ai)* The test sandbox refuses relative write paths (#967 review) ([a9beb79](https://github.com/cuttlefisch/mae/commit/a9beb79e198922d82875a6bff5d8492dd351486b))
+- *(org)* The outside-the-edit comparison does not carry the page's CUSTOM_ID map ([652ccee](https://github.com/cuttlefisch/mae/commit/652ccee4ece053077f1bfd1acd9e44ed31e2f350))
 
 ### Documentation
 
