@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/prepaint.mjs",
     "pretest": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

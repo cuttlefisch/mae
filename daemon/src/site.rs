@@ -350,23 +350,29 @@ pub fn listing_document<'a>(
     )
 }
 
-/// The document around a page's main content: lang, the palette, the title,
-/// the site's header, one main landmark holding the content, and the side
-/// panels after it, in an `aside`. Header and panels are never inside `main`
-/// (P-165). No site title, no header and a bare page title; no panels, no
-/// `aside`.
+/// The document around a page's main content: lang, the pre-paint script,
+/// the palette, the title, the site's header, one main landmark holding the
+/// content, and the side panels after it, in an `aside`. Header and panels
+/// are never inside `main` (P-165). The header always holds the mode and
+/// palette controls, and the site's title first when there is one (a bare
+/// page title otherwise); no panels, no `aside`.
+///
+/// The pre-paint script is a classic script before the stylesheets (D17): it
+/// blocks rendering until the reader's choice is on `<html>`, so the first
+/// frame already has it (P-91, P-93).
 fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
-    let (doc_title, header) = match chrome.site {
+    let words = mae_site::strings::for_locale(chrome.lang);
+    let (doc_title, site_link) = match chrome.site {
         Some((site, home)) => (
             format!("{} \u{2014} {}", escape(title), escape(site)),
-            format!(
-                "<header id=\"mae-header\"><a href=\"{}\">{}</a></header>",
-                escape(home),
-                escape(site)
-            ),
+            format!("<a href=\"{}\">{}</a>", escape(home), escape(site)),
         ),
         None => (escape(title), String::new()),
     };
+    let header = format!(
+        "<header id=\"mae-header\">{site_link}{}</header>",
+        theme_controls(words)
+    );
     let aside = if panels.is_empty() {
         String::new()
     } else {
@@ -375,14 +381,40 @@ fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <script src=\"{}\"></script>\
          <link rel=\"stylesheet\" href=\"{}\">\
          <link rel=\"stylesheet\" href=\"{}\">\
          <script type=\"module\" src=\"{}\"></script>\
          <title>{doc_title}</title></head><body>{header}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
         escape(chrome.lang),
+        mae_site::assets::href(mae_site::assets::PREPAINT),
         mae_site::assets::href(mae_site::assets::PALETTE),
         mae_site::assets::href(mae_site::assets::BASE),
         mae_site::assets::href(mae_site::assets::ROUTER),
+    )
+}
+
+/// The mode toggle and the palette button (P-91, P-93), in the locale's
+/// words, inside a box that ships `hidden`: the router's behaviour builds the
+/// menu from the palette data the pre-paint script published, and shows the
+/// box once it works, so without JavaScript the controls are absent. The box
+/// carries the words the menu needs (the default accent's label, each
+/// accent's name) for the behaviour to read; core chrome, never content.
+fn theme_controls(words: &mae_site::strings::Strings) -> String {
+    let accents: String = words
+        .accents
+        .iter()
+        .map(|(id, name)| format!(" data-accent-{}=\"{}\"", escape(id), escape(name)))
+        .collect();
+    format!(
+        "<div id=\"mae-theme\" class=\"mae-theme\" hidden data-default-label=\"{}\"{accents}>\
+         <button type=\"button\" id=\"mae-mode-toggle\" aria-pressed=\"false\">\
+         <span class=\"mae-mode-icon\" aria-hidden=\"true\"></span>{}</button>\
+         <button type=\"button\" id=\"mae-palette-button\" aria-haspopup=\"menu\" \
+         aria-expanded=\"false\" aria-controls=\"mae-palette-menu\">{}</button></div>",
+        escape(words.accent_default),
+        escape(words.mode_toggle),
+        escape(words.palette_menu),
     )
 }
 

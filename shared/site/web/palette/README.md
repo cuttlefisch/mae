@@ -86,6 +86,15 @@ the swatches per palette and mode.
   `:root[data-theme="<name>"]`; dark mode is `data-mode="dark"` on `<html>`.
 - `dist/tokens.json`: every role's variable and resolved value, per palette and
   mode, for consumers that read neither CSS nor YAML.
+- `dist/themes.json`: what the site's mode and palette controls offer (P-91 to
+  P-99): the default, each palette's display name (its file name in title case: a
+  proper name, never translated), menu swatches and accents (the default first), and
+  `SUCCESSORS` (`src/tokens.ts`): a palette removed after the site began storing
+  readers' choices maps to the one that replaces it. The router's build copies it
+  into the pre-paint script.
+- Without that script (no JavaScript), `palette.css` follows the system's
+  preference: the default palette's dark values apply under
+  `prefers-color-scheme: dark` while `<html>` has no `data-mode`.
 
 ## Development
 

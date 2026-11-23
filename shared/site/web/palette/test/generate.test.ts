@@ -5,10 +5,10 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { parse as parseYaml, stringify } from "yaml"
-import { css, generate, tokensJson, variablesCss } from "../src/generate.ts"
+import { css, generate, themesJson, tokensJson, variablesCss } from "../src/generate.ts"
 import { GROUPS } from "../src/tokens.ts"
 import { cascade } from "./cascade.ts"
-import { MODES, loadPalettes, checkSet, resolver, resolveText, type Mode, type Palette } from "../src/tokens.ts"
+import { MODES, loadPalettes, checkSet, checkSuccessors, resolver, resolveText, type Mode, type Palette } from "../src/tokens.ts"
 
 const ROOT = path.join(import.meta.dirname, "..")
 const palettes = loadPalettes(path.join(ROOT, "palettes"))
@@ -147,5 +147,67 @@ describe("the map roles", () => {
         }
     }
     expect(Object.keys(t.palettes.neutral.light.diagram)).toEqual([...GROUPS.diagram])
+  })
+})
+
+describe("without the pre-paint script: the system's mode (P-91)", () => {
+  it("a prefers-color-scheme query gives :root without data-mode exactly the default's dark values", () => {
+    const sheet = css(palettes)
+    const pred = palettes.find((p) => p.isDefault)!
+    const query = sheet.match(/^@media \(prefers-color-scheme: dark\) \{\n {2}:root:not\(\[data-mode\]\) \{\n([^}]*) {2}\}\n\}\n/m)
+    expect(query, "the query block").not.toBeNull()
+    const declared = [...query![1]!.matchAll(/^ {4}(--[\w-]+): ([^;]+);$/gm)].map((d): [string, string] => [d[1]!, d[2]!])
+    expect(declared).toEqual(variablesCss(pred, "dark", "del-mode", true))
+    // Its values differ from light mode's, or the query would change nothing.
+    const light = new Map(variablesCss(pred, "light", "del-mode", true))
+    expect(declared.filter(([k, v]) => light.get(k) !== v).length).toBeGreaterThan(5)
+    // One such block. The cascade helper reads top-level :root blocks only, so the
+    // other tests see the sheet as the script leaves it: data-mode always set.
+    expect(sheet.match(/prefers-color-scheme/g)).toHaveLength(1)
+  })
+})
+
+describe("themes.json: what the site's runtime offers (P-91 to P-99)", () => {
+  const t = JSON.parse(themesJson(palettes))
+
+  it("the default, every palette by name with its display name and menu swatches", () => {
+    expect(t.default).toBe(palettes.find((p) => p.isDefault)!.name)
+    expect(Object.keys(t.palettes)).toEqual(palettes.map((p) => p.name))
+    expect(t.palettes["tokyo-night"].name).toBe("Tokyo Night")
+    expect(t.palettes.gruvbox.name).toBe("Gruvbox")
+    for (const p of palettes)
+      for (const m of MODES)
+        expect(t.palettes[p.name].swatches[m]).toEqual([p[m].ui.background, p[m].ui.foreground, p[m].ui.link, p[m].ui.accent])
+  })
+
+  it("accents: the default first, then the rest in the order offered, each with its text tone; none, null", () => {
+    let offered = 0
+    for (const p of palettes) {
+      const a = t.palettes[p.name].accents
+      if (!p.emphasis) {
+        expect(a, p.name).toBeNull()
+        continue
+      }
+      offered++
+      const ids = p.emphasis.swatches.map((m) => m.id)
+      const expected = [p.emphasis.defaultId, ...ids.filter((i) => i !== p.emphasis!.defaultId)]
+      expect(Object.keys(a.items), p.name).toEqual(expected)
+      expect(a.default).toBe(p.emphasis.defaultId)
+      for (const m of p.emphasis.swatches) expect(a.items[m.id]).toEqual({ light: m.light.text, dark: m.dark.text })
+    }
+    expect(offered).toBeGreaterThan(20)
+    // A default not first in its list is moved, not dropped (acario's is its fifth).
+    expect(Object.keys(t.palettes.acario.accents.items)[0]).toBe("violet")
+    expect(Object.keys(t.palettes.acario.accents.items)).toHaveLength(5)
+  })
+
+  it("successors: empty today; a valid map is written sorted, an invalid one stops the build", () => {
+    expect(t.successors).toEqual({})
+    const two = JSON.parse(themesJson(palettes, { zed: "nord", alpha: "gruvbox" })).successors
+    expect(Object.keys(two)).toEqual(["alpha", "zed"])
+    expect(two.zed).toBe("nord")
+    expect(() => checkSuccessors(palettes, { gruvbox: "nord" })).toThrow(/still a palette/)
+    expect(() => checkSuccessors(palettes, { gone: "nowhere" })).toThrow(/nowhere is not a palette/)
+    expect(() => checkSuccessors(palettes, { Gone: "nord" })).toThrow(/palette's name/)
   })
 })

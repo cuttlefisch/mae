@@ -270,6 +270,523 @@ export function start(win) {
         pending: () => current,
     };
 }
+/** The storage key of each part of a choice (MAE's own names). */
+export function storageKey(part, palette) {
+    return part === "accent" ? "mae.accent." + palette : "mae." + part;
+}
+/** A stored string; null when absent, or when storage itself throws (P-97). */
+export function readStored(storage, key) {
+    try {
+        const v = storage().getItem(key);
+        return typeof v === "string" ? v : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * The accent `stored` of `palette` if it is one of that palette's and not its
+ * default; null otherwise (the default, P-96). Checked with Object.hasOwn: a
+ * stored string is never used as a key before it is known to be one.
+ */
+export function validAccent(data, palette, stored) {
+    if (stored === null || !Object.hasOwn(data.palettes, palette))
+        return null;
+    const accents = data.palettes[palette]?.accents ?? null;
+    if (accents === null || !Object.hasOwn(accents.items, stored))
+        return null;
+    return stored === accents.default ? null : stored;
+}
+/**
+ * The stored choice, validated against the published lists: an unknown mode
+ * follows the system, an unknown palette is the default, an accent not valid
+ * for the palette is its default, and a removed palette becomes its successor
+ * without an accent (P-98).
+ */
+export function resolveChoice(data, read) {
+    const m = read(storageKey("mode"));
+    const mode = m === "light" || m === "dark" ? m : null;
+    const stored = read(storageKey("palette"));
+    if (stored !== null && !Object.hasOwn(data.palettes, stored)) {
+        const next = Object.hasOwn(data.successors, stored) ? data.successors[stored] : undefined;
+        if (next !== undefined && Object.hasOwn(data.palettes, next)) {
+            return { mode, palette: next, accent: null };
+        }
+    }
+    const palette = stored !== null && Object.hasOwn(data.palettes, stored) ? stored : data.default;
+    return { mode, palette, accent: validAccent(data, palette, read(storageKey("accent", palette))) };
+}
+/** Whether the system asks for dark; false where it cannot say. */
+export function systemDark(win) {
+    try {
+        return win.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    catch {
+        return false;
+    }
+}
+/** Writes a choice on <html> (P-92): base.css sets color-scheme from data-mode. */
+export function applyChoice(root, choice, mode) {
+    root.setAttribute("data-mode", mode);
+    root.setAttribute("data-theme", choice.palette);
+    if (choice.accent === null)
+        root.removeAttribute("data-emphasis");
+    else
+        root.setAttribute("data-emphasis", choice.accent);
+}
+/**
+ * The pre-paint script: apply the stored choice before first paint (P-91,
+ * P-93, P-96), and publish the offer for the controls (`mae.theme`).
+ */
+export function prepaint(win, data) {
+    const choice = resolveChoice(data, (k) => readStored(() => win.localStorage, k));
+    const mode = choice.mode ?? (systemDark(win) ? "dark" : "light");
+    applyChoice(win.document.documentElement, choice, mode);
+    const w = win;
+    w.mae = { ...(w.mae ?? {}), theme: data };
+}
+/**
+ * Storage for the controls: what this page wrote wins, so a choice holds for
+ * the session when storage throws (P-97); every write also tries storage.
+ */
+export function sessionStore(storage) {
+    const written = new Map();
+    return {
+        get(key) {
+            if (written.has(key))
+                return written.get(key) ?? null;
+            return readStored(storage, key);
+        },
+        set(key, value) {
+            written.set(key, value);
+            try {
+                if (value === null)
+                    storage().removeItem(key);
+                else
+                    storage().setItem(key, value);
+            }
+            catch {
+                // Kept for the session only.
+            }
+        },
+    };
+}
+/** The action of `key` on a palette (`inSubmenu` false) or on an accent. */
+export function menuAction(key, inSubmenu) {
+    switch (key) {
+        case "ArrowDown":
+            return "next";
+        case "ArrowUp":
+            return "prev";
+        case "Home":
+            return "first";
+        case "End":
+            return "last";
+        case "Enter":
+        case " ":
+            return "choose";
+        case "ArrowRight":
+            return inSubmenu ? null : "open-sub";
+        case "ArrowLeft":
+            return inSubmenu ? "close-sub" : null;
+        case "Escape":
+            return "close";
+        case "Tab":
+            return "leave";
+        default:
+            return null;
+    }
+}
+/** The item focus moves to: wrapping at both ends; -1 for an empty list. */
+export function moveFocus(action, current, count) {
+    if (count <= 0)
+        return -1;
+    switch (action) {
+        case "first":
+            return 0;
+        case "last":
+            return count - 1;
+        case "next":
+            return (current + 1) % count;
+        case "prev":
+            return (current - 1 + count) % count;
+        default:
+            return current;
+    }
+}
+/** The gap kept between a menu and the window's edge, in CSS pixels. */
+export const EDGE = 8;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+/**
+ * The palette menu under its button, its right edge on the button's, inside
+ * the window. Above the button only when there is more room there; either way
+ * it scrolls inside itself when the list is longer than the room (P-99).
+ */
+export function placeMenu(button, width, height, vw, vh) {
+    const w = Math.min(width, vw - 2 * EDGE);
+    const left = clamp(button.right - w, EDGE, Math.max(EDGE, vw - EDGE - w));
+    const below = vh - EDGE - button.bottom;
+    const above = button.top - EDGE;
+    if (height > below && above > below) {
+        const maxHeight = Math.max(0, above);
+        return { left, top: button.top - Math.min(height, maxHeight), maxHeight };
+    }
+    return { left, top: button.bottom, maxHeight: Math.max(0, below) };
+}
+/**
+ * An accent submenu beside its palette's menu: to the right when it fits,
+ * else to the left, else over the list, aligned with its item (P-99).
+ */
+export function placeSubmenu(item, menu, width, height, vw, vh) {
+    const w = Math.min(width, vw - 2 * EDGE);
+    let left;
+    if (menu.right + w <= vw - EDGE)
+        left = menu.right;
+    else if (menu.left - w >= EDGE)
+        left = menu.left - w;
+    else
+        left = clamp(menu.left, EDGE, Math.max(EDGE, vw - EDGE - w));
+    const maxHeight = Math.max(0, vh - 2 * EDGE);
+    const top = clamp(item.top, EDGE, Math.max(EDGE, vh - EDGE - Math.min(height, maxHeight)));
+    return { left, top, maxHeight };
+}
+/**
+ * How long the pointer rests on a palette before its submenu opens, in ms
+ * (P-99: crossing other items on the way to a submenu opens none of them).
+ * Between GTK's menu popup delay (225 ms) and Windows' MenuShowDelay
+ * (400 ms): long enough that a diagonal move across one or two items opens
+ * nothing, short enough to feel immediate when the pointer stops.
+ */
+export const HOVER_INTENT_MS = 300;
+/** Ids of the controls (core chrome: `mae-` is reserved, A2). */
+export const THEME_ID = "mae-theme";
+export const MODE_TOGGLE_ID = "mae-mode-toggle";
+export const PALETTE_BUTTON_ID = "mae-palette-button";
+export const PALETTE_MENU_ID = "mae-palette-menu";
+export const ACCENT_MENU_PREFIX = "mae-accent-menu-";
+function el(doc, tag, attrs) {
+    const e = doc.createElement(tag);
+    for (const [k, v] of Object.entries(attrs))
+        e.setAttribute(k, v);
+    return e;
+}
+function swatchEl(doc) {
+    return el(doc, "span", { class: "mae-swatch" });
+}
+/** A menuitemradio: a check mark and swatches (both hidden from AT), then its name. */
+function radioItem(doc, attrs, name, swatches) {
+    const item = el(doc, "div", { role: "menuitemradio", tabindex: "-1", "aria-checked": "false", ...attrs });
+    item.className = "mae-menu-item";
+    const deco = el(doc, "span", { "aria-hidden": "true", class: "mae-menu-deco" });
+    deco.append(el(doc, "span", { class: "mae-check" }));
+    const swatchEls = [];
+    for (let i = 0; i < swatches; i++)
+        swatchEls.push(swatchEl(doc));
+    deco.append(...swatchEls);
+    const label = el(doc, "span", { class: "mae-menu-label" });
+    label.textContent = name;
+    item.append(deco, label);
+    return { item, swatchEls };
+}
+function buildEntry(doc, id, p, labels) {
+    const wrap = el(doc, "div", { role: "none" });
+    const subId = ACCENT_MENU_PREFIX + id;
+    const attrs = { "data-palette": id };
+    if (p.accents !== null) {
+        Object.assign(attrs, { "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": subId });
+    }
+    const { item, swatchEls } = radioItem(doc, attrs, p.name, p.swatches.light.length);
+    if (p.accents !== null)
+        item.append(el(doc, "span", { "aria-hidden": "true", class: "mae-more" }));
+    wrap.append(item);
+    const entry = { id, item, sub: null, accents: [], swatches: swatchEls };
+    if (p.accents !== null) {
+        const sub = el(doc, "div", { role: "menu", id: subId, "aria-label": p.name, class: "mae-menu mae-submenu" });
+        sub.hidden = true;
+        for (const a of Object.keys(p.accents.items)) {
+            const name = a === p.accents.default ? labels.defaultAccent : labels.accent(a);
+            const r = radioItem(doc, { "data-accent": a }, name, 1);
+            entry.accents.push(r.item);
+            entry.swatches.push(...r.swatchEls);
+            sub.append(r.item);
+        }
+        entry.sub = sub;
+        wrap.append(sub);
+    }
+    return { wrap, entry };
+}
+/** The palette menu, closed: one entry per palette, in the published order. */
+export function buildMenu(doc, data, labels) {
+    const menu = el(doc, "div", { role: "menu", id: PALETTE_MENU_ID, "aria-label": labels.menu, class: "mae-menu" });
+    menu.hidden = true;
+    const entries = [];
+    for (const [id, p] of Object.entries(data.palettes)) {
+        const { wrap, entry } = buildEntry(doc, id, p, labels);
+        menu.append(wrap);
+        entries.push(entry);
+    }
+    return { menu, entries };
+}
+/** The labels: the button's own name, and the words the daemon put on the box. */
+function labelsOf(box, button) {
+    return {
+        menu: (button.textContent ?? "").trim(),
+        defaultAccent: box.getAttribute("data-default-label") ?? "",
+        accent: (id) => box.getAttribute("data-accent-" + id) ?? id,
+    };
+}
+function setBox(e, p) {
+    e.style.left = `${p.left}px`;
+    e.style.top = `${p.top}px`;
+    e.style.maxHeight = `${p.maxHeight}px`;
+}
+/**
+ * The mode toggle and the palette menu (P-91 to P-99), as a behaviour: mounted
+ * on every page into the daemon's `#mae-theme` box in the header, which ships
+ * hidden so that without JavaScript the controls are absent, never broken.
+ * Built with createElement and textContent only (see the file header).
+ */
+export function themeControls(win) {
+    const store = sessionStore(() => win.localStorage);
+    const root = win.document.documentElement;
+    let refresh = null;
+    const chosenMode = () => {
+        const m = store.get(storageKey("mode"));
+        return m === "light" || m === "dark";
+    };
+    // Follow the system, live, until the reader chooses (P-91).
+    try {
+        win.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (ev) => {
+            if (chosenMode())
+                return;
+            root.setAttribute("data-mode", ev.matches ? "dark" : "light");
+            refresh?.();
+        });
+    }
+    catch {
+        // No media queries: the mode stays as painted.
+    }
+    return {
+        mount(doc) {
+            const data = win.mae?.theme;
+            const box = doc.getElementById(THEME_ID);
+            const toggle = doc.getElementById(MODE_TOGGLE_ID);
+            const button = doc.getElementById(PALETTE_BUTTON_ID);
+            if (!data || !box || !toggle || !button)
+                return;
+            const ctl = mountControls(win, doc, data, store, { box, toggle, button });
+            refresh = ctl.refresh;
+            return () => {
+                ctl.cleanup();
+                refresh = null;
+            };
+        },
+    };
+}
+/** The state of one page's controls, and what changes it. */
+function mountControls(win, doc, data, store, { box, toggle, button }) {
+    const root = doc.documentElement;
+    doc.getElementById(PALETTE_MENU_ID)?.remove();
+    const { menu, entries } = buildMenu(doc, data, labelsOf(box, button));
+    button.after(menu);
+    const ac = new AbortController();
+    // Every listener goes with the page (cleanup aborts them all).
+    const on = (t, type, f) => t.addEventListener(type, f, { signal: ac.signal });
+    let openSub = null;
+    let hover;
+    const current = () => {
+        const t = root.getAttribute("data-theme");
+        const palette = t !== null && Object.hasOwn(data.palettes, t) ? t : data.default;
+        return { mode: null, palette, accent: validAccent(data, palette, root.getAttribute("data-emphasis")) };
+    };
+    const mode = () => (root.getAttribute("data-mode") === "dark" ? "dark" : "light");
+    // The accent checked in a palette's submenu: the current one for the active
+    // palette, the remembered one for the others.
+    const accentOf = (id) => {
+        const c = current();
+        return c.palette === id ? c.accent : validAccent(data, id, store.get(storageKey("accent", id)));
+    };
+    const refresh = () => {
+        const c = current();
+        const m = mode();
+        toggle.setAttribute("aria-pressed", m === "dark" ? "true" : "false");
+        for (const e of entries) {
+            const p = data.palettes[e.id];
+            e.item.setAttribute("aria-checked", e.id === c.palette ? "true" : "false");
+            const checked = accentOf(e.id) ?? p.accents?.default;
+            const colours = [...p.swatches[m], ...Object.values(p.accents?.items ?? {}).map((a) => a[m])];
+            e.swatches.forEach((s, i) => (s.style.backgroundColor = colours[i] ?? ""));
+            for (const a of e.accents) {
+                a.setAttribute("aria-checked", a.getAttribute("data-accent") === checked ? "true" : "false");
+            }
+        }
+    };
+    const viewport = () => [doc.documentElement.clientWidth || win.innerWidth, win.innerHeight];
+    const place = () => {
+        if (menu.hidden)
+            return;
+        const [vw, vh] = viewport();
+        setBox(menu, placeMenu(button.getBoundingClientRect(), menu.offsetWidth, menu.scrollHeight, vw, vh));
+        if (openSub?.sub) {
+            const s = openSub.sub;
+            const at = placeSubmenu(openSub.item.getBoundingClientRect(), menu.getBoundingClientRect(), s.offsetWidth, s.scrollHeight, vw, vh);
+            setBox(s, at);
+        }
+    };
+    const focusOn = (e) => {
+        if (!e)
+            return;
+        e.focus();
+        e.scrollIntoView?.({ block: "nearest" });
+    };
+    const closeSub = () => {
+        if (openSub?.sub) {
+            openSub.sub.hidden = true;
+            openSub.item.setAttribute("aria-expanded", "false");
+        }
+        openSub = null;
+    };
+    const openSubOf = (e, focus) => {
+        if (!e.sub)
+            return;
+        if (openSub !== e)
+            closeSub();
+        openSub = e;
+        e.sub.hidden = false;
+        e.item.setAttribute("aria-expanded", "true");
+        place();
+        if (focus)
+            focusOn(e.accents.find((a) => a.getAttribute("aria-checked") === "true") ?? e.accents[0]);
+    };
+    const open = () => {
+        refresh();
+        menu.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        place();
+        focusOn(entries.find((e) => e.id === current().palette)?.item ?? entries[0]?.item);
+    };
+    const close = (refocus) => {
+        clearTimeout(hover);
+        closeSub();
+        menu.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+        if (refocus)
+            button.focus();
+    };
+    const choose = (palette, accent) => {
+        const p = data.palettes[palette];
+        store.set(storageKey("palette"), palette === data.default ? null : palette);
+        if (p.accents !== null)
+            store.set(storageKey("accent", palette), accent);
+        applyChoice(root, { mode: null, palette, accent }, mode());
+        refresh();
+        close(true);
+    };
+    const choosePalette = (e) => choose(e.id, accentOf(e.id));
+    const chooseAccent = (e, a) => choose(e.id, validAccent(data, e.id, a.getAttribute("data-accent")));
+    const entryOf = (t) => {
+        const item = t?.closest?.("[data-palette]");
+        return entries.find((e) => e.item === item);
+    };
+    const accentAt = (t) => {
+        const a = t?.closest?.("[data-accent]");
+        const e = entries.find((x) => x.accents.some((y) => y === a));
+        return e && a ? [e, a] : undefined;
+    };
+    on(toggle, "click", () => {
+        const next = mode() === "dark" ? "light" : "dark";
+        store.set(storageKey("mode"), next);
+        root.setAttribute("data-mode", next);
+        refresh();
+    });
+    on(button, "click", () => (menu.hidden ? open() : close(false)));
+    on(button, "keydown", (ev) => {
+        if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp")
+            return;
+        ev.preventDefault();
+        if (menu.hidden)
+            open();
+    });
+    on(menu, "keydown", (ev) => {
+        const acc = accentAt(ev.target);
+        const action = menuAction(ev.key, acc !== undefined);
+        if (action === null)
+            return;
+        if (action === "leave")
+            return close(false);
+        ev.preventDefault();
+        const e = acc?.[0] ?? entryOf(ev.target);
+        if (!e)
+            return;
+        const list = acc ? e.accents : entries.map((x) => x.item);
+        const at = list.indexOf(acc ? acc[1] : e.item);
+        switch (action) {
+            case "choose":
+                return acc ? chooseAccent(e, acc[1]) : choosePalette(e);
+            case "open-sub":
+                return openSubOf(e, true);
+            case "close-sub":
+                closeSub();
+                return focusOn(e.item);
+            case "close":
+                return close(true);
+            default:
+                return focusOn(list[moveFocus(action, at, list.length)]);
+        }
+    });
+    on(menu, "click", (ev) => {
+        const acc = accentAt(ev.target);
+        if (acc)
+            return chooseAccent(acc[0], acc[1]);
+        const e = entryOf(ev.target);
+        if (!e)
+            return;
+        // P-99: the selected palette opens its submenu; another is selected.
+        if (e.sub && e.id === current().palette) {
+            if (openSub === e)
+                closeSub();
+            else
+                openSubOf(e, true);
+            return;
+        }
+        choosePalette(e);
+    });
+    // Hover intent (mouse only; touch has no hover): resting on a palette opens
+    // its submenu, or closes another's; passing over does nothing.
+    on(menu, "pointerover", (ev) => {
+        if (ev.pointerType !== "mouse")
+            return;
+        clearTimeout(hover);
+        if (accentAt(ev.target))
+            return;
+        const e = entryOf(ev.target);
+        if (!e || e === openSub)
+            return;
+        hover = setTimeout(() => (e.sub ? openSubOf(e, false) : closeSub()), HOVER_INTENT_MS);
+    });
+    on(menu, "pointerleave", () => clearTimeout(hover));
+    on(doc, "pointerdown", (ev) => {
+        if (!menu.hidden && !box.contains(ev.target))
+            close(false);
+    });
+    on(box, "focusout", (ev) => {
+        const to = ev.relatedTarget;
+        if (!menu.hidden && to !== null && !box.contains(to))
+            close(false);
+    });
+    on(win, "resize", place);
+    on(win, "scroll", place);
+    on(menu, "scroll", place);
+    refresh();
+    box.hidden = false;
+    return {
+        refresh,
+        cleanup() {
+            clearTimeout(hover);
+            ac.abort();
+        },
+    };
+}
 // On one of the site's pages: start once, and publish the component registry
 // (D18). A document without the main landmark is not the site's.
 if (typeof window !== "undefined" &&
@@ -279,5 +796,6 @@ if (typeof window !== "undefined" &&
     if (!w.mae?.site) {
         const router = start(window);
         w.mae = { ...(w.mae ?? {}), site: router };
+        router.register("theme", themeControls(window));
     }
 }

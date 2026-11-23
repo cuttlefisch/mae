@@ -315,6 +315,36 @@ export function checkSet(palettes: Palette[]): Palette[] {
 }
 
 /**
+ * Palettes that were published on MAE's site and then removed, each mapped to the
+ * palette that replaces it (P-98): a reader whose stored choice names one gets its
+ * successor, without its accent. Empty: no palette has been removed since the site
+ * began storing choices (the four removed before the import, in the README, were
+ * never offered here).
+ */
+export const SUCCESSORS: Readonly<Record<string, string>> = {}
+
+/**
+ * The successor map, checked against the set and sorted by removed name: a removed
+ * name is a valid palette name that is no longer a palette, and its successor is one.
+ */
+export function checkSuccessors(
+  palettes: Palette[],
+  successors: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const names = new Set(palettes.map((p) => p.name))
+  const out: Record<string, string> = {}
+  const sorted = Object.entries(successors).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  for (const [removed, successor] of sorted) {
+    const where = `successors.${removed}`
+    if (!NAME.test(removed)) throw new PaletteError(`${where}: a palette's name is [a-z][a-z0-9-]*`)
+    if (names.has(removed)) throw new PaletteError(`${where}: is still a palette`)
+    if (!names.has(successor)) throw new PaletteError(`${where}: ${successor} is not a palette`)
+    out[removed] = successor
+  }
+  return out
+}
+
+/**
  * The CSS variable name of a role in a mode. The graph's carry the mode in their
  * name (as chord-graph writes them), so they hold in either mode; the others change
  * value with the mode.

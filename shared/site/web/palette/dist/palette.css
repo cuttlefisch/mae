@@ -91,6 +91,47 @@
   --code-variable: #4ec9b0;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) {
+    --ui-background: #1e1e1e;
+    --ui-panel: #2b2b2b;
+    --ui-foreground: #e6e6e6;
+    --ui-muted: #a8a8a8;
+    --ui-link: #6cb4ff;
+    --ui-accent: #c9a2ff;
+    --ui-mark: #8a6d0099;
+    --gallery-title: #ffffff;
+    --diagram-ink: var(--ui-foreground);
+    --diagram-background: var(--ui-background);
+    --diagram-border: var(--ui-foreground);
+    --diagram-node: #282828;
+    --diagram-node-soft: #2a2a2a;
+    --diagram-node-control: #503626;
+    --diagram-line: #b0b0b0;
+    --diagram-outline: #8a8a8a;
+    --diagram-highlight: #ff8c42;
+    --diagram-blocked: #ff8a80;
+    --diagram-zone-blue: #2a3642;
+    --diagram-zone-green: #2b3a2f;
+    --diagram-zone-amber: #403826;
+    --diagram-zone-orange: #423226;
+    --diagram-zone-violet: #393342;
+    --diagram-zone-grey: #383838;
+    --diagram-zone-brown: #372f2b;
+    --code-text: var(--ui-foreground);
+    --code-background: var(--ui-background);
+    --code-comment: var(--ui-muted);
+    --code-string: #7ee787;
+    --code-number: #79c0ff;
+    --code-constant: var(--code-number);
+    --code-keyword: #ff7b72;
+    --code-operator: var(--code-keyword);
+    --code-function: #d2a8ff;
+    --code-type: #ffa657;
+    --code-variable: #4ec9b0;
+  }
+}
+
 :root[data-theme="acario"] {
   --ui-background: #f5f5f9;
   --ui-panel: #e9e9f2;

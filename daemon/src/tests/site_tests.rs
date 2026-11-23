@@ -157,14 +157,23 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
         panic!("the page publishes, inert");
     };
     let doc = site::document("en-US", &title, &html, &[], &[], &[]);
-    // The page's one script is the core's router (D16); remove exactly that
-    // tag, and nothing script-like may remain.
+    // The page's two scripts are the core's pre-paint script (D17) and its
+    // router (D16); remove exactly those tags, and nothing script-like may
+    // remain.
     let router = format!(
         r#"<script type="module" src="{}"></script>"#,
         mae_site::assets::href(mae_site::assets::ROUTER)
     );
+    let prepaint = format!(
+        r#"<script src="{}"></script>"#,
+        mae_site::assets::href(mae_site::assets::PREPAINT)
+    );
     assert_eq!(doc.matches(&router).count(), 1, "{doc}");
-    let doc = doc.replace(&router, "").to_lowercase();
+    assert_eq!(doc.matches(&prepaint).count(), 1, "{doc}");
+    let doc = doc
+        .replace(&router, "")
+        .replace(&prepaint, "")
+        .to_lowercase();
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
@@ -243,7 +252,97 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
         r#"<script type="module" src="{router}"></script>"#
     ));
     assert!(script.is_some() && link(&base) < script, "{html}");
-    assert_eq!(html.matches("<script").count(), 1, "{html}");
+    // The pre-paint script (D17): classic and render-blocking (no defer, no
+    // async, no module), in <head> before the first stylesheet, so the
+    // reader's choice is on <html> when the palette first applies (P-91).
+    let prepaint = mae_site::assets::href(mae_site::assets::PREPAINT);
+    let tag = format!(r#"<script src="{prepaint}"></script>"#);
+    let at = html.find(&tag);
+    assert!(at.is_some() && at < link(&href), "{html}");
+    assert!(at < html.find("</head>"), "{html}");
+    assert!(html.find("<link") > at, "nothing styles the page before it");
+    assert_eq!(
+        mae_site::assets::at(&prepaint),
+        Some(mae_site::assets::PREPAINT)
+    );
+    assert_eq!(html.matches("<script").count(), 2, "{html}");
+    for bad in ["defer", "async", "<script>"] {
+        assert!(!html.contains(bad), "{bad}: {html}");
+    }
+}
+
+/// The palette menu's golden fixture (ADR-119 A2) starts from this shell's
+/// page: input.html is the document for its fixed inputs, each asset's
+/// content hash replaced by zeros, so a shell change cannot leave the
+/// fixture the browser client checks describing another page.
+#[test]
+fn the_palette_menu_fixture_is_the_daemons_page() {
+    let fixture =
+        include_str!("../../../docs/verification/fixtures/components/palette-menu/input.html");
+    let chrome = site::Chrome {
+        lang: "en-US",
+        site: Some(("Parity fixture", "/kb/parity-fixture/")),
+    };
+    let mut html = site::document(
+        chrome,
+        "Fixture page",
+        "<p>A page for the palette menu fixture.</p>",
+        &[],
+        &[],
+        &[],
+    );
+    for asset in mae_site::assets::ALL {
+        let (stem, ext) = asset.name.rsplit_once('.').expect("name.ext");
+        let stem = stem.rsplit_once('-').expect("stem-hash").0;
+        html = html.replace(asset.name, &format!("{stem}-{}.{ext}", "0".repeat(16)));
+    }
+    assert_eq!(html, fixture, "regenerate input.html from this output");
+}
+
+/// P-91, P-93: the mode toggle and the palette button sit in the header,
+/// before the main landmark, in the locale's words, inside a box that ships
+/// hidden (no JavaScript: absent, never broken); the box carries the menu's
+/// words. Attribute values are escaped.
+#[test]
+fn the_theme_controls_are_in_the_header_in_the_locales_words() {
+    for locale in ["en-US", "fr-FR"] {
+        let words = mae_site::strings::for_locale(locale);
+        let html = site::document(locale, "T", "<p>x</p>", &[], &[], &[]);
+        let (before_main, after) = html.split_once("<main").expect("a main landmark");
+        assert!(!after.contains("mae-theme"), "{html}");
+        let header = before_main
+            .split_once(r#"<header id="mae-header">"#)
+            .expect("a header")
+            .1;
+        assert!(
+            header.starts_with(r#"<div id="mae-theme" class="mae-theme" hidden "#),
+            "{header}"
+        );
+        let toggle = format!(
+            r#"<button type="button" id="mae-mode-toggle" aria-pressed="false"><span class="mae-mode-icon" aria-hidden="true"></span>{}</button>"#,
+            words.mode_toggle
+        );
+        let button = format!(
+            r#"<button type="button" id="mae-palette-button" aria-haspopup="menu" aria-expanded="false" aria-controls="mae-palette-menu">{}</button>"#,
+            words.palette_menu
+        );
+        assert!(header.contains(&toggle), "{header}");
+        assert!(header.contains(&button), "{header}");
+        assert!(header.find(&toggle) < header.find(&button), "{header}");
+        assert!(
+            header.contains(&format!(r#"data-default-label="{}""#, words.accent_default)),
+            "{header}"
+        );
+        for (id, name) in words.accents {
+            assert!(
+                header.contains(&format!(r#" data-accent-{id}="{name}""#)),
+                "{id}: {header}"
+            );
+        }
+        assert!(!header.contains("title="), "no title attribute: {header}");
+        // No menu in the markup: the behaviour builds it (with createElement).
+        assert!(!html.contains(r#"id="mae-palette-menu""#), "{html}");
+    }
 }
 
 #[tokio::test]
@@ -641,8 +740,9 @@ async fn a_node_whose_id_is_view_is_served_at_its_address() {
 }
 
 /// P-16, P-165: with a site title, every page's `<title>` names page and
-/// site, and a header before the main landmark links the KB's home; both are
-/// escaped. Without one, neither appears.
+/// site, and a header before the main landmark opens with a link to the KB's
+/// home; both are escaped. Without one, neither appears (the header then holds
+/// only the theme controls).
 #[test]
 fn the_site_title_heads_every_page_outside_main() {
     let chrome = site::Chrome {
@@ -657,14 +757,20 @@ fn the_site_title_heads_every_page_outside_main() {
             doc.contains("\u{2014} Parity &lt;fixture&gt;</title>"),
             "{doc}"
         );
-        let header = r#"<header id="mae-header"><a href="/kb/parity-fixture/">Parity &lt;fixture&gt;</a></header>"#;
+        let header = r#"<header id="mae-header"><a href="/kb/parity-fixture/">Parity &lt;fixture&gt;</a><div id="mae-theme""#;
         let (before_main, after) = doc.split_once("<main").expect("a main landmark");
-        assert!(before_main.ends_with(header), "{doc}");
+        let at = before_main
+            .find(header)
+            .expect("the header opens with the site link");
+        assert!(before_main[at..].ends_with("</header>"), "{doc}");
         assert!(!after.contains("mae-header"), "{doc}");
     }
     let bare = site::document("en-US", "Page", "<p>x</p>", &[], &[], &[]);
+    assert!(bare.contains("<title>Page</title>"), "{bare}");
+    let (head_of_body, _) = bare.split_once("<main").expect("a main landmark");
     assert!(
-        bare.contains("<title>Page</title>") && !bare.contains("<header"),
+        head_of_body.contains(r#"<header id="mae-header"><div id="mae-theme""#)
+            && !head_of_body.contains("<a "),
         "{bare}"
     );
 }
