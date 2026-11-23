@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.185] - 2026-11-23
+
+
+
+
+### Features
+
+- *(site)* Es-ES and eo catalogues; fallback chrome marked lang="en-US" ([6b59eec](https://github.com/cuttlefisch/mae/commit/6b59eecb6b264f8e7f2ff0d1d2218c27c0f4733b))
+
+### Bug Fixes
+
+- *(site)* Look a locale up as BCP 47 tags are (RFC 4647) ([8a133f0](https://github.com/cuttlefisch/mae/commit/8a133f099888b54fb50018fa3f353ae5d2819aaf))
+- *(graph)* Settle a ring's turn until it stops improving; test the drawn lines ([213ad5b](https://github.com/cuttlefisch/mae/commit/213ad5b6980f44130622563793b0f7253e228ae7))
+
+### Documentation
+
+- *(adr-119)* A4 owner line on the four catalogues and the marked fallback ([cba9ca2](https://github.com/cuttlefisch/mae/commit/cba9ca26a08731c07981ed753a2519662059e005))
+
 ## [0.14.184] - 2026-11-23
 
 
@@ -55,6 +73,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Regenerate the ADR KB checksum ([5f6201d](https://github.com/cuttlefisch/mae/commit/5f6201d205b3029b6f19bcc1cee329c4f005189d))
+- Bump version to 0.14.184 ([686995e](https://github.com/cuttlefisch/mae/commit/686995ec8f608cb7b4a86de679352f20757e310a))
 
 ## [0.14.183] - 2026-11-23
 
