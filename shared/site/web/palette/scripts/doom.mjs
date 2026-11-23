@@ -399,7 +399,7 @@ export const EMPHASIS = {
   orange: "orange",
   yellow: "yellow",
   green: "green",
-  teal: "green azulado",
+  teal: "teal",
   cyan: "cyan",
   blue: "blue",
   violet: "violet",

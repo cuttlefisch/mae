@@ -2,7 +2,9 @@
 
 **Status:** Proposed (design), being built in phase order. Built: S0 (mae-org 0.10.0, #973), and L1a's
 first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
-`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided. Spikes
+`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
+Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
+where its home page comes from, and the retirement of ADR-073's view. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -661,6 +663,21 @@ The chrome takes its words from `mae_site::strings` by the configured locale, ne
 `en-US`. Proper names the engine never translates (palette and product names) are declared as such
 and are not in the catalogue.
 
+*(owner, 2026-11-23)* The reader ships four catalogues: `en-US`, `fr-FR`, `es-ES` and `eo`; `es-ES`
+and `eo` are complete, and `eo` awaits a speaker's review. A catalogue is complete by construction (a
+missing string does not compile), so a locale either has every string or falls back whole. A
+configured locale is looked up as BCP 47 tags are (RFC 4647): case-insensitively, the exact tag first,
+then a catalogue of the same language (`es-MX` reads `es-ES`'s, as the reader's own language); only
+another language falls back.
+Translations are written fresh for the catalogue, never copied from another site generator's locale
+files (the Context's clean-room rule). Locale data (dates, numbers, plural rules, language names) will come from
+Unicode CLDR, through ICU4X in Rust and `Intl` in the browser, when the reader first renders any;
+nothing in it does today, so no dependency is added yet. A locale with no catalogue renders the
+chrome in `en-US`, and `mae_site::strings::resolve` reports that it fell back: every chrome element
+written from the fallback carries `lang="en-US"`, so a screen reader voices it as English, while
+`<html lang>` stays the configured locale and content inside such an element carries that locale
+back. The one exception is a listing's `<title>`, plain text that cannot mark part of itself.
+
 ### A5. The live route's answers
 
 `GET /kb/<kb-id>/<id>` (and the tag views) answer with the same not-found for every refusal and
@@ -694,10 +711,63 @@ token. So:
 The daemon's own refusal answers (A5) are unchanged, and the backend passes the daemon's CSP and
 security headers through with each page.
 
+## Amendment 2 (2026-11-23): what the live app does not serve, and its home page
+
+The parity specification was written for a static-site engine. Three of its groups assume things a
+live, signed-in app over a store-is-truth KB (ADR-110) does not have. The owner decided each
+*(owner, 2026-11-23)*.
+
+### B1. Folders are an export feature
+
+A native KB has no folders. After the cutover its nodes have no source file (`source_file` is `None`),
+so there is no path to list or to show as breadcrumbs. Folders exist only where a bundle on disk does,
+in the static export (X1). So:
+
+- **Export only:** folder listing pages (P-72) and the folder half of P-74, breadcrumbs (P-29), and a
+  configured descending order per folder (P-46).
+- **The live explorer and graph** cannot group by folder (P-39–P-44, P-54, P-59, P-67 as they concern
+  folders). Their live grouping is decided with the explorer slice of L1a and with L1c. The parity rows
+  apply to the live app in every respect except folders.
+- **Rejected:** a folder as a new node property (a schema change under ADR-093 to rebuild something
+  the cutover removed on purpose), and hierarchical tags read as folders (it overloads tags, and P-70's
+  tag rules would then decide navigation).
+
+D1's "tag and folder listings" and L1a's "tag and folder listings, breadcrumbs" read, for the live
+app, as tag listings only.
+
+### B2. Feeds, the sitemap and redirects are export features
+
+Every live route needs a bearer token or the browser client's session (A5, A6). Feed readers and
+crawlers have neither, so a live feed or sitemap would serve nobody. The RSS feed (P-75), the sitemap
+(P-76), the static redirects and the two address forms they serve (P-03, P-04), the route-history
+redirects (P-05, P-06) and the safe-file-name rule for them (P-08) are produced by the export only. The
+live app has one address per page, `/kb/<kb-id>/<id>` (P-01, P-02 for page IDs; P-07's 404 for an
+unpublished ID), and A3's ID rule is its counterpart to P-08. P-78 still applies to the live app's
+content index (`/kb/<kb-id>/index.json`). The live app's "what's new" (P-163) is a page, not a feed.
+
+### B3. The home page is operator configuration
+
+`/kb/<kb-id>/` serves the KB's home page: a node the **operator** names, per KB, in the daemon's site
+configuration, as the export's site directory names its what's-new node. Under D3, configuration comes
+from the operator, never from content, so no tag, property or reserved ID in a KB can make a node the
+home page. With no home node declared, or one that is unpublished or unreadable to the reader,
+`/kb/<kb-id>/` serves the tag index (A3). That makes the home address answer the same for a reader who
+cannot see the declared node as for one on a KB that declares none, so it says nothing about a node
+the reader cannot read (A5).
+
+### B4. ADR-073's live view is retired *(owner, 2026-11-23)*
+
+The live app supersedes ADR-073's view. Its `GET /kb/<kb-id>/view`, gated by `webview_enabled`, answers
+before authentication and before the live app, so a node whose ID is `view` could not be reached at its
+own address (A5's debt). The route is removed, and with it the reason to reserve `view`. `webview_enabled`
+is deprecated: accepted and ignored, with a startup warning, for one minor release, then removed.
+Rejected: reserving `view` under A3 (two renderers of one KB, and an ID withheld for an old path), and
+moving the view to another path (a breaking change that keeps the second renderer).
+
 ## Amendments this needs
 
-- **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. The `webview_enabled`
-  switch keeps gating it.
+- **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. Amendment 2 B4 retires
+  ADR-073's view and deprecates `webview_enabled`.
 - **ADR-074 Amendment 1:** its change index becomes a prerequisite for L1, not an optimisation.
 - **ADR-097 D1:** names this core.
 - **ADR-113:** D8's rule for which view a reader gets. Also that the

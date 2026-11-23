@@ -220,7 +220,7 @@ lose.
 - A third-party app that speaks only Hocuspocus cannot connect to MAE unmodified.
 
 **Who connects, as targeted (2026-11-11).** The clients MAE is building for are:
-- **mae-web in the browser**, on this transport, with B1's ticket;
+- **the browser client**, on this transport, with B1's ticket;
 - **MAE's native editor and headless instances**, on this transport, with the bearer header
   (ADR-111 D6);
 - **AI coding tools over MCP** (Codex, VS Code and similar).

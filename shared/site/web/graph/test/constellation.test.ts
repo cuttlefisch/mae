@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { layoutConstellation } from "../src/constellation";
+import { facePorts, layoutConstellation, portSlots } from "../src/constellation";
 import { buildHierarchy } from "../src/hierarchy";
 import { SHAPES } from "./kbs/shapes";
-import { indexArb, params } from "./arbitraries";
+import { indexArb, params, real } from "./arbitraries";
 
 const EPS = 1e-6;
 const TAU = Math.PI * 2;
 
-// A ring's wedges fill it: the first starts at 0, each starts where the one
-// before ends, the last ends at a full turn, and all are the same size. (Ports
-// were set apart from notes by one empty slot: n wedges took n of n + 1 parts
-// of the ring, owner 2026-11-18.) A folder with only its own page has none.
-function expectWhole(wedges: Array<{ a0: number; a1: number }>) {
-  if (wedges.length === 0) return;
-  expect(wedges[0]!.a0).toBeCloseTo(0, 9);
+// A ring's wedges fill it: in angular order, each starts where the one before
+// ends, the last ends a full turn after the first starts, and all are the same
+// size. (In angular order, not list order: a port sits where it faces its
+// subfolder's ring, so ports and notes interleave; and the ring turns, by less
+// than one wedge, so its ports face their subfolders squarely.)
+function expectWhole(inList: Array<{ a0: number; a1: number }>) {
+  if (inList.length === 0) return;
+  const wedges = [...inList].sort((a, b) => a.a0 - b.a0);
+  const size = TAU / wedges.length;
+  expect(wedges[0]!.a0).toBeGreaterThanOrEqual(-1e-9);
+  expect(wedges[0]!.a0).toBeLessThan(size + 1e-9);
   for (let i = 1; i < wedges.length; i++) expect(wedges[i]!.a0).toBeCloseTo(wedges[i - 1]!.a1, 9);
-  expect(wedges[wedges.length - 1]!.a1).toBeCloseTo(TAU, 9);
-  for (const w of wedges) expect(w.a1 - w.a0).toBeCloseTo(TAU / wedges.length, 9);
-  expect(wedges.reduce((s, w) => s + (w.a1 - w.a0), 0)).toBeCloseTo(TAU, 9);
+  expect(wedges[wedges.length - 1]!.a1).toBeCloseTo(wedges[0]!.a0 + TAU, 9);
+  for (const w of wedges) expect(w.a1 - w.a0).toBeCloseTo(size, 9);
 }
 
 function checkLayout(ix: Parameters<typeof buildHierarchy>[0]) {
@@ -34,8 +37,11 @@ function checkLayout(ix: Parameters<typeof buildHierarchy>[0]) {
     expect(d.wedges.map((w) => w.id)).toEqual(f.children.map((c) => c.id));
     for (const w of d.wedges)
       expect(w.kind).toBe(h.nodes.get(w.id)!.kind === "folder" ? "port" : "note");
-    // Wedges in order, end to end, filling the turn: no empty slot anywhere.
+    // Wedges end to end, filling the turn: no empty slot anywhere.
     expectWhole(d.wedges);
+    // The notes, clockwise in their list order (the ports go where they face).
+    const notes = d.wedges.filter((w) => w.kind === "note").map((w) => w.a0);
+    expect(notes).toEqual([...notes].sort((a, b) => a - b));
   }
   // 2. No two rings overlap, whatever the tree's shape.
   for (let i = 0; i < cs.discs.length; i++) {
@@ -75,7 +81,10 @@ function checkLayout(ix: Parameters<typeof buildHierarchy>[0]) {
         const r = Math.hypot(x - w.d.cx, y - w.d.cy);
         const a = (Math.atan2(x - w.d.cx, -(y - w.d.cy)) + Math.PI * 2) % (Math.PI * 2);
         const onEdge = Math.abs(r - (l.local ? w.d.r0 : w.d.r1)) < 0.02;
-        return onEdge && a >= w.a0 - 1e-3 && a <= w.a1 + 1e-3;
+        // Modulo a turn: a ring turned by less than a wedge can have one that crosses the top.
+        const into = (((a - w.a0) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        const within = into <= w.a1 - w.a0 + 1e-3 || into >= Math.PI * 2 - 1e-3;
+        return onEdge && within;
       });
       expect(hit).toBe(true);
     }
@@ -169,6 +178,176 @@ describe("layoutConstellation", () => {
       }
     });
   }
+
+  it("puts every port on the side of its ring that faces its subfolder's ring", () => {
+    // A port on the far side sends its line through its own ring, and a click
+    // on the right of the ring goes to a ring on the left. polar(): angle
+    // clockwise from the top.
+    for (const shape of Object.values(SHAPES)) {
+      const cs = layoutConstellation(shape());
+      const byId = new Map(cs.discs.map((d) => [d.id, d]));
+      for (const d of cs.discs) {
+        for (const w of d.wedges) {
+          if (w.kind !== "port") continue;
+          const c = byId.get(w.id)!;
+          const toward = Math.atan2(c.cx - d.cx, -(c.cy - d.cy));
+          const mid = (w.a0 + w.a1) / 2;
+          const off = Math.abs(Math.atan2(Math.sin(mid - toward), Math.cos(mid - toward)));
+          expect(off, `${d.id} → ${w.id}`).toBeLessThan(Math.PI / 2);
+        }
+      }
+    }
+  });
+
+  it("gives the ports the best slots there are: the narrowed search finds the full search's optimum", () => {
+    const sq = (t: number[], n: number, js: number[]) =>
+      js.reduce((s2, j, i) => {
+        const x = Math.abs((j + 0.5) * (TAU / n) - t[i]!) % TAU;
+        return s2 + Math.min(x, TAU - x) ** 2;
+      }, 0);
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 40 }).chain((n) =>
+          fc.tuple(
+            fc.constant(n),
+            fc.array(real(0, TAU - 1e-9), {
+              minLength: 1,
+              maxLength: n,
+            }),
+          ),
+        ),
+        ([n, raw]) => {
+          const t = [...raw].sort((a, b) => a - b);
+          const fast = portSlots(t, n);
+          const full = portSlots(t, n, true);
+          // Distinct slots, in the ports' order round the ring.
+          expect(new Set(fast).size).toBe(t.length);
+          // Round the ring there is exactly one step down (where it wraps).
+          if (fast.length > 1) {
+            const downs = fast.filter((j, i) => j < fast[(i + fast.length - 1) % fast.length]!);
+            expect(downs.length).toBe(1);
+          }
+          expect(sq(t, n, fast)).toBeCloseTo(sq(t, n, full), 9);
+        },
+      ),
+      { ...params, numRuns: 2000 },
+    );
+  });
+
+  it("turns a ring so its ports face their subfolders squarely, not half a slot off", () => {
+    // Subfolders evenly round a ring with one slot each, the whole set turned
+    // by any angle: every port exactly on its subfolder. With the slots fixed
+    // at the top they were up to half a slot off (45 degrees with four).
+    for (const k of [2, 3, 4, 6]) {
+      for (const turn of [0, 0.1, 0.37, 0.5, 0.9]) {
+        const step = TAU / k;
+        const t = Array.from({ length: k }, (_, i) => (i + turn) * step).sort((a, b) => a - b);
+        const r = facePorts(t, k);
+        r.slots.forEach((j, i) => {
+          const off = Math.abs(r.phase + (j + 0.5) * step - t[i]!) % TAU;
+          expect(Math.min(off, TAU - off), `${k} slots, turned ${turn}`).toBeLessThan(1e-9);
+        });
+      }
+    }
+  });
+
+  it("turns a ring no worse than not turning it, to the best turn for its slots, with the best slots for its turn", () => {
+    // What facePorts guarantees, and nothing more: it searches from a few
+    // starting turns and stops when a round no longer helps, so it may miss
+    // the very best turn by a hair (a test comparing it with a grid of turns
+    // failed at 1e-6). A property claims only what the code guarantees, so a
+    // fresh seed finds only real bugs.
+    const step = (n: number) => TAU / n;
+    const sq = (t: number[], n: number, phase: number, js: number[]) =>
+      js.reduce((s2, j, i) => {
+        const x = Math.abs(phase + (j + 0.5) * step(n) - t[i]!) % TAU;
+        return s2 + Math.min(x, TAU - x) ** 2;
+      }, 0);
+    const signed = (a: number) => {
+      const x = ((a % TAU) + TAU) % TAU;
+      return x > Math.PI ? x - TAU : x;
+    };
+    fc.assert(
+      fc.property(
+        fc
+          .integer({ min: 1, max: 24 })
+          .chain((n) =>
+            fc.tuple(fc.constant(n), fc.array(real(0, TAU - 1e-9), { minLength: 1, maxLength: n })),
+          ),
+        ([n, raw]) => {
+          const t = [...raw].sort((a, b) => a - b);
+          const r = facePorts(t, n);
+          expect(r.phase).toBeGreaterThanOrEqual(0);
+          expect(r.phase).toBeLessThan(step(n));
+          expect(sq(t, n, r.phase, r.slots)).toBeCloseTo(r.cost, 9);
+          // Never worse than the ring at the top.
+          expect(r.cost).toBeLessThanOrEqual(sq(t, n, 0, portSlots(t, n, true, 0)) + 1e-12);
+          // The best turn for these slots: no mean offset left to take out.
+          const mean =
+            r.slots.reduce((s2, j, i) => s2 + signed(t[i]! - (r.phase + (j + 0.5) * step(n))), 0) /
+            t.length;
+          expect(Math.abs(mean)).toBeLessThan(1e-6);
+          // The best slots for this turn.
+          expect(r.cost).toBeCloseTo(sq(t, n, r.phase, portSlots(t, n, true, r.phase)), 9);
+        },
+      ),
+      { ...params, numRuns: 300 },
+    );
+  });
+
+  // What the reader sees: a subfolder's line left from the far side
+  // of its ring and crossed it, and a click on the right of the ring led to a
+  // ring on the left. Checked on the drawn line itself, the cubic from the
+  // port to the subfolder's ring, sampled along its length.
+  const crossings = (cs: ReturnType<typeof layoutConstellation>) => {
+    const byId = new Map(cs.discs.map((d) => [d.id, d]));
+    const bad: string[] = [];
+    for (const t of cs.tree) {
+      const n = t.d.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+      const [x0, y0, x1, y1, x2, y2, x3, y3] = n as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      const p = byId.get(t.from)!;
+      const c = byId.get(t.to)!;
+      for (let i = 1; i < 64; i++) {
+        const u = i / 64;
+        const v = 1 - u;
+        const x = v ** 3 * x0 + 3 * v * v * u * x1 + 3 * v * u * u * x2 + u ** 3 * x3;
+        const y = v ** 3 * y0 + 3 * v * v * u * y1 + 3 * v * u * u * y2 + u ** 3 * y3;
+        // 0.02: the path's coordinates are rounded to hundredths.
+        if (Math.hypot(x - p.cx, y - p.cy) < p.r1 - 0.02) {
+          bad.push(`${t.from} → ${t.to}: inside its own ring at ${u.toFixed(2)}`);
+          break;
+        }
+        if (Math.hypot(x - c.cx, y - c.cy) < c.r1 - 0.02) {
+          bad.push(`${t.from} → ${t.to}: inside the subfolder's ring at ${u.toFixed(2)}`);
+          break;
+        }
+      }
+    }
+    return bad;
+  };
+
+  it("draws no subfolder's line through its own ring or the subfolder's, on every test KB", () => {
+    for (const [name, shape] of Object.entries(SHAPES))
+      expect(crossings(layoutConstellation(shape())), name).toEqual([]);
+  });
+
+  it("draws no subfolder's line through a ring, for any index", () => {
+    fc.assert(
+      fc.property(indexArb, (ix) => {
+        expect(crossings(layoutConstellation(ix))).toEqual([]);
+      }),
+      params,
+    );
+  });
 
   it("is deterministic", () => {
     expect(layoutConstellation(SHAPES.deep!())).toEqual(layoutConstellation(SHAPES.deep!()));

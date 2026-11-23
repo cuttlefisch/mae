@@ -1,6 +1,8 @@
 # ADR-073: Live, network-shareable HTML KB view on mae-daemon (OAuth-only v1)
 
-**Status:** Proposed.
+**Status:** Proposed. **Superseded** by ADR-119 for the live page: Amendment 2 B4 (2026-11-23) retires
+this view (`GET /kb/<kb-id>/view`) and deprecates `webview_enabled`. The live app (ADR-119) renders
+pages in the daemon and serves them at `/kb/<kb-id>/<id>`.
 **Depends on:** ADR-052 (OAuth 2.1 resource server — the listener this view's route is
 added to), ADR-053 (live scoped read-through KB query surface — the pull-based data path
 this view reuses unchanged for v1).

@@ -1,0 +1,20 @@
+{
+  "role": "banner",
+  "children": [
+    {
+      "role": "link",
+      "name": "Parity fixture"
+    },
+    {
+      "role": "button",
+      "name": "Modo oscuro",
+      "pressed": true
+    },
+    {
+      "role": "button",
+      "name": "Paleta de colores",
+      "expanded": false,
+      "haspopup": "menu"
+    }
+  ]
+}

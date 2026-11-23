@@ -249,7 +249,7 @@ pub fn build_node(n: &PlannedNode, row: &SeedNodeRow) -> KbNodeDoc {
 /// The seed's one file-to-node mapping. The apply writes it, and the export
 /// checks a node against it (`export::unrepresented`), so the two directions
 /// cannot drift apart.
-pub(super) fn node_from_file(f: &SplitFile, created_at: i64) -> KbNodeDoc {
+pub fn node_from_file(f: &SplitFile, created_at: i64) -> KbNodeDoc {
     let tags = f.filetags.clone().unwrap_or_default();
     let title = f.title.as_deref().unwrap_or("");
     let mut doc = KbNodeDoc::new_created_at(&f.id, title, &f.body, &tags, created_at);

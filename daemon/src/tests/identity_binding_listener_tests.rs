@@ -44,11 +44,12 @@ fn config(allowed_groups: &[&str]) -> ResourceServerConfig {
         site_enabled: false,
         site_locale: "en-US".to_string(),
         site_hidden_namespaces: Vec::new(),
+        site_home: std::collections::BTreeMap::new(),
+        site_title: std::collections::BTreeMap::new(),
         max_request_body_bytes: 1_048_576,
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
-        webview_enabled: false,
         second_factor: Default::default(),
     }
 }

@@ -1,0 +1,219 @@
+{
+  "role": "banner",
+  "children": [
+    {
+      "role": "link",
+      "name": "Parity fixture"
+    },
+    {
+      "role": "button",
+      "name": "Dark mode",
+      "pressed": true
+    },
+    {
+      "role": "button",
+      "name": "Color palette",
+      "expanded": true,
+      "haspopup": "menu"
+    },
+    {
+      "role": "menu",
+      "name": "Color palette",
+      "children": [
+        {
+          "role": "menuitemradio",
+          "name": "Acario",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Ayu",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Bluloco",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Challenger Deep",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Dark Plus",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Dracula",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Earl Grey",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Flatwhite",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Gruvbox",
+          "expanded": false,
+          "checked": true,
+          "haspopup": "menu",
+          "focused": true
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Henna",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Horizon",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Material",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Monokai",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Neutral",
+          "checked": false
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Nord",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Nova",
+          "checked": false
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Oceanic Next",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "One",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Peacock",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Rouge",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Solarized",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Sourcerer",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Spacegrey",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Tokyo Night",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Tomorrow",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Vibrant",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Xcode",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        },
+        {
+          "role": "menuitemradio",
+          "name": "Zenburn",
+          "expanded": false,
+          "checked": false,
+          "haspopup": "menu"
+        }
+      ]
+    }
+  ]
+}

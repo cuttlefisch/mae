@@ -1,0 +1,309 @@
+{
+  "schema": 1,
+  "readme": "Mutation list for the router's unit suite (Vitest), the graph package's format: each find must occur once in the file; the named test must fail with it applied. MAE's tools/mutate does not run Vitest targets yet; run with the loop in the router PR's description.",
+  "timeout": 300,
+  "targets": {
+    "unit": {
+      "type": "vitest",
+      "command": [
+        "npx",
+        "--no-install",
+        "vitest",
+        "run"
+      ],
+      "files": [
+        "test/**/*.test.ts"
+      ]
+    }
+  },
+  "mutants": [
+    {
+      "name": "redirects followed (the login hop dies cross-origin)",
+      "file": "src/router.ts",
+      "find": "redirect: \"manual\",",
+      "replace": "redirect: \"follow\",",
+      "target": "unit",
+      "filter": "fetches the next page"
+    },
+    {
+      "name": "an earlier navigation is not aborted",
+      "file": "src/router.ts",
+      "find": "    inFlight?.abort();\n    const ctl = new AbortController();",
+      "replace": "    const ctl = new AbortController();",
+      "target": "unit",
+      "filter": "latest of overlapping"
+    },
+    {
+      "name": "a non-200 page is swapped in",
+      "file": "src/router.ts",
+      "find": "if (r.type === \"opaqueredirect\" || r.status !== 200) return \"full\";",
+      "replace": "if (r.type === \"opaqueredirect\" || r.status >= 500) return \"full\";",
+      "target": "unit",
+      "filter": "swaps only a plain 200"
+    },
+    {
+      "name": "a page with other assets is swapped in",
+      "file": "src/router.ts",
+      "find": "return a.length === b.length && a.every((x, i) => x === b[i]);",
+      "replace": "return a.length === b.length;",
+      "target": "unit",
+      "filter": "other assets"
+    },
+    {
+      "name": "another origin is routed",
+      "file": "src/router.ts",
+      "find": "if (url.origin !== here.origin || !url.pathname.startsWith(SITE_PREFIX)) return null;",
+      "replace": "if (!url.pathname.startsWith(SITE_PREFIX)) return null;",
+      "target": "unit",
+      "filter": "leaves every other click"
+    },
+    {
+      "name": "a fragment move refetches the page",
+      "file": "src/router.ts",
+      "find": "    if (pageOf(url) === shown) {",
+      "replace": "    if (false) {",
+      "target": "unit",
+      "filter": "within the shown page"
+    },
+    {
+      "name": "components are not cleaned up before a swap",
+      "file": "src/router.ts",
+      "find": "    unmountAll();\n    doc.title = next.title;",
+      "replace": "    doc.title = next.title;",
+      "target": "unit",
+      "filter": "mounts each component once"
+    },
+    {
+      "name": "focus is not moved after a swap",
+      "file": "src/router.ts",
+      "find": "      focus.focus({ preventScroll: true });\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "fetches the next page"
+    },
+    {
+      "name": "the site header is not swapped",
+      "file": "src/router.ts",
+      "find": "    region(HEADER_ID, \"before\");\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "site header"
+    },
+    {
+      "name": "a malformed fragment throws after the swap",
+      "file": "src/router.ts",
+      "find": "    return decodeURIComponent(raw);\n  } catch {\n    return raw;\n  }",
+      "replace": "    return decodeURIComponent(raw);\n  } finally {\n    // no recovery\n  }",
+      "target": "unit",
+      "filter": "malformed fragment"
+    },
+    {
+      "name": "history back to the shown page leaves the navigation running",
+      "file": "src/router.ts",
+      "find": "      inFlight?.abort();\n      return;",
+      "replace": "      return;",
+      "target": "unit",
+      "filter": "returns to the shown page"
+    },
+    {
+      "name": "a stored palette is checked with `in`: a prototype key passes",
+      "file": "src/router.ts",
+      "find": "  const palette = stored !== null && Object.hasOwn(data.palettes, stored) ? stored : data.default;",
+      "replace": "  const palette = stored !== null && stored in data.palettes ? stored : data.default;",
+      "target": "unit",
+      "filter": "hostile value"
+    },
+    {
+      "name": "a removed palette keeps its successor's stored accent",
+      "file": "src/router.ts",
+      "find": "      return { mode, palette: next, accent: null };",
+      "replace": "      return { mode, palette: next, accent: validAccent(data, next, read(storageKey(\"accent\", next))) };",
+      "target": "unit",
+      "filter": "removed palette"
+    },
+    {
+      "name": "the default accent is written as an accent",
+      "file": "src/router.ts",
+      "find": "  return stored === accents.default ? null : stored;",
+      "replace": "  return stored;",
+      "target": "unit",
+      "filter": "accent is per palette"
+    },
+    {
+      "name": "storage that throws is not caught",
+      "file": "src/router.ts",
+      "find": "    return typeof v === \"string\" ? v : null;\n  } catch {\n    return null;\n  }",
+      "replace": "    return typeof v === \"string\" ? v : null;\n  } finally {\n    // no recovery\n  }",
+      "target": "unit",
+      "filter": "storage that throws"
+    },
+    {
+      "name": "the session forgets what it wrote when storage throws",
+      "file": "src/router.ts",
+      "find": "      if (written.has(key)) return written.get(key) ?? null;\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "session store"
+    },
+    {
+      "name": "ArrowRight on an accent opens a submenu",
+      "file": "src/router.ts",
+      "find": "      return inSubmenu ? null : \"open-sub\";",
+      "replace": "      return \"open-sub\";",
+      "target": "unit",
+      "filter": "maps each key"
+    },
+    {
+      "name": "focus stops at the last item",
+      "file": "src/router.ts",
+      "find": "      return (current + 1) % count;",
+      "replace": "      return Math.min(current + 1, count - 1);",
+      "target": "unit",
+      "filter": "wrap-around"
+    },
+    {
+      "name": "opening focuses the first palette, not the checked one",
+      "file": "src/router.ts",
+      "find": "    focusOn(entries.find((e) => e.id === current().palette)?.item ?? entries[0]?.item);",
+      "replace": "    focusOn(entries[0]?.item);",
+      "target": "unit",
+      "filter": "open on the checked palette"
+    },
+    {
+      "name": "Escape leaves focus in the closed menu",
+      "file": "src/router.ts",
+      "find": "      case \"close\":\n        return close(true);",
+      "replace": "      case \"close\":\n        return close(false);",
+      "target": "unit",
+      "filter": "Escape go back"
+    },
+    {
+      "name": "Tab is swallowed",
+      "file": "src/router.ts",
+      "find": "    if (action === \"leave\") return close(false);\n    ev.preventDefault();",
+      "replace": "    ev.preventDefault();\n    if (action === \"leave\") return close(false);",
+      "target": "unit",
+      "filter": "Tab closes"
+    },
+    {
+      "name": "hover opens a submenu at once (no intent)",
+      "file": "src/router.ts",
+      "find": "    hover = setTimeout(() => (e.sub ? openSubOf(e, false) : closeSub()), HOVER_INTENT_MS);",
+      "replace": "    hover = setTimeout(() => (e.sub ? openSubOf(e, false) : closeSub()), 0);",
+      "target": "unit",
+      "filter": "hover intent"
+    },
+    {
+      "name": "touch is treated as hover",
+      "file": "src/router.ts",
+      "find": "    if (ev.pointerType !== \"mouse\") return;\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "hover intent"
+    },
+    {
+      "name": "a click on any palette with accents opens its submenu",
+      "file": "src/router.ts",
+      "find": "    if (e.sub && e.id === current().palette) {",
+      "replace": "    if (e.sub) {",
+      "target": "unit",
+      "filter": "click or tap"
+    },
+    {
+      "name": "a press outside leaves the menu open",
+      "file": "src/router.ts",
+      "find": "    if (!menu.hidden && !box.contains(ev.target as Node)) close(false);",
+      "replace": "    void ev;",
+      "target": "unit",
+      "filter": "click or tap"
+    },
+    {
+      "name": "the toggle's choice is not stored",
+      "file": "src/router.ts",
+      "find": "    store.set(storageKey(\"mode\"), next);\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "the toggle"
+    },
+    {
+      "name": "the system overrides the reader's mode",
+      "file": "src/router.ts",
+      "find": "      if (chosenMode()) return;\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "follows the system"
+    },
+    {
+      "name": "the site default is stored as a choice",
+      "file": "src/router.ts",
+      "find": "    store.set(storageKey(\"palette\"), palette === data.default ? null : palette);",
+      "replace": "    store.set(storageKey(\"palette\"), palette);",
+      "target": "unit",
+      "filter": "site default"
+    },
+    {
+      "name": "the controls stay hidden",
+      "file": "src/router.ts",
+      "find": "  box.hidden = false;\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "the toggle"
+    },
+    {
+      "name": "the source ignores the system's mode",
+      "file": "src/router.ts",
+      "find": "  const mode = choice.mode ?? (systemDark(win) ? \"dark\" : \"light\");",
+      "replace": "  const mode = choice.mode ?? \"light\";",
+      "target": "unit",
+      "filter": "source and the generated"
+    },
+    {
+      "name": "an accent attribute is never removed",
+      "file": "src/router.ts",
+      "find": "  if (choice.accent === null) root.removeAttribute(\"data-emphasis\");\n  else root.setAttribute(\"data-emphasis\", choice.accent);",
+      "replace": "  if (choice.accent !== null) root.setAttribute(\"data-emphasis\", choice.accent);",
+      "target": "unit",
+      "filter": "Escape go back"
+    },
+    {
+      "name": "no accent is ever checked",
+      "file": "src/router.ts",
+      "find": "        a.setAttribute(\"aria-checked\", a.getAttribute(\"data-accent\") === checked ? \"true\" : \"false\");",
+      "replace": "        a.setAttribute(\"aria-checked\", \"false\");",
+      "target": "unit",
+      "filter": "Enter chooses it"
+    },
+    {
+      "name": "no room beside: the submenu leaves the window",
+      "file": "src/router.ts",
+      "find": "  else left = clamp(menu.left, EDGE, Math.max(EDGE, vw - EDGE - w));",
+      "replace": "  else left = menu.right;",
+      "target": "unit",
+      "filter": "right when it fits"
+    },
+    {
+      "name": "a long menu does not scroll inside the window",
+      "file": "src/router.ts",
+      "find": "  return { left, top: button.bottom, maxHeight: Math.max(0, below) };",
+      "replace": "  return { left, top: button.bottom, maxHeight: height };",
+      "target": "unit",
+      "filter": "inside the window"
+    },
+    {
+      "name": "the menu is labelled by reference (the client's tests need aria-label)",
+      "file": "src/router.ts",
+      "find": "\"aria-label\": labels.menu,",
+      "replace": "\"aria-labelledby\": PALETTE_BUTTON_ID,",
+      "target": "unit",
+      "filter": "menu's markup"
+    },
+    {
+      "name": "a page's listeners outlive it",
+      "file": "src/router.ts",
+      "find": "      ac.abort();\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "under the router"
+    }
+  ]
+}

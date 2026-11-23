@@ -15,10 +15,9 @@ mod tests {
     use rsa::RsaPrivateKey;
 
     /// Audit #588.3 — no response on this listener carried `Cache-Control`.
-    /// It serves bearer-authenticated KB content, and the webview response
-    /// embeds a live access token in its HTML, so an absent `no-store` lets a
-    /// browser persist that token to its on-disk cache and lets an
-    /// intermediary retain authenticated KB content. RFC 6749 §5.1 (carried
+    /// It serves bearer-authenticated KB content, so an absent `no-store` lets
+    /// a browser persist it to its on-disk cache and lets an intermediary
+    /// retain it. RFC 6749 §5.1 (carried
     /// forward by OAuth 2.1) requires it.
     ///
     /// Covers every status class this module emits — success, the PRM
@@ -130,11 +129,12 @@ mod tests {
             site_enabled: false,
             site_locale: "en-US".to_string(),
             site_hidden_namespaces: Vec::new(),
+            site_home: std::collections::BTreeMap::new(),
+            site_title: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
-            webview_enabled: false,
             second_factor: Default::default(),
         }
     }
@@ -397,6 +397,23 @@ mod tests {
                 .is_some(),
             "expected a LengthLimitError specifically, got: {err}"
         );
+    }
+
+    /// The 403 for a token without a required group is a contract: the
+    /// browser client's backend recognises it by status 403 and
+    /// `kind == "group_required"` (with `error` the RFC 6750 code
+    /// `insufficient_scope`) and answers its own not-found. A change to any of
+    /// the three must be deliberate and announced, so it is pinned here.
+    #[tokio::test]
+    async fn the_group_refusal_body_is_a_pinned_contract() {
+        use http_body_util::BodyExt;
+        let r = group_refusal();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        let bytes = r.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "insufficient_scope");
+        assert_eq!(body["kind"], "group_required");
+        assert!(body["error_description"].is_string());
     }
 
     #[tokio::test]
@@ -676,6 +693,14 @@ mod tests {
         );
         // The tag index and a tag's page (P-70, P-71); `tags` is reserved.
         assert_eq!(site_path("/kb/k/tags"), Some(("k".into(), View::Tags)));
+        // `view` is an ordinary ID: ADR-073's view no longer owns the path
+        // (Amendment 2 B4).
+        assert_eq!(
+            site_path("/kb/k/view"),
+            Some(("k".into(), View::Page("view".into())))
+        );
+        // The KB's home (Amendment 2 B3): which node is the route's lookup.
+        assert_eq!(site_path("/kb/k/"), Some(("k".into(), View::Home(None))));
         assert_eq!(
             site_path("/kb/k/index.json"),
             Some(("k".into(), View::Index))
@@ -686,7 +711,7 @@ mod tests {
         );
         for bad in [
             "/kb/k",
-            "/kb/k/",
+            "/kb//",
             "/kb//n",
             "/kb/k/a/b",
             "/kbx/k/n",
@@ -700,6 +725,18 @@ mod tests {
             "/kb/k/other/a",
         ] {
             assert_eq!(site_path(bad), None, "{bad}");
+        }
+        // Every path under /kb/ is the site's: a malformed one is its
+        // not-found (`Some(None)`), not the listener's bearer probe.
+        for kb_path in ["/kb/k", "/kb/k/a/b", "/kb//n", "/kb/k/tags/"] {
+            assert_eq!(site_request(kb_path), Some(None), "{kb_path}");
+        }
+        assert_eq!(
+            site_request("/kb/k/n1"),
+            Some(Some(("k".into(), View::Page("n1".into()))))
+        );
+        for other in ["/", "/kbx/k/n", "/x/kb/k/n", "/mcp"] {
+            assert_eq!(site_request(other), None, "{other}");
         }
     }
 
@@ -721,5 +758,55 @@ mod tests {
         }
         assert!(mae_daemon::site::CSP.contains("script-src 'self'"));
         assert!(!mae_daemon::site::CSP.contains("unsafe-inline"));
+    }
+
+    /// A refusal is the same response whatever the site's configuration (A5):
+    /// a configured site title would otherwise tell a stranger which KBs exist.
+    /// A readable page does carry it (the positive control).
+    #[tokio::test]
+    async fn a_refusal_never_carries_the_site_title() {
+        use http_body_util::BodyExt;
+        use mae_daemon::site::{Chrome, SitePage};
+        let titled = Chrome {
+            lang: "en-US",
+            site: Some(("A secret KB name", "/kb/secret/")),
+        };
+        async fn parts(r: Response<Full<Bytes>>) -> (StatusCode, String, String) {
+            let status = r.status();
+            let headers = format!("{:?}", r.headers());
+            let body = r.into_body().collect().await.unwrap().to_bytes();
+            (status, headers, String::from_utf8(body.to_vec()).unwrap())
+        }
+        for page in [SitePage::NotFound, SitePage::TooLarge] {
+            let with = parts(site_answer(page.clone(), titled)).await;
+            let without = parts(site_answer(page, "en-US".into())).await;
+            assert_eq!(with, without);
+            assert!(!with.2.contains("secret"), "{}", with.2);
+        }
+        let found = SitePage::Found {
+            title: "T".into(),
+            html: "<p>x</p>".into(),
+            backlinks: vec![],
+            tags: vec![],
+            toc: vec![],
+        };
+        assert!(parts(site_answer(found, titled))
+            .await
+            .2
+            .contains("A secret KB name"));
+    }
+
+    /// The CSP is a contract: the browser client's backend pins it exactly,
+    /// per daemon version, and the router's Trusted Types policy must be the
+    /// only one allowed (ADR-119 D16). A change here is deliberate and goes to
+    /// that backend first.
+    #[test]
+    fn the_site_csp_is_a_pinned_contract() {
+        assert_eq!(
+            mae_daemon::site::CSP,
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+             connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; \
+             require-trusted-types-for 'script'; trusted-types mae-router"
+        );
     }
 }
