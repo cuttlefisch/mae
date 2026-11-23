@@ -137,11 +137,18 @@ async fn a_ticket_for_another_subject_closes_4403() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "session/renew", "params": {"ticket": other}}),
     )
     .await;
-    assert_eq!(ws.closed().await, (4403, "principal_changed".to_string()));
-    assert!(
-        !ws.log.iter().any(|f| f.contains("\"result\"")),
-        "the renewal must not have succeeded before the close"
-    );
+    // The very next frame is the close: an answer to the renewal, or any
+    // other frame first, fails at once rather than after a timeout.
+    match ws.next().await {
+        Event::Close(code, reason) => {
+            assert_eq!((code, reason.as_str()), (4403, "principal_changed"))
+        }
+        Event::Text(v) => panic!(
+            "expected the close, got a frame: {}",
+            v["result"].is_object()
+        ),
+        Event::End => panic!("the socket ended without a close frame"),
+    }
 }
 
 /// F2/F3: reused, unknown, from another allowed origin, or with no origin: all
