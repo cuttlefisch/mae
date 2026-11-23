@@ -12,13 +12,6 @@
 //! (principle #8). The page itself comes from `mae_site::derive`, the core the
 //! static export shares.
 //!
-//! @ai-caution: [architecture-debt] With `webview_enabled` too, the older
-//! web view (ADR-073) owns `/kb/<kb-id>/view` and answers it before
-//! authentication, so a node whose ID is `view` is not reachable at its own
-//! address while both are on: the shadowing P-166 forbids. The live app is
-//! ADR-119's successor to that view; the collision is to be resolved there
-//! (retire the view's path, or reserve the name and withhold such a page).
-//!
 //! One timing difference remains by design: a member asking for a missing
 //! node waits for a derivation, while a non-member is refused at the gate. It
 //! tells a caller only whether THEY may read the KB, which they know anyway.

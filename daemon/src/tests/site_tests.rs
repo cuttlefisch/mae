@@ -603,3 +603,24 @@ async fn a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages() {
     let titles: Vec<&str> = items.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(titles, vec!["Getting started"]);
 }
+
+/// Amendment 2 B4: with ADR-073's view retired, a node whose ID is `view` is
+/// served at its own address like any other.
+#[tokio::test]
+async fn a_node_whose_id_is_view_is_served_at_its_address() {
+    let store = fresh_doc_store().await;
+    seed(&store, "kb-view", &[("view", "A page named view", "x\n")]).await;
+    let page = site::view(
+        &store,
+        "kb-view",
+        &site::View::Page("view".into()),
+        Some(READER),
+        LIMITS,
+        &Default::default(),
+    )
+    .await;
+    let SitePage::Found { title, .. } = page else {
+        panic!("the page at /kb/kb-view/view: {page:?}");
+    };
+    assert_eq!(title, "A page named view");
+}

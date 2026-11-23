@@ -162,7 +162,7 @@ pub struct CollabConfig {
     /// Drive the CRDT→Cozo projection from the doc-store change feed (ADR-029 B2/B3).
     ///
     /// Default **on**: without it, Cozo never learns about CRDT writes, so `kb/search`,
-    /// `kb/health`, the webview and every `kb/query.*` caller serve stale or empty
+    /// `kb/health`, the live site and every `kb/query.*` caller serve stale or empty
     /// results while sync itself works perfectly — a silent split-brain between what
     /// peers see and what queries return. The switch exists for a pure relay, which
     /// carries no Cozo projection worth maintaining.

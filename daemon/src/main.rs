@@ -46,7 +46,6 @@ mod tenant;
 mod tests;
 mod ticket;
 mod token_cli;
-mod webview;
 mod ws;
 
 use config::DaemonConfig;
@@ -551,6 +550,14 @@ async fn spawn_oauth_listener(
         );
         return;
     }
+    if config.oauth.webview_enabled {
+        // ADR-119 Amendment 2 B4: accepted for one minor release, then removed.
+        warn!(
+            "oauth.webview_enabled is deprecated and ignored: ADR-073's view at \
+             /kb/<kb-id>/view is retired; the live site (oauth.site_enabled) serves \
+             /kb/<kb-id>/<id>"
+        );
+    }
     let server_config = oauth::ResourceServerConfig {
         canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
         principal_claim: config.oauth.principal_claim.clone(),
@@ -568,7 +575,6 @@ async fn spawn_oauth_listener(
         kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
         kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
         kb_query_max_search_results: config.oauth.kb_query_max_search_results,
-        webview_enabled: config.oauth.webview_enabled,
         second_factor: config.oauth.second_factor_rule(),
     };
     let bind = config.oauth.bind;
@@ -835,7 +841,7 @@ async fn init_doc_store(
 /// production callers: `change_tx` was never set, so `emit_change` dropped every
 /// event and nothing kept the Cozo projection in step with CRDT writes. A collaborative
 /// edit propagated live to connected editors and was simultaneously invisible to
-/// `kb/search`, `kb/health`, the webview, and every `kb/query.*` caller — all of which
+/// `kb/search`, `kb/health`, the live site, and every `kb/query.*` caller — all of which
 /// read Cozo.
 ///
 /// Two things are wired here, in this order:

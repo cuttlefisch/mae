@@ -136,15 +136,10 @@ pub struct OAuthConfig {
     /// did). Same shape as `collab.max_connections`/`p2p.max_connections`
     /// (`conn_limit::ConnLimiter`, `0` = unlimited).
     pub max_connections: usize,
-    /// ADR-073/Phase E (#547): whether `GET /kb/{kb_id}/view` — the live,
-    /// network-shareable HTML KB view — is reachable on this listener.
-    /// Independently toggleable from `kb_query_enabled` (a sibling
-    /// capability on the SAME listener, following that field's own
-    /// established pattern exactly), default `false` (principle #12 — a
-    /// real capability is earned by an explicit operator opt-in). Also
-    /// requires `collab.enabled` for the same reason `kb_query_enabled`
-    /// does: this view is a pure new *consumer* of `kb/query.*`, with no
-    /// content path of its own.
+    /// Deprecated and ignored (ADR-119 Amendment 2 B4): ADR-073's view at
+    /// `GET /kb/{kb_id}/view` is retired; the live site (`site_enabled`)
+    /// replaces it. Still accepted so an existing config keeps loading, with
+    /// a startup warning when set; removed one minor release later.
     pub webview_enabled: bool,
     /// ADR-067 Phase D3: whether this daemon mints AND accepts its own
     /// self-issued bearer tokens (`kid: "self"`, EdDSA-signed with this
@@ -156,7 +151,7 @@ pub struct OAuthConfig {
     /// (an Ed25519 identity must exist to sign with; psk/none auth has
     /// none) and `enabled = true` on this same listener; a daemon with
     /// neither is a silent no-op, not an error, mirroring `kb_query_enabled`
-    /// and `webview_enabled`'s own established pattern.
+    /// established pattern.
     pub self_issued_tokens_enabled: bool,
     /// Self-issued token lifetime, seconds. Config-driven (principle #7),
     /// never hardcoded — an operator running a long-lived restricted-viewer

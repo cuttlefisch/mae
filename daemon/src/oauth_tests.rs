@@ -15,10 +15,9 @@ mod tests {
     use rsa::RsaPrivateKey;
 
     /// Audit #588.3 — no response on this listener carried `Cache-Control`.
-    /// It serves bearer-authenticated KB content, and the webview response
-    /// embeds a live access token in its HTML, so an absent `no-store` lets a
-    /// browser persist that token to its on-disk cache and lets an
-    /// intermediary retain authenticated KB content. RFC 6749 §5.1 (carried
+    /// It serves bearer-authenticated KB content, so an absent `no-store` lets
+    /// a browser persist it to its on-disk cache and lets an intermediary
+    /// retain it. RFC 6749 §5.1 (carried
     /// forward by OAuth 2.1) requires it.
     ///
     /// Covers every status class this module emits — success, the PRM
@@ -135,7 +134,6 @@ mod tests {
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
-            webview_enabled: false,
             second_factor: Default::default(),
         }
     }
@@ -694,6 +692,12 @@ mod tests {
         );
         // The tag index and a tag's page (P-70, P-71); `tags` is reserved.
         assert_eq!(site_path("/kb/k/tags"), Some(("k".into(), View::Tags)));
+        // `view` is an ordinary ID: ADR-073's view no longer owns the path
+        // (Amendment 2 B4).
+        assert_eq!(
+            site_path("/kb/k/view"),
+            Some(("k".into(), View::Page("view".into())))
+        );
         // The KB's home (Amendment 2 B3): which node is the route's lookup.
         assert_eq!(site_path("/kb/k/"), Some(("k".into(), View::Home(None))));
         assert_eq!(

@@ -82,14 +82,6 @@ pub struct ResourceServerConfig {
     pub kb_query_max_scan_nodes: usize,
     /// Cap on the number of results a single `kb/query.search` call returns.
     pub kb_query_max_search_results: usize,
-    /// ADR-073/Phase E (#547): whether `GET /kb/{kb_id}/view` (the live
-    /// HTML KB view) is reachable at all. Independently toggleable from
-    /// `kb_query_enabled` and the listener being up, mirroring that field's
-    /// own doc comment exactly — a real capability is earned by an explicit
-    /// operator opt-in (default `false`, principle #12), not implied by
-    /// `kb_query_enabled` alone. Also requires a `DocStore` to exist (same
-    /// `collab.enabled` prerequisite `kb_query_enabled` has).
-    pub webview_enabled: bool,
     /// ADR-098, for ADR-113 B7: the `amr`/`acr` values the operator counts as
     /// a second factor. Empty (the default): none does. The bare probe reports
     /// whether the caller's sign-in meets it.
@@ -377,29 +369,13 @@ pub(crate) fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-/// Does the request carry an `access_token` query parameter at all?
-///
-/// ADR-111 P1 removed the webview's `?access_token=` fallback: a credential in
-/// the query string is written to every proxy access log, browser history entry
-/// and `Referer` it passes through. It is not merely ignored now but REFUSED
-/// (`public_response`), so an old shared link fails loudly and says what to use
-/// instead rather than rendering a page that silently cannot authenticate. The
-/// value is never read -- only the key's presence matters.
-fn has_query_access_token(req: &Request<Incoming>) -> bool {
-    req.uri().query().is_some_and(|q| {
-        q.split('&')
-            .any(|pair| pair.split('=').next() == Some("access_token"))
-    })
-}
-
 /// Apply the no-caching headers every response from this listener needs.
 ///
 /// @ai-caution: [security] EVERY response builder in this module must go
 /// through here (audit #588.3). This listener serves bearer-token-authenticated
-/// KB content. (The webview page no longer embeds a token -- ADR-111 P1 -- but
-/// the kb/query responses its script fetches carry KB content, and without
-/// `no-store` a browser writes them to its on-disk cache and an intermediary
-/// proxy may retain them.) `no-store` is
+/// KB content (`kb/query.*` responses and the live site's pages), and without
+/// `no-store` a browser writes it to its on-disk cache and an intermediary
+/// proxy may retain it. `no-store` is
 /// mandated for token-bearing responses by RFC 6749 §5.1, which OAuth 2.1
 /// carries forward; `Pragma: no-cache` covers HTTP/1.0 intermediaries.
 pub(crate) fn with_no_store(
@@ -434,19 +410,18 @@ pub(crate) fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Respo
     resp
 }
 
-/// The unauthenticated surface, in full: the PRM document, `GET /api/health`,
-/// and (when enabled) the webview's token-free page shell. `None` means the
-/// request is not one of these and must authenticate.
+/// The unauthenticated surface, in full: the PRM document and `GET
+/// /api/health` (the site's static assets are served beside it). `None` means
+/// the request is not one of these and must authenticate. ADR-073's view, once
+/// served here too, is retired (ADR-119 Amendment 2 B4).
 ///
 /// @ai-caution: [security] Everything returned from here is served to ANY
 /// caller that can reach the port. Nothing added here may carry KB content, a
 /// credential, or anything that identifies this daemon (version, fingerprint,
-/// KB names) -- `health_opens_nothing_else` and
-/// `webview_shell_is_token_free_and_identical_for_every_caller` pin that.
+/// KB names) -- `health_opens_nothing_else` pins that.
 fn public_response(
     req: &Request<Incoming>,
     config: &ResourceServerConfig,
-    doc_store: Option<&Arc<DocStore>>,
 ) -> Option<Response<Full<Bytes>>> {
     let path = req.uri().path();
     if path == "/.well-known/oauth-protected-resource" {
@@ -465,25 +440,7 @@ fn public_response(
             serde_json::json!({"status": "ok"}),
         ));
     }
-    // ADR-073/Phase E (#547): only when `webview_enabled` AND the path matches
-    // `/kb/{kb_id}/view` -- otherwise the pre-existing authenticated path runs
-    // unchanged (a disabled view falls through to the bare diagnostic).
-    let kb_id = config
-        .webview_enabled
-        .then(|| crate::webview::parse_view_path(path))
-        .flatten()?;
-    if has_query_access_token(req) {
-        return Some(json_response(
-            StatusCode::BAD_REQUEST,
-            serde_json::json!({
-                "error": "invalid_request",
-                "error_description": "access tokens are not accepted in the query string, \
-                    which is written to access logs; open the view as \
-                    /kb/<kb_id>/view#access_token=<token> instead",
-            }),
-        ));
-    }
-    Some(render_webview_response(kb_id, doc_store))
+    None
 }
 
 /// Validate `token` against whichever population it claims membership in:
@@ -649,7 +606,7 @@ async fn handle_request(
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let config = &listener.config;
     let doc_store = listener.doc_store.as_ref();
-    if let Some(resp) = public_response(&req, config, doc_store) {
+    if let Some(resp) = public_response(&req, config) {
         return Ok(resp);
     }
     // ADR-119 L1a: the site's static assets are public (no KB content, and a
@@ -956,45 +913,6 @@ pub(crate) async fn read_limited_body(
             Ok(Bytes::new())
         }
     }
-}
-
-/// Build the response for `GET /kb/{kb_id}/view` (ADR-073/Phase E, #547):
-/// the page SHELL, identical for every caller.
-///
-/// ADR-111 P1 changed what this is. It used to be gated on the caller's token
-/// -- read from the header or `?access_token=` -- and embedded that token in the
-/// HTML for the page's own polling. The query string is written to access logs,
-/// so the token now travels in the URL FRAGMENT, which a browser never sends to
-/// a server. The server therefore cannot know the principal when it serves this
-/// page and does not try: the shell carries no KB content and no credential,
-/// and the access gate ADR-073 put here is the page's FIRST request,
-/// `kb/query.capabilities`, which refuses a non-member before any node is
-/// listed. ADR-073's gate G5 ("never a page that renders and only fails on its
-/// first poll") holds in substance -- nothing renders before that answer -- but
-/// no longer server-side.
-pub(crate) fn render_webview_response(
-    kb_id: &str,
-    doc_store: Option<&Arc<DocStore>>,
-) -> Response<Full<Bytes>> {
-    // A configuration fact, not a per-caller one, so reporting it to an
-    // unauthenticated caller discloses nothing about any principal or KB.
-    if doc_store.is_none() {
-        return json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({
-                "error": "kb webview is enabled but no DocStore is available on this daemon \
-                          (collab.enabled is false)"
-            }),
-        );
-    }
-    let html = crate::webview::render_page(kb_id);
-    with_no_store(
-        Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::CONTENT_TYPE, "text/html; charset=utf-8"),
-    )
-    .body(Full::new(Bytes::from(html)))
-    .expect("building a response from a fixed status/body never fails")
 }
 
 /// The routing decision `handle_request` makes once a bearer token has

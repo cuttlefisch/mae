@@ -630,7 +630,6 @@ async fn kb_query_unreachable_when_disabled() {
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
-        webview_enabled: false,
         second_factor: Default::default(),
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");
@@ -687,7 +686,6 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
-        webview_enabled: false,
         second_factor: Default::default(),
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");

@@ -258,7 +258,8 @@ self_issued_tokens_enabled = true               # accept this daemon's own token
 self_issued_token_ttl_secs = 3600               # default lifetime of `token mint`
 self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` refuses to exceed
 # kb_query_max_scan_nodes = 500                 # search/agenda/health scan cap — see below
-# webview_enabled = false                       # GET /kb/<id>/view
+# site_enabled = true                          # the live KB site, GET /kb/<kb-id>/<id> (ADR-119)
+# webview_enabled: deprecated and ignored (ADR-119 Amendment 2 B4)
 ```
 
 - **The JWKS fetch needs CA certificates.** By default it trusts the system's roots. An image with
