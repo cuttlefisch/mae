@@ -91,6 +91,130 @@ export interface ConstellationOptions {
 
 const TAU = Math.PI * 2;
 
+/** The angle between two directions, 0 to pi. */
+function angleGap(a: number, b: number): number {
+  const x = Math.abs((((a - b) % TAU) + TAU) % TAU);
+  return Math.min(x, TAU - x);
+}
+
+/**
+ * Which of `slots` equal slots round a ring (slot j centred at (j + 1/2) of a
+ * step, clockwise from the top) each port takes, given the direction of its
+ * subfolder's ring, `targets` in increasing order in [0, 2 pi). The ports keep
+ * that order round the ring and take distinct slots; of those assignments, the
+ * one with the least sum of squared offsets. (Nearest free slot, port by port,
+ * left the last of four ports in a four-slot ring 143 degrees off, on the far
+ * side.)
+ *
+ * The first port tries the slots within k + 1 of its own direction (k ports:
+ * a cluster of them pushes it at most that far), the rest follow clockwise by
+ * dynamic programming. `exhaustive` tries every slot (the tests compare).
+ */
+export function portSlots(
+  targets: number[],
+  slots: number,
+  exhaustive = false,
+  phase = 0,
+): number[] {
+  const k = targets.length;
+  if (k === 0) return [];
+  const step = TAU / slots;
+  const cost = (i: number, j: number) => angleGap(phase + (j + 0.5) * step, targets[i]!) ** 2;
+  const starts = new Set<number>();
+  if (exhaustive || 2 * (k + 1) + 1 >= slots) for (let r = 0; r < slots; r++) starts.add(r);
+  else {
+    const home = Math.floor(((((targets[0]! - phase) % TAU) + TAU) % TAU) / step);
+    for (let d = -(k + 1); d <= k + 1; d++) starts.add((((home + d) % slots) + slots) % slots);
+  }
+  let bestTotal = Infinity;
+  let best: number[] = [];
+  const dp: Float64Array[] = Array.from({ length: k }, () => new Float64Array(slots));
+  const from: Int32Array[] = Array.from({ length: k }, () => new Int32Array(slots));
+  for (const r of [...starts].sort((a, b) => a - b)) {
+    // dp[i][q]: port i at position q of the slots taken clockwise from r.
+    for (let i = 0; i < k; i++) dp[i]!.fill(Infinity);
+    dp[0]![0] = cost(0, r);
+    for (let i = 1; i < k; i++) {
+      let run = Infinity;
+      let arg = -1;
+      for (let q = i; q <= slots - (k - i); q++) {
+        if (dp[i - 1]![q - 1]! < run) {
+          run = dp[i - 1]![q - 1]!;
+          arg = q - 1;
+        }
+        if (arg < 0) continue;
+        dp[i]![q] = run + cost(i, (r + q) % slots);
+        from[i]![q] = arg;
+      }
+    }
+    let q = k - 1;
+    for (let x = k; x < slots; x++) if (dp[k - 1]![x]! < dp[k - 1]![q]!) q = x;
+    const total = dp[k - 1]![q]!;
+    if (total < bestTotal - 1e-12) {
+      bestTotal = total;
+      const picked: number[] = [];
+      for (let i = k - 1; i >= 0; i--) {
+        picked[i] = (r + q) % slots;
+        q = from[i]![q]!;
+      }
+      best = picked;
+    }
+  }
+  return best;
+}
+
+/** Signed angle from b to a, in (-pi, pi]. */
+function signedGap(a: number, b: number): number {
+  const x = (((a - b) % TAU) + TAU) % TAU;
+  return x > Math.PI ? x - TAU : x;
+}
+
+/**
+ * The ring's rotation and each port's slot: `portSlots` on a slot grid turned
+ * by `phase` (0 to one slot), the phase chosen so the ports face their
+ * subfolders as closely as the equal slots allow. With the grid fixed at the
+ * top, ports were up to half a slot off their subfolders, 45 degrees in a
+ * four-slot ring. Candidates: no turn, and the turn that
+ * puts each port's subfolder (up to 24 of them) exactly on a slot centre; each
+ * candidate is then moved by the mean offset of its assignment and assigned
+ * again. The least sum of squared offsets wins (ties: the smaller turn).
+ */
+export function facePorts(
+  targets: number[],
+  slots: number,
+): { phase: number; slots: number[]; cost: number } {
+  const k = targets.length;
+  const step = TAU / slots;
+  const modStep = (a: number) => ((a % step) + step) % step;
+  const evaluate = (phase: number) => {
+    const js = portSlots(targets, slots, false, phase);
+    const cost = js.reduce(
+      (s2, j, i) => s2 + angleGap(phase + (j + 0.5) * step, targets[i]!) ** 2,
+      0,
+    );
+    return { phase, slots: js, cost };
+  };
+  const candidates = new Set<number>([0]);
+  const every = Math.max(1, Math.ceil(k / 24));
+  for (let i = 0; i < k; i += every) candidates.add(modStep(targets[i]! - step / 2));
+  let best = evaluate(0);
+  const consider = (r: { phase: number; slots: number[]; cost: number }) => {
+    if (
+      r.cost < best.cost - 1e-12 ||
+      (Math.abs(r.cost - best.cost) <= 1e-12 && r.phase < best.phase)
+    )
+      best = r;
+  };
+  for (const c of [...candidates].sort((a, b) => a - b)) {
+    const r = evaluate(c);
+    consider(r);
+    const mean =
+      r.slots.reduce((s2, j, i) => s2 + signedGap(targets[i]!, c + (j + 0.5) * step), 0) / k;
+    consider(evaluate(modStep(c + mean)));
+  }
+  return best;
+}
+
 export function layoutConstellation(
   input: Record<string, IndexEntry> | Hierarchy,
   opts: ConstellationOptions = {},
@@ -246,6 +370,46 @@ export function layoutConstellation(
     const d = discs.get(p.id)!;
     d.cx = p.x;
     d.cy = p.y;
+  }
+
+  // Now that every ring has its place, each port moves to the slot that faces
+  // its subfolder's ring, and the notes fill the other slots in their order.
+  // The slots were dealt in list order above, before anyone knew where the
+  // subfolders would land: a port could sit on the far side, its line crossing
+  // its own ring, and a click on the right of the ring led to a ring on the
+  // left.
+  for (const d of discs.values()) {
+    const ports = d.wedges.filter((w) => w.kind === "port");
+    if (ports.length === 0) continue;
+    const step = d.wedges[0]!.a1 - d.wedges[0]!.a0;
+    const slots = Math.round(TAU / step);
+    const norm = (a: number) => ((a % TAU) + TAU) % TAU;
+    // polar(): clockwise from the top, so the angle of (dx, dy) is atan2(dx, -dy).
+    const toward = (w: Wedge) => {
+      const c = discs.get(w.id)!;
+      return norm(Math.atan2(c.cx - d.cx, -(c.cy - d.cy)));
+    };
+    const sorted = ports.map((w) => ({ w, t: toward(w) })).sort((x, y) => x.t - y.t);
+    // The whole ring turns with the ports (the notes keep their order in it).
+    const { phase, slots: bestSlots } = facePorts(
+      sorted.map((x) => x.t),
+      slots,
+    );
+    const free = new Set(Array.from({ length: slots }, (_, j) => j));
+    sorted.forEach(({ w }, i) => {
+      const j = bestSlots[i]!;
+      free.delete(j);
+      w.a0 = phase + j * step;
+      w.a1 = phase + (j + 1) * step;
+    });
+    const rest = [...free].sort((x, y) => x - y);
+    let n = 0;
+    for (const w of d.wedges) {
+      if (w.kind === "port") continue;
+      const j = rest[n++]!;
+      w.a0 = phase + j * step;
+      w.a1 = phase + (j + 1) * step;
+    }
   }
 
   const at = (w: Wedge, r: "inner" | "outer" | "mid"): [number, number] => {
