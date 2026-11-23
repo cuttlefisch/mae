@@ -945,6 +945,11 @@ fn validate_json_type(
 
 /// Check write-path tools against the sandbox directory during test mode.
 /// Returns `Some(error_message)` if the call should be blocked, `None` if OK.
+///
+/// An early refusal with a clear message, not the confinement itself: that is
+/// enforced at each effect (`Editor::refuse_untrusted_write`, #969), which
+/// covers saves and tools this list does not name, and `rename_file`'s real
+/// source, the active buffer's file, which no argument here names.
 fn sandbox_guard(
     tool_name: &str,
     args: &serde_json::Value,

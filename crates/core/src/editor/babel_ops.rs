@@ -297,6 +297,18 @@ impl Editor {
             return msg;
         }
 
+        // Every target is a write this command was asked for, so a tangle run
+        // inside an AI dispatch is held to the same rule as a save (#969). A
+        // `:tangle` header names any path, `.mae/init.scm` included: the
+        // `create_file` escalation in one block. All or nothing: one refused
+        // target and no file is written. A human tangling their own literate
+        // config is unaffected.
+        for out in &outputs {
+            if let Err(e) = self.refuse_untrusted_write(&out.path, super::WriteOrigin::Command) {
+                self.set_status(e.clone());
+                return e;
+            }
+        }
         let results = tangle::write_tangle_outputs(&outputs, true);
         let mut success_count = 0;
         let mut errors = Vec::new();
@@ -546,9 +558,16 @@ impl Editor {
     /// An unsaved buffer has no natural output location, so guessing one *is*
     /// the defect; reporting that is the fix (ADR-086: say whether the
     /// postcondition holds).
+    ///
+    /// Both exports write through here, so it is also where an AI-originated
+    /// export is held to the save rule (#969).
     fn export_output_path(&self, buf_idx: usize, ext: &str) -> Result<PathBuf, String> {
         match self.buffers[buf_idx].file_path() {
-            Some(path) => Ok(PathBuf::from(path).with_extension(ext)),
+            Some(path) => {
+                let out = PathBuf::from(path).with_extension(ext);
+                self.refuse_untrusted_write(&out, super::WriteOrigin::Command)?;
+                Ok(out)
+            }
             None => Err(
                 "Export needs a saved file — this buffer has no path. Save it first, \
                  then export."

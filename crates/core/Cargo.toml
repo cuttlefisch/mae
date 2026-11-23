@@ -73,6 +73,8 @@ parking_lot = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
+# path_confine tests: a directory name that exists nowhere.
+uuid = { version = "1", features = ["v4"] }
 # Remote-hub tests run the editor's shape: work inside `Runtime::block_on`.
 tokio = { version = "1", features = ["rt"] }
 criterion = { version = "0.8", features = ["html_reports"] }
