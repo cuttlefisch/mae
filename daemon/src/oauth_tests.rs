@@ -400,6 +400,23 @@ mod tests {
         );
     }
 
+    /// The 403 for a token without a required group is a contract: the
+    /// browser client's backend recognises it by status 403 and
+    /// `kind == "group_required"` (with `error` the RFC 6750 code
+    /// `insufficient_scope`) and answers its own not-found. A change to any of
+    /// the three must be deliberate and announced, so it is pinned here.
+    #[tokio::test]
+    async fn the_group_refusal_body_is_a_pinned_contract() {
+        use http_body_util::BodyExt;
+        let r = group_refusal();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        let bytes = r.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "insufficient_scope");
+        assert_eq!(body["kind"], "group_required");
+        assert!(body["error_description"].is_string());
+    }
+
     #[tokio::test]
     async fn a_request_body_within_the_configured_limit_is_accepted_unchanged() {
         use http_body_util::{BodyExt, Full, Limited};
@@ -703,6 +720,18 @@ mod tests {
             "/kb/k/other/a",
         ] {
             assert_eq!(site_path(bad), None, "{bad}");
+        }
+        // Every path under /kb/ is the site's: a malformed one is its
+        // not-found (`Some(None)`), not the listener's bearer probe.
+        for kb_path in ["/kb/k", "/kb/k/a/b", "/kb//n", "/kb/k/tags/"] {
+            assert_eq!(site_request(kb_path), Some(None), "{kb_path}");
+        }
+        assert_eq!(
+            site_request("/kb/k/n1"),
+            Some(Some(("k".into(), View::Page("n1".into()))))
+        );
+        for other in ["/", "/kbx/k/n", "/x/kb/k/n", "/mcp"] {
+            assert_eq!(site_request(other), None, "{other}");
         }
     }
 

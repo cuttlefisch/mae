@@ -681,8 +681,12 @@ async fn handle_request(
     // ADR-119 L1a: the live KB site, read-only, when enabled. Authenticated
     // like every route here; the KB's read gate decides the rest.
     if config.site_enabled {
-        if let Some((kb_id, view)) = site_path(req.uri().path()) {
-            return Ok(site_route(&req, &listener, &principal, &kb_id, &view).await);
+        match site_request(req.uri().path()) {
+            Some(Some((kb_id, view))) => {
+                return Ok(site_route(&req, &listener, &principal, &kb_id, &view).await);
+            }
+            Some(None) => return Ok(site_response(StatusCode::NOT_FOUND, "not found".into())),
+            None => {}
         }
     }
 
@@ -713,6 +717,15 @@ async fn handle_request(
     )
     .await;
     Ok(json_response(StatusCode::OK, body))
+}
+
+/// Whether `path` is the site's (`Some`), and if so which view (`Some(None)`:
+/// the site's not-found). Every path under `/kb/` is the site's, so one that
+/// names no view gets the site's not-found, never the bearer probe the rest of
+/// the listener answers: `/kb/<kb-id>` without its slash once answered 200
+/// with JSON (A5: one not-found for every non-page).
+pub(crate) fn site_request(path: &str) -> Option<Option<(String, mae_daemon::site::View)>> {
+    path.starts_with("/kb/").then(|| site_path(path))
 }
 
 /// `/kb/<kb-id>/<id>`, with `<id>` percent-decoded. One segment each: any

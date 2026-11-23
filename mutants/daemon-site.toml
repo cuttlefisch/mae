@@ -62,3 +62,13 @@ filter = "test(a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages)"
 file = "daemon/src/site.rs"
 find = '''    let filetags = if tags.is_empty() {'''
 replace = '''    let filetags = if true {'''
+
+[[mutant]]
+id = "daemon-site/kb-path-falls-through"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_site_path_is_one_kb_and_one_decoded_id)"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''    path.starts_with("/kb/").then(|| site_path(path))'''
+replace = '''    site_path(path).map(Some)'''
