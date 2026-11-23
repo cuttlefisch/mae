@@ -21,6 +21,14 @@ replace = '''jsonwebtoken = { version = "=11.1.0", '''
 file = "daemon/Cargo.lock"
 find = '''# It is not intended for manual editing.'''
 replace = '''# It is not intended for manual editing (mutant).'''
+# With `aud` required, jsonwebtoken 11 refuses these tokens too (as a missing
+# claim), so the downgrade alone changed nothing and the mutant survived every
+# night from 2026-11-20. The pin is the second line of defence: drop the
+# requirement as well, and only version 12's typed parsing still refuses them.
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''    validation.set_required_spec_claims(&["exp", "aud"]);'''
+replace = '''    validation.set_required_spec_claims(&["exp"]);'''
 
 [[mutant]]
 id = "jsonwebtoken/v11-accepts-an-unknown-crit-header"
@@ -41,7 +49,10 @@ replace = '''# It is not intended for manual editing (mutant).'''
 id = "jsonwebtoken/external-validator-skips-aud"
 runner = "daemon"
 targets = ["--bin", "mae-daemon"]
-filter = "test(a_non_string_audience_is_refused)"
+# A token for another resource, with a well-formed string `aud`: what audience
+# validation exists for. (The non-string test cannot see this mutant: since
+# jsonwebtoken 12 a non-string `aud` fails parsing even with validation off.)
+filter = "test(token_for_a_different_resource_is_rejected)"
 [[mutant.edit]]
 file = "daemon/src/oauth.rs"
 find = '''    validation.validate_exp = true;

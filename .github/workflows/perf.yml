@@ -24,7 +24,10 @@ jobs:
   growth-ratios:
     name: perf / growth ratios
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Daily and non-gating. Since #961 the remaining timing tests compare sizes
+    # both past the last-level cache; the KB pair alone populates 32k nodes,
+    # about 20 minutes in a debug build, so 40 minutes left no margin.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust

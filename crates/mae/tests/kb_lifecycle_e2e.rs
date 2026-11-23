@@ -7,8 +7,11 @@
 use mae_kb::{CozoKbStore, KbStore, Node, NodeKind};
 use std::time::Instant;
 
-const LOAD_ALL_MAX_RATIO: f64 = 64.0;
-const FTS_MAX_RATIO: f64 = 64.0;
+// Both sizes are past the last-level cache (#961), so the ratio measures the
+// algorithm, not the cache step: linear ~4x for 4x nodes, quadratic ~16x; the
+// bound sits midway.
+const LOAD_ALL_MAX_RATIO: f64 = 8.0;
+const FTS_MAX_RATIO: f64 = 8.0;
 
 fn should_run() -> bool {
     std::env::var("MAE_KB_LIFECYCLE").is_ok()
@@ -387,12 +390,11 @@ fn growth_ratio(
     large_n: usize,
     op: impl Fn(&CozoKbStore) -> usize,
 ) -> (f64, f64, f64) {
-    const ROUNDS: usize = 7;
-    // Equal windows (#947): the small store is timed over `reps` runs (the size
-    // ratio), so both windows last about as long and are equally exposed to
-    // preemption; one short run against one long run lets a busy runner inflate
-    // only the large side.
-    let reps = (large_n / small_n).max(1);
+    const ROUNDS: usize = 3;
+    // Both stores are far past the last-level cache (#961), so one run of each
+    // per round is enough: neither side is cache-hot, and the large side is not
+    // short enough to be dominated by scheduler noise.
+    let reps = 1;
     let (_t1, small) = populated_store(small_n);
     let (_t2, large) = populated_store(large_n);
     let (mut best_small, mut best_large) = (f64::MAX, f64::MAX);
@@ -412,7 +414,7 @@ fn growth_ratio(
 /// `load_all` is linear in the number of nodes. A ratio, not a budget (issue
 /// #947): "under 500 ms for 1,000 nodes" fails on a busy shared runner and
 /// would not catch a quadratic load until it was already enormous. Going from
-/// 250 to 4,000 nodes (16x) costs ~16x if linear and ~256x if quadratic.
+/// 8,000 to 32,000 nodes (4x) costs ~4x if linear and ~16x if quadratic.
 ///
 /// Calibration: see `LOAD_ALL_MAX_RATIO` below, filled in from the
 /// measurements recorded there.
@@ -425,19 +427,19 @@ fn test_load_all_grows_linearly_not_quadratically() {
     let (_tmp, store) = populated_store(1000);
     assert_eq!(store.load_all().unwrap().len(), 1000);
 
-    let (ratio, small, large) = growth_ratio(250, 4000, |s| s.load_all().unwrap().len());
-    eprintln!("load_all growth 250->4000: {ratio:.1}x ({small:.5}s -> {large:.5}s)");
+    let (ratio, small, large) = growth_ratio(8_000, 32_000, |s| s.load_all().unwrap().len());
+    eprintln!("load_all growth 8000->32000: {ratio:.1}x ({small:.5}s -> {large:.5}s)");
     assert!(
         ratio < LOAD_ALL_MAX_RATIO,
-        "load_all time grew {ratio:.0}x from 250 to 4,000 nodes ({small:.4}s -> {large:.4}s); \
-         linear would be ~16x, quadratic ~256x"
+        "load_all time grew {ratio:.0}x from 8,000 to 32,000 nodes ({small:.4}s -> {large:.4}s); \
+         linear would be ~4x, quadratic ~16x"
     );
 }
 
 /// FTS search time is at most linear in the corpus. The query here matches
-/// every node, so scoring is linear (measured: ~12x for 16x nodes); what this
+/// every node, so scoring is linear (measured: ~12x for 16x nodes at the old, cache-straddling sizes); what this
 /// guards is a SUPERLINEAR regression, such as a per-node corpus scan. Going
-/// from 250 to 4,000 nodes (16x) costs ~16x if linear and ~256x if quadratic.
+/// from 8,000 to 32,000 nodes (4x) costs ~4x if linear and ~16x if quadratic.
 /// A ratio, not a budget (issue #947).
 #[test]
 #[ignore]
@@ -454,16 +456,16 @@ fn test_fts_search_does_not_scan_the_corpus() {
         "FTS should find matches"
     );
 
-    let (ratio, small, large) = growth_ratio(250, 4000, |s| {
+    let (ratio, small, large) = growth_ratio(8_000, 32_000, |s| {
         let hits = s.fts_search("knowledge management", 20).unwrap();
         assert!(!hits.is_empty(), "FTS should find matches");
         hits.len()
     });
-    eprintln!("fts growth 250->4000: {ratio:.1}x ({small:.5}s -> {large:.5}s)");
+    eprintln!("fts growth 8000->32000: {ratio:.1}x ({small:.5}s -> {large:.5}s)");
     assert!(
         ratio < FTS_MAX_RATIO,
-        "FTS search time grew {ratio:.0}x from 250 to 4,000 nodes ({small:.5}s -> {large:.5}s); \
-         linear would be ~16x, quadratic ~256x"
+        "FTS search time grew {ratio:.0}x from 8,000 to 32,000 nodes ({small:.5}s -> {large:.5}s); \
+         linear would be ~4x, quadratic ~16x"
     );
 }
 
