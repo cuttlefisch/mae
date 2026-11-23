@@ -17,8 +17,8 @@ use std::collections::HashSet;
 
 use mae_org::{
     heading_anchor, parse, render, render_inline, semantics_with, text_of, Attr, Document, Element,
-    Headline, Keyword, Node, ParseOptions, RenderDiagnostic, RenderOptions, Resolver,
-    SemanticsOptions, SyntaxKind, Tag, ORG_EXPORT_SELECT_TAGS,
+    Headline, HeadlineLevels, Keyword, Node, ParseOptions, RenderDiagnostic, RenderOptions,
+    Resolver, SemanticsOptions, SyntaxKind, Tag, ORG_EXPORT_SELECT_TAGS,
 };
 
 /// The page settings `#+OPTIONS:` carries that the shell reads.
@@ -32,22 +32,24 @@ pub struct PageSettings {
     pub with_author: bool,
     /// `date:` — whether the date line is shown.
     pub with_date: bool,
-    /// `H:N` was given. Org exports headlines deeper than N as list items;
-    /// mae-org renders every level as a heading, so the cap is ignored and
-    /// the editor says so.
-    pub headline_cap_ignored: bool,
+    /// `H:N` — how many headline levels export as headings; deeper ones
+    /// export as list items ([`HeadlineLevels`]). `None` when the value is
+    /// not a non-negative integer (`H:nil`, `H:-1`): Org's
+    /// `org-export-low-level-p` then caps nothing.
+    pub headline_levels: Option<usize>,
 }
 
 impl Default for PageSettings {
     /// Org's defaults (`org-export-with-toc` t, headline levels 3 deep,
-    /// `org-export-with-author` t, `org-export-with-date` t).
+    /// `org-export-with-author` t, `org-export-with-date` t,
+    /// `org-export-headline-levels` 3).
     fn default() -> Self {
         PageSettings {
             toc: true,
             toc_depth: 3,
             with_author: true,
             with_date: true,
-            headline_cap_ignored: false,
+            headline_levels: Some(HeadlineLevels::ORG_DEFAULT),
         }
     }
 }
@@ -120,7 +122,9 @@ struct Pipeline {
     page: Exported,
 }
 
-fn run(source: &str) -> Pipeline {
+/// `subtree`: the byte offset of a subtree export, whose headline levels
+/// Org counts from the subtree's root (its narrowed parse tree's top level).
+fn run(source: &str, subtree: Option<usize>) -> Pipeline {
     let doc = parse(source, &ParseOptions::default());
     // Pass 1: the tag settings that decide what the export withholds.
     let sem = semantics_with(&doc, &semantics_options(&settings_keywords(&doc)));
@@ -134,7 +138,19 @@ fn run(source: &str) -> Pipeline {
         .filter(|k| !in_comment_subtree(k) && !starts_in(&withheld, k.syntax()))
         .map(|k| (k.key().to_ascii_uppercase(), k.value()))
         .collect();
-    let options = RenderOptions::default();
+    let mut page_settings = PageSettings::default();
+    for (_, value) in settings.iter().filter(|(k, _)| k == "OPTIONS") {
+        apply_options(value, &mut page_settings);
+    }
+    let root = subtree.and_then(|offset| innermost_headline(&doc, source.len(), offset));
+    let levels = page_settings.headline_levels.map(|n| {
+        let levels = HeadlineLevels::new(n);
+        match &root {
+            Some(h) => levels.from_level(h.level()),
+            None => levels,
+        }
+    });
+    let options = RenderOptions::default().with_headline_levels(levels);
     let resolver = Resolver::default();
     let rendered = render(&doc, &sem, &options, &resolver);
 
@@ -146,10 +162,6 @@ fn run(source: &str) -> Pipeline {
             render_inline(&joined, &options, &resolver)
         }
     };
-    let mut page_settings = PageSettings::default();
-    for (_, value) in settings.iter().filter(|(k, _)| k == "OPTIONS") {
-        apply_options(value, &mut page_settings);
-    }
     let page = Exported {
         title: inline("TITLE"),
         author: inline("AUTHOR"),
@@ -173,7 +185,19 @@ fn run(source: &str) -> Pipeline {
 
 /// The whole document, as Org's export shows it.
 pub fn export_document(source: &str) -> Exported {
-    run(source).page
+    run(source, None).page
+}
+
+/// The innermost headline holding byte `offset` of a source of `len` bytes.
+fn innermost_headline(doc: &Document, len: usize, offset: usize) -> Option<Headline> {
+    let contains = |h: &Headline| {
+        let r = h.syntax().text_range();
+        let (start, end) = (usize::from(r.start()), usize::from(r.end()));
+        start <= offset && (offset < end || (end == len && offset == len))
+    };
+    // Document order puts a headline before its descendants: the last one
+    // holding the offset is the innermost.
+    doc.headlines().filter(contains).last()
 }
 
 /// The subtree of the innermost headline holding byte `offset` of `source`,
@@ -182,21 +206,8 @@ pub fn export_document(source: &str) -> Exported {
 /// would hide (or one inside such a subtree) is refused, never exported.
 /// The footnotes its text references come with it.
 pub fn export_subtree(source: &str, offset: usize) -> Result<Exported, SubtreeError> {
-    let p = run(source);
-    let len = source.len();
-    let contains = |h: &Headline| {
-        let r = h.syntax().text_range();
-        let (start, end) = (usize::from(r.start()), usize::from(r.end()));
-        start <= offset && (offset < end || (end == len && offset == len))
-    };
-    // Document order puts a headline before its descendants: the last one
-    // holding the offset is the innermost.
-    let target = p
-        .doc
-        .headlines()
-        .filter(contains)
-        .last()
-        .ok_or(SubtreeError::NoHeading)?;
+    let p = run(source, Some(offset));
+    let target = innermost_headline(&p.doc, source.len(), offset).ok_or(SubtreeError::NoHeading)?;
 
     // The source headlines the page renders, in order: the renderer skips
     // exactly `Semantics::unrendered`, so a headline starting inside one of
@@ -213,16 +224,25 @@ pub fn export_subtree(source: &str, offset: usize) -> Result<Exported, SubtreeEr
         .ok_or(SubtreeError::NotExported)?;
 
     let mut sections = Vec::new();
-    headline_sections(&p.rendered.body, &mut sections);
+    headline_sections(&p.rendered.body, None, &mut sections);
     if sections.len() != shown.len() {
         return Err(SubtreeError::Unplaced);
     }
-    let section = sections[index];
+    let (section, list) = sections[index];
     if !anchor_matches(section, &target) {
         return Err(SubtreeError::Unplaced);
     }
 
-    let mut body = vec![Node::Element(section.clone())];
+    let picked = match list {
+        // A list item (every level a list item, `H:0`): in its list, alone.
+        Some(list) => {
+            let mut list = list.clone();
+            list.children = vec![Node::Element(section.clone())];
+            list
+        }
+        None => section.clone(),
+    };
+    let mut body = vec![Node::Element(picked)];
     let mut refs = HashSet::new();
     footnote_refs(&section.children, &mut refs);
     if let Some(notes) = footnotes_section(&p.rendered.body, &refs) {
@@ -304,10 +324,20 @@ fn apply_options(value: &str, settings: &mut PageSettings) {
             },
             "author" => settings.with_author = on(val),
             "date" => settings.with_date = on(val),
-            "H" => settings.headline_cap_ignored = true,
+            "H" => settings.headline_levels = headline_levels(val),
             _ => {}
         }
     }
+}
+
+/// An `H:` value as Org's export uses it: the value is `read` as Lisp, and
+/// `org-export-low-level-p` caps only at a whole number (`wholenump`), so a
+/// decimal integer caps, and anything else (`nil`, `-1`, `2.5`) caps
+/// nothing. A sign and leading zeros read as Lisp reads them.
+fn headline_levels(val: &str) -> Option<usize> {
+    val.parse::<i128>()
+        .ok()
+        .and_then(|n| usize::try_from(n).ok())
 }
 
 /// Every source span the renderer skips (`Semantics::unrendered`): withheld
@@ -370,16 +400,30 @@ fn raw_html_count(doc: &Document, settings: &[(String, String)], withheld: &[(u3
     blocks + keywords
 }
 
-/// The headline sections of `nodes`, in document (pre-)order.
-fn headline_sections<'a>(nodes: &'a [Node], out: &mut Vec<&'a Element>) {
+/// The rendered headlines of `nodes` (sections, and the list items of
+/// headlines deeper than `H:`), in document (pre-)order, each with the
+/// list it is an item of. `list`: the list `nodes` are the items of.
+fn headline_sections<'a>(
+    nodes: &'a [Node],
+    list: Option<&'a Element>,
+    out: &mut Vec<(&'a Element, Option<&'a Element>)>,
+) {
     for n in nodes {
         if let Node::Element(e) = n {
             if is_headline_section(e) {
-                out.push(e);
+                out.push((e, None));
+            } else if is_headline_item(e) {
+                out.push((e, list));
             }
-            headline_sections(&e.children, out);
+            let inner = (e.tag == Tag::Ul && has_class(e, "org-headlines")).then_some(e);
+            headline_sections(&e.children, inner, out);
         }
     }
+}
+
+/// An `<li class="org-headline">`: a headline deeper than `H:`.
+fn is_headline_item(e: &Element) -> bool {
+    e.tag == Tag::Li && has_class(e, "org-headline")
 }
 
 pub(crate) fn has_class(e: &Element, class: &str) -> bool {
@@ -416,9 +460,15 @@ pub(crate) fn is_heading_tag(tag: Tag) -> bool {
 
 /// The rendered heading's anchor is the one `target`'s title gives
 /// (`h-SLUG`, or `h-SLUG--N` for a repeat): the second check that the
-/// section found by position is the target's.
+/// section (or list item) found by position is the target's.
 fn anchor_matches(section: &Element, target: &Headline) -> bool {
-    let Some(id) = section_heading(section).and_then(|h| h.get(Attr::Id)) else {
+    let title = section_heading(section).or_else(|| {
+        section.children.iter().find_map(|c| match c {
+            Node::Element(t) if has_class(t, "org-headline-title") => Some(t),
+            _ => None,
+        })
+    });
+    let Some(id) = title.and_then(|h| h.get(Attr::Id)) else {
         return false;
     };
     let title = text_of(&render_inline(
