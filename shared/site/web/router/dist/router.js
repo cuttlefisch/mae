@@ -15,7 +15,7 @@
 // by construction, not by enforcement: add no other `innerHTML`,
 // `insertAdjacentHTML`, `document.write` or parser call.
 //
-// Rules from the browser client's backend (mae-web), which every fetch goes
+// Rules from the browser client's backend, which every fetch goes
 // through: GET only; no custom request headers (they are dropped); a missing
 // session answers with a cross-origin redirect to the login, so redirects are
 // never followed here; the backend's own pages (its fixed 404, its 502) are
