@@ -9,6 +9,20 @@ use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 
 use super::Editor;
 
+/// What started a write, for [`Editor::refuse_untrusted_write`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOrigin {
+    /// A command (`:w`, `:wa`, `:rename`, `save-all-buffers`): untrusted when
+    /// it runs inside an AI dispatch, the user's own otherwise.
+    Command,
+    /// An AI tool's own effect (`create_file`, `rename_file`, an export):
+    /// untrusted whether or not a dispatch scope is open around it.
+    Agent,
+    /// The autosave timer: nobody's decision, and it cannot tell whose edit it
+    /// writes, so it is untrusted too.
+    Timer,
+}
+
 impl Editor {
     /// Re-run language detection for `idx` against its (possibly just
     /// changed) file path and invalidate the syntax cache accordingly.
@@ -59,17 +73,23 @@ impl Editor {
         crate::swap::delete_session_index(custom_dir);
     }
 
-    /// Save all modified file-backed buffers. Returns the count saved.
-    /// Errors are collected and returned as a Vec of "(name: error)" strings.
+    /// Save all modified file-backed buffers (`:wa`, `save-all-buffers`).
+    /// Returns the count saved. Errors are collected and returned as a Vec of
+    /// "(name: error)" strings.
     pub fn save_all_modified_buffers(&mut self) -> (usize, Vec<String>) {
+        self.save_all_modified_buffers_on(WriteOrigin::Command)
+    }
+
+    fn save_all_modified_buffers_on(&mut self, origin: WriteOrigin) -> (usize, Vec<String>) {
         let mut saved = 0;
         let mut errors = Vec::new();
         for i in 0..self.buffers.len() {
             if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
-                // Autosave must refuse exactly what `:w` refuses. Without this
-                // it silently does, on a timer and with no user action, the
-                // thing an explicit save is stopped from doing.
-                if let Err(e) = self.refuse_save_into_stale_archive(i) {
+                // Save-all and autosave must refuse exactly what `:w` refuses.
+                // Without this they silently do, for every buffer at once, the
+                // thing an explicit save is stopped from doing (#969: an AI's
+                // `save-all-buffers` wrote `.mae/init.scm`, which `:w` refused).
+                if let Err(e) = self.refuse_save(i, origin) {
                     errors.push(format!("{}: {}", self.buffers[i].name, e));
                     continue;
                 }
@@ -82,42 +102,91 @@ impl Editor {
         (saved, errors)
     }
 
-    /// Refuse an AI-originated save that targets MAE's own configuration (ADR-089 D4).
-    ///
-    /// This is what makes `open_file` + `buffer_write` + `execute_command save` not a
-    /// way around the `create_file` guard — the same escalation, assembled from three
-    /// individually-permitted steps.
-    ///
-    /// @ai-caution: [security] Every save entry point must call this, and the one that
-    /// matters most is `save_current_buffer` — `:w`, `:w!`, `:wq`, `:wa` and
-    /// `execute_command("save")` all funnel there, while `save_buffer_with_hash_check`
-    /// and `save_buffer_force` have no production caller at all. This comment
-    /// previously claimed "both save entry points funnel through here" while
-    /// `save_current_buffer` called `Buffer::save()` directly, so the guard was
-    /// unreachable in production and the false claim is what kept it that way. Do not
-    /// restate reachability here — assert it with a test on the live path
-    /// (`an_ai_originated_write_command_cannot_reach_project_config`).
-    ///
-    /// @ai-caution: [security] The condition is deliberately AI-origin, not tier:
-    /// a human editing their own `init.scm` in MAE, and `:set-save` writing it, must
-    /// keep working. Gating on tier alone would break both; gating on nothing leaves
-    /// the config self-writable by an agent.
-    fn refuse_ai_save_of_protected_config(&self, idx: usize) -> Result<(), String> {
-        if !self.is_ai_originated_dispatch() {
-            return Ok(());
-        }
+    /// Every refusal a save of buffer `idx` is subject to, in one place, so no
+    /// save entry point can skip one (#969 found `:wa` skipping the config
+    /// refusal). `save_current_buffer` calls the two halves separately only to
+    /// fit the KB-node save between them.
+    fn refuse_save(&self, idx: usize, origin: WriteOrigin) -> Result<(), String> {
+        self.refuse_untrusted_save(idx, origin)?;
+        self.refuse_save_into_stale_archive(idx)
+    }
+
+    fn refuse_untrusted_save(&self, idx: usize, origin: WriteOrigin) -> Result<(), String> {
         let Some(path) = self.buffers[idx].file_path() else {
             return Ok(());
         };
+        self.refuse_untrusted_write(path, origin)
+    }
+
+    /// Refuse a write to `path` that the user did not ask for: an AI tool's
+    /// effect, a command run inside an AI dispatch, or the autosave timer
+    /// (see [`WriteOrigin`]). Two rules apply to such a write:
+    ///
+    /// - MAE's own configuration is refused (ADR-089 D4). This is what makes
+    ///   `open_file` + `buffer_write` + `save` not a way around the
+    ///   `create_file` guard: the same escalation, assembled from three
+    ///   individually permitted steps.
+    /// - While a self-test or model exam sandbox is active, a path outside it is
+    ///   refused (#969), judged where the write really lands
+    ///   (`crate::path_confine`). Checked at the effect, so a tool added later
+    ///   is confined without a guard entry naming it.
+    ///
+    /// @ai-caution: [security] The condition is deliberately origin, not tier:
+    /// a human editing their own `init.scm` in MAE, and `:set-save` writing it,
+    /// must keep working, and so must a human's saves while an MCP client runs
+    /// the self-test against the same editor. Gating on tier alone would break
+    /// all three; gating on nothing leaves the config self-writable by an agent.
+    ///
+    /// @ai-caution: [security] An autosave is held to the AI rule because it
+    /// cannot tell whose edit it writes: an agent's `buffer_write` into an open
+    /// `init.scm` was otherwise persisted by the timer. The residual is the
+    /// human's own explicit `:w`/`:wa` of a buffer an agent edited: a save is
+    /// their approval, but nothing yet shows them which text an agent wrote
+    /// (#984). With that record, autosave can skip only agent-edited buffers.
+    ///
+    /// Do not restate which entry points reach this; assert it with a test on
+    /// each live path (`no_ai_or_unattended_save_reaches_project_config_on_any_path`,
+    /// `an_ai_save_outside_the_test_sandbox_is_refused_on_every_path`). A
+    /// comment here once claimed a reachability that a test then disproved.
+    pub fn refuse_untrusted_write(&self, path: &Path, origin: WriteOrigin) -> Result<(), String> {
+        if origin == WriteOrigin::Command && !self.is_ai_originated_dispatch() {
+            return Ok(());
+        }
         if crate::workspace_trust::is_protected_config_path(path) {
             return Err(format!(
                 "Refused: '{}' is MAE configuration, which governs what tools are \
-                 permitted. An AI session may not save it — ask the user to make this \
-                 change.",
+                 permitted. Only the user's own save writes it, and an AI session or an \
+                 autosave may not — ask the user to make this change.",
                 path.display()
             ));
         }
-        Ok(())
+        self.refuse_write_outside_test_sandbox(path)
+    }
+
+    /// While a test sandbox is active, refuse a write that lands outside it.
+    /// A relative `path` is judged where the write resolves it: against the
+    /// process's working directory, not the sandbox. Public for the agent's
+    /// own writes into `.mae/` (plans, memory), which the config rule above
+    /// deliberately does not apply to.
+    pub fn refuse_write_outside_test_sandbox(&self, path: &Path) -> Result<(), String> {
+        let Some(root) = self.test_sandbox_dir.as_deref() else {
+            return Ok(());
+        };
+        let outside = |why: String| {
+            Err(format!(
+                "Refused: '{}' is outside the test sandbox ({}): {why}",
+                path.display(),
+                root.display()
+            ))
+        };
+        let absolute = match std::path::absolute(path) {
+            Ok(p) => p,
+            Err(e) => return outside(format!("cannot resolve it: {e}")),
+        };
+        match crate::path_confine::confined_write(root, &absolute) {
+            Ok(_) => Ok(()),
+            Err(why) => outside(why),
+        }
     }
 
     /// Save a single buffer with content-hash verification.
@@ -126,7 +195,7 @@ impl Editor {
     /// the buffer has unsaved changes, returns an error telling the user to
     /// use `:w!` to force. Otherwise proceeds with `buffer.save()`.
     pub fn save_buffer_with_hash_check(&mut self, idx: usize) -> Result<(), String> {
-        self.refuse_ai_save_of_protected_config(idx)?;
+        self.refuse_save(idx, WriteOrigin::Command)?;
         if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
             if self.buffers[idx].check_disk_changed_by_hash() && self.buffers[idx].modified {
                 warn!(
@@ -146,7 +215,7 @@ impl Editor {
     /// Force-save a buffer, skipping the content-hash check.
     /// Used by `:w!` when the user explicitly wants to overwrite.
     pub fn save_buffer_force(&mut self, idx: usize) -> Result<(), String> {
-        self.refuse_ai_save_of_protected_config(idx)?;
+        self.refuse_save(idx, WriteOrigin::Command)?;
         self.buffers[idx].save().map_err(|e| e.to_string())?;
         if let Some(path) = self.buffers[idx].file_path() {
             debug!(path = %path.display(), "buffer force-saved (hash check skipped)");
@@ -229,7 +298,7 @@ impl Editor {
         // In-place autosave (destructive, only if autosave_interval > 0).
         let mut saved = 0;
         if self.autosave_interval > 0 {
-            let (s, errors) = self.save_all_modified_buffers();
+            let (s, errors) = self.save_all_modified_buffers_on(WriteOrigin::Timer);
             saved = s;
             if saved > 0 {
                 if errors.is_empty() {
@@ -316,7 +385,7 @@ impl Editor {
         // Refuse BEFORE `before-save` fires: a refused save must have no side
         // effects at all, and before-save advice (format-on-save and friends)
         // mutates the buffer.
-        if let Err(e) = self.refuse_ai_save_of_protected_config(idx) {
+        if let Err(e) = self.refuse_untrusted_save(idx, WriteOrigin::Command) {
             self.notify(
                 crate::notifications::Notification::error("security", "Save refused")
                     .body(e.clone())
@@ -1628,6 +1697,10 @@ pub fn filename_at_offset(rope: &ropey::Rope, pos: usize) -> Option<String> {
     }
     Some(rope.slice(start..end).to_string())
 }
+
+#[cfg(test)]
+#[path = "file_ops_refusal_tests.rs"]
+mod refusal_tests;
 
 #[cfg(test)]
 mod tests {
