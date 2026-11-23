@@ -252,6 +252,15 @@ jobs:
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only == 'true'
         run: cargo check --workspace --all-targets --features gui
 
+      # Compile every test binary first, with the profile and features the
+      # step below uses, so its 30-minute cap times the tests alone. With the
+      # compile inside it, a slow or absent compile cache expired the cap on
+      # main mid-build (2026-11-23), before a test ran.
+      - name: Build test binaries
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
+        timeout-minutes: 60
+        run: cargo test --workspace --release --features gui --no-run
+
       - name: cargo test
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         timeout-minutes: 30

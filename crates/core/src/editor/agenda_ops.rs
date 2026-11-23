@@ -4,6 +4,45 @@ use crate::buffer_view::BufferView;
 
 use super::Editor;
 
+/// Test-only count of per-node work done building the agenda (#961). Compiled
+/// out of non-test builds, so no release hot path pays for it.
+#[cfg(test)]
+pub(super) mod agenda_work {
+    use std::cell::Cell;
+    thread_local!(static VISITS: Cell<u64> = const { Cell::new(0) });
+    pub fn bump() {
+        VISITS.with(|v| v.set(v.get() + 1));
+    }
+    pub fn take() -> u64 {
+        VISITS.with(|v| v.replace(0))
+    }
+}
+
+/// One TODO node's agenda line: state, priority, title and tags.
+fn todo_line(node: &mae_kb::Node) -> AgendaLine {
+    #[cfg(test)]
+    agenda_work::bump();
+    let state = node.todo_state.as_deref().unwrap_or("TODO");
+    let pri_str = node
+        .priority
+        .map(|c| format!("[#{}] ", c))
+        .unwrap_or_default();
+    let tags_str = if node.tags.is_empty() {
+        String::new()
+    } else {
+        format!("  :{}", node.tags.join(":"))
+    };
+    AgendaLine {
+        text: format!("  {} {}{}{}", state, pri_str, node.title, tags_str),
+        kind: AgendaLineKind::TodoItem {
+            state: state.to_string(),
+            priority: node.priority,
+        },
+        node_id: Some(node.id.clone()),
+        source_file: None,
+    }
+}
+
 impl Editor {
     /// Open or refresh the `*Agenda*` buffer with TODO items from the KB.
     pub fn open_agenda(&mut self, filter: AgendaFilter) {
@@ -69,6 +108,8 @@ impl Editor {
         let nodes: Vec<mae_kb::Node> = all_todo
             .into_iter()
             .filter(|node| {
+                #[cfg(test)]
+                agenda_work::bump();
                 if let Some(ref states) = filter.todo_states {
                     if !node.todo_state.as_ref().is_some_and(|s| states.contains(s)) {
                         return false;
@@ -86,28 +127,7 @@ impl Editor {
                 source_file: None,
             });
         } else {
-            for node in &nodes {
-                let state = node.todo_state.as_deref().unwrap_or("TODO");
-                let pri_str = node
-                    .priority
-                    .map(|c| format!("[#{}] ", c))
-                    .unwrap_or_default();
-                let tags_str = if node.tags.is_empty() {
-                    String::new()
-                } else {
-                    format!("  :{}", node.tags.join(":"))
-                };
-                let line_text = format!("  {} {}{}{}", state, pri_str, node.title, tags_str);
-                lines.push(AgendaLine {
-                    text: line_text,
-                    kind: AgendaLineKind::TodoItem {
-                        state: state.to_string(),
-                        priority: node.priority,
-                    },
-                    node_id: Some(node.id.clone()),
-                    source_file: None,
-                });
-            }
+            lines.extend(nodes.iter().map(todo_line));
         }
 
         lines.push(AgendaLine {
@@ -620,36 +640,30 @@ Deploy the latest build.
         editor
     }
 
-    /// The agenda is built in time linear in the number of TODO nodes. A ratio,
-    /// not a budget: going from 2,000 to 32,000 nodes (16x) costs about 16x if
-    /// linear and 256x if quadratic, whatever the machine or build profile.
-    ///
-    /// Calibrated 2026-11-18 (release, best of five, three runs each): the real
-    /// code grew 12x-34x; a behaviour-preserving quadratic lookup (each line
-    /// re-finding its node in the list) grew 113x-249x. 64x sits between them.
+    /// The agenda does work linear in the number of TODO nodes. Counts node
+    /// visits instead of timing the build (#961): a time ratio between a
+    /// cache-resident and a cache-missing KB measures the memory hierarchy, not
+    /// the algorithm. Each node is visited exactly twice (filter, then render a
+    /// line), so the count is `2n`; a per-line re-find of the node in the list
+    /// would add `n * n`.
     #[test]
-    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
-    fn agenda_build_grows_linearly_not_quadratically() {
-        // Interleaved best of five, in equal windows (#947): the small agenda
-        // is timed over 16 builds (the size ratio), so both windows last about
-        // as long and are equally exposed to preemption.
-        let (mut s_ed, mut l_ed) = (agenda_editor(2_000), agenda_editor(32_000));
-        let (mut small, mut large) = (f64::MAX, f64::MAX);
-        for _ in 0..5 {
-            let t = std::time::Instant::now();
-            for _ in 0..16 {
-                s_ed.open_agenda(AgendaFilter::default());
-            }
-            small = small.min(t.elapsed().as_secs_f64() / 16.0);
-            let t = std::time::Instant::now();
-            l_ed.open_agenda(AgendaFilter::default());
-            large = large.min(t.elapsed().as_secs_f64());
-        }
-        let ratio = large / small.max(1e-9);
+    fn agenda_work_grows_linearly_not_quadratically() {
+        let (small_n, large_n) = (2_000usize, 32_000usize);
+        let (mut s_ed, mut l_ed) = (agenda_editor(small_n), agenda_editor(large_n));
+        agenda_work::take();
+        s_ed.open_agenda(AgendaFilter::default());
+        let w_small = agenda_work::take();
+        l_ed.open_agenda(AgendaFilter::default());
+        let w_large = agenda_work::take();
+        // Pin the exact count so a counter that stopped counting cannot pass.
+        assert_eq!(w_small, 2 * small_n as u64);
+        assert_eq!(w_large, 2 * large_n as u64);
+        let size_ratio = (large_n / small_n) as u64;
         assert!(
-            ratio < 64.0,
-            "agenda time grew {ratio:.0}x from 2,000 to 32,000 nodes ({small:.4}s -> {large:.4}s); \
-             linear would be ~16x, quadratic ~256x"
+            w_large <= w_small * size_ratio * 5 / 4,
+            "agenda work grew {w_small} -> {w_large} for {size_ratio}x nodes; \
+             linear is {size_ratio}x, quadratic {}x",
+            size_ratio * size_ratio
         );
     }
 
