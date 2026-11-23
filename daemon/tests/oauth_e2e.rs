@@ -619,86 +619,45 @@ async fn webview_route_is_inert_when_disabled_by_default() {
     );
 }
 
-/// ADR-111 P1: the view is a token-free shell. A browser navigation cannot
-/// send an `Authorization` header, and the old answer -- `?access_token=` --
-/// put a live credential in every proxy access log, browser history entry and
-/// `Referer` on the way. The page now reads the token from the URL FRAGMENT,
-/// which a browser never sends to the server, so the server cannot and does not
-/// gate the shell by principal: it is the same bytes for every caller, and it
-/// holds no KB content and no credential.
-///
-/// Selective oracle: the shell fetched WITH a valid bearer header is
-/// byte-identical to the one fetched with none -- the proof that no credential
-/// was echoed into it -- and neither contains the token.
+/// ADR-119 Amendment 2 B4: ADR-073's view is retired. With the deprecated
+/// `webview_enabled` still set (an old config must keep loading), its path
+/// is an ordinary site path behind authentication: no token-free shell is
+/// served to anyone, and the daemon starts regardless.
 #[tokio::test]
-async fn webview_shell_is_token_free_and_identical_for_every_caller() {
-    let (private_key_pem, jwks) = generate_key_material();
+async fn the_retired_view_path_is_not_served_without_a_token() {
+    let (_private_key_pem, jwks) = generate_key_material();
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
     let base_url = format!("https://{}", daemon.oauth_addr);
     let client = insecure_https_client();
-    let token = sign_token(&private_key_pem, &valid_claims());
-    let view_url = format!("{base_url}/kb/some-kb/view");
-
-    let with_header = client
-        .get(&view_url)
-        .bearer_auth(&token)
+    let anonymous = client
+        .get(format!("{base_url}/kb/some-kb/view"))
         .send()
         .await
         .unwrap();
-    assert_eq!(with_header.status(), 200);
-    let content_type = with_header
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    assert!(content_type.starts_with("text/html"), "got {content_type}");
-    let with_header = with_header.text().await.unwrap();
-
-    let anonymous = client.get(&view_url).send().await.unwrap();
-    assert_eq!(anonymous.status(), 200, "the shell carries nothing to gate");
-    let anonymous = anonymous.text().await.unwrap();
-
     assert_eq!(
-        with_header, anonymous,
-        "no caller-specific byte may enter the shell"
+        anonymous.status(),
+        401,
+        "the old shell's path now authenticates"
     );
+    let body = anonymous.text().await.unwrap();
     assert!(
-        !with_header.contains(&token),
-        "the shell must never carry the credential"
-    );
-    assert!(
-        with_header.contains("location.hash"),
-        "the page takes its token from the fragment"
+        !body.contains("location.hash"),
+        "no shell is served: {body}"
     );
 }
 
-/// The access gate moved, it did not disappear: the shell's first request is
-/// `kb/query.capabilities`, and that is where a principal with no access to
-/// the KB is refused -- before any node is listed. Driven here exactly as the
-/// page drives it, over the real wire.
+/// `kb/query.capabilities` refuses a principal with no access to the KB,
+/// before any node is listed: an access decision on an authenticated call,
+/// over the real wire.
 #[tokio::test]
-async fn the_shells_first_request_is_where_access_is_refused() {
+async fn capabilities_refuses_a_kb_the_principal_cannot_read() {
     let (private_key_pem, jwks) = generate_key_material();
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
     let base_url = format!("https://{}", daemon.oauth_addr);
     let client = insecure_https_client();
     let token = sign_token(&private_key_pem, &valid_claims());
-
-    let shell = client
-        .get(format!("{base_url}/kb/nonexistent-kb/view"))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert!(
-        shell.contains("kb/query.capabilities"),
-        "the page must ask for capabilities before anything else"
-    );
 
     let resp = client
         .post(&base_url)
@@ -770,11 +729,10 @@ async fn the_views_data_requests_reject_bad_tokens_like_every_other_route() {
     }
 }
 
-/// ADR-111 P1: the `?access_token=` fallback is REMOVED. A query-string token
-/// is refused outright -- not silently ignored, so an old shared link fails
-/// loudly with a pointer to the fragment form -- and the response never
-/// echoes it. The same request against the JSON route stays a 401: that route
-/// never accepted one.
+/// ADR-111 P1: a credential in the query string is never accepted, on any
+/// route, and never echoed: it is written to every proxy log and browser
+/// history it passes. (The retired view answered it with a 400 and a hint;
+/// with the view gone it is a plain 401, as on the JSON route.)
 #[tokio::test]
 async fn a_query_string_token_is_refused_on_every_route() {
     let (private_key_pem, jwks) = generate_key_material();
@@ -791,17 +749,13 @@ async fn a_query_string_token_is_refused_on_every_route() {
         .expect("query-string-token view request");
     assert_eq!(
         view_resp.status(),
-        400,
-        "a query-string credential must be refused, never accepted or silently dropped"
+        401,
+        "a query-string credential must never authenticate"
     );
     let view_body = view_resp.text().await.unwrap();
     assert!(
         !view_body.contains(&token),
         "the refusal must not echo the credential"
-    );
-    assert!(
-        view_body.contains("#access_token="),
-        "the refusal must say how to open the view instead: {view_body}"
     );
 
     let plain_resp = client
