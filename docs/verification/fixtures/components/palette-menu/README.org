@@ -15,6 +15,9 @@ runs the same files against its tests.
   the focused element; on a focused button, Enter and Space activate it as a browser does).
 - =tree-closed.json=, =tree-menu-open.json=, =tree-submenu-open.json= :: the expected tree of the
   page's banner in each state.
+- =scenario-es-ES.json=, =input-es-ES.html= and =tree-*-es-ES.json= :: the same scenario with the
+  page configured =es-ES=, pinning that catalogue's names for the controls, the menu and the
+  accents. The daemon's test pins this input as well. A runner takes every =scenario*.json= here.
 
 * The normalised tree
 

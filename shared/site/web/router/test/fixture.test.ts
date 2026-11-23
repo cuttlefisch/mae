@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The palette menu's golden fixture (ADR-119 A2): the daemon's page
-// (input.html, which the daemon's own test pins to its shell), the stored
-// choice and the steps of scenario.json, and the expected normalised
-// accessibility tree in each state. The browser client runs the same files
+// The palette menu's golden fixture (ADR-119 A2): one scenario per locale
+// (scenario.json, scenario-<locale>.json), each with the daemon's page in that
+// locale (an input the daemon's own test pins to its shell), the stored
+// choice and the steps, and the expected normalised accessibility tree in
+// each state. The browser client runs the same files
 // against its tests; this runs them against MAE's behaviour.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
 import { describe, expect, it } from "vitest";
@@ -33,15 +34,19 @@ interface Step {
 }
 interface Scenario {
   input: string;
+  locale: string;
   prefersColorScheme: "light" | "dark";
   storage: Record<string, string>;
   scope: string;
   states: Array<{ name: string; steps: Step[]; expected: string }>;
 }
-const scenario: Scenario = JSON.parse(read("scenario.json"));
+const scenarios: Array<[string, Scenario]> = readdirSync(DIR)
+  .filter((f) => /^scenario(-[A-Za-z0-9-]+)?\.json$/.test(f))
+  .sort()
+  .map((f) => [f, JSON.parse(read(f)) as Scenario]);
 
 /** The page after the pre-paint script and the router's behaviour, then the steps. */
-function run(steps: Step[]): Document {
+function run(scenario: Scenario, steps: Step[]): Document {
   const win = new HappyWindow({
     url: "https://site.example/kb/parity-fixture/fixture",
     settings: { disableJavaScriptFileLoading: true, disableCSSFileLoading: true, handleDisabledFileLoadingAsSuccess: true },
@@ -71,18 +76,28 @@ function run(steps: Step[]): Document {
   return win.document as unknown as Document;
 }
 
-describe("the palette menu fixture", () => {
-  for (const state of scenario.states) {
-    it(`${state.name}: the expected accessibility tree`, () => {
-      const tree = treeOf(run(state.steps), scenario.scope);
-      expect(tree).toEqual(JSON.parse(read(state.expected)));
-    });
-  }
-
-  it("the states differ where they must", () => {
-    const [closed, open, sub] = scenario.states.map((s) => JSON.parse(read(s.expected)));
-    expect(JSON.stringify(closed)).not.toContain("menuitemradio");
-    expect(JSON.stringify(open)).toContain('"focused":true');
-    expect(JSON.stringify(sub).match(/"role":"menu"/g)).toHaveLength(2);
-  });
+it("finds a scenario for each locale the fixture covers", () => {
+  expect(scenarios.map(([, s]) => s.locale).sort()).toEqual(["en-US", "es-ES"]);
 });
+
+for (const [file, scenario] of scenarios) {
+  describe(`the palette menu fixture, ${file} (${scenario.locale})`, () => {
+    it("its page is in its locale", () => {
+      expect(read(scenario.input)).toContain(`<html lang="${scenario.locale}">`);
+    });
+
+    for (const state of scenario.states) {
+      it(`${state.name}: the expected accessibility tree`, () => {
+        const tree = treeOf(run(scenario, state.steps), scenario.scope);
+        expect(tree).toEqual(JSON.parse(read(state.expected)));
+      });
+    }
+
+    it("the states differ where they must", () => {
+      const [closed, open, sub] = scenario.states.map((s) => JSON.parse(read(s.expected)));
+      expect(JSON.stringify(closed)).not.toContain("menuitemradio");
+      expect(JSON.stringify(open)).toContain('"focused":true');
+      expect(JSON.stringify(sub).match(/"role":"menu"/g)).toHaveLength(2);
+    });
+  });
+}

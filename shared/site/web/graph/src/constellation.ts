@@ -177,7 +177,7 @@ function signedGap(a: number, b: number): number {
  * four-slot ring. Candidates: no turn, and the turn that
  * puts each port's subfolder (up to 24 of them) exactly on a slot centre; each
  * candidate is then moved by the mean offset of its assignment and assigned
- * again. The least sum of squared offsets wins (ties: the smaller turn).
+ * again, until that stops improving. The least sum of squared offsets wins (ties: the smaller turn).
  */
 export function facePorts(
   targets: number[],
@@ -206,11 +206,21 @@ export function facePorts(
       best = r;
   };
   for (const c of [...candidates].sort((a, b) => a - b)) {
-    const r = evaluate(c);
+    // Alternate: the mean offset turns the ring to the best turn for this
+    // assignment, which may change the assignment; again, until it stops
+    // improving (each round only lowers the cost). One round was not enough:
+    // a random test found the result 1e-6 above a grid turn.
+    let r = evaluate(c);
     consider(r);
-    const mean =
-      r.slots.reduce((s2, j, i) => s2 + signedGap(targets[i]!, c + (j + 0.5) * step), 0) / k;
-    consider(evaluate(modStep(c + mean)));
+    for (let round = 0; round < 32; round++) {
+      const mean =
+        r.slots.reduce((s2, j, i) => s2 + signedGap(targets[i]!, r.phase + (j + 0.5) * step), 0) /
+        k;
+      const next = evaluate(modStep(r.phase + mean));
+      if (next.cost >= r.cost - 1e-15) break;
+      r = next;
+      consider(r);
+    }
   }
   return best;
 }
