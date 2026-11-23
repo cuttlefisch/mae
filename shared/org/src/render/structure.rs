@@ -98,6 +98,9 @@ impl Builder<'_> {
             _ => (String::new(), String::new()),
         };
         let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown, &slugged));
+        if self.low_level(h.level()) {
+            return self.low_level_headline(n, &h, title, (heading, section_id), out);
+        }
         let shift = usize::from(self.opts.toplevel_hlevel.get()) - 1;
         let mut head = Element::new(Tag::heading(h.level() + shift));
         if let Some(id) = heading {
@@ -114,6 +117,52 @@ impl Builder<'_> {
             wrapper = wrapper.attr(Attr::Id, id);
         }
         push(out, wrapper.with(section).into());
+    }
+
+    /// A headline deeper than [`super::HeadlineLevels`] allows, as ox-html's
+    /// `org-html-headline` renders a low-level one: a list item holding the
+    /// headline's line and then its contents (section and sub-headlines).
+    /// Org opens the list at the first such sibling and closes it at the
+    /// last; here the item joins the list the previous sibling opened, so a
+    /// run of them is one list. Nothing else is ever pushed between two
+    /// sibling headlines (a skipped one pushes nothing), and a headline's
+    /// own section holds no headline list, so the last node of `out` is such
+    /// a list only when it is the previous sibling's. Where Org's markup is
+    /// unbalanced (a sibling shallower than the one before it, both low
+    /// level: Org closes the list after the first and opens none for the
+    /// second) the second joins the same list.
+    ///
+    /// Always `<ul>`: Org picks `<ol>` for a numbered headline, and mae-org
+    /// numbers none (registered: `low-level-headline-lists`).
+    fn low_level_headline(
+        &mut self,
+        n: &SyntaxNode,
+        h: &Headline,
+        title: Vec<Node>,
+        (heading, section_id): (Option<String>, Option<String>),
+        out: &mut Vec<Node>,
+    ) {
+        let mut line = Element::new(Tag::Div).class("org-headline-title");
+        if let Some(id) = heading {
+            line = line.attr(Attr::Id, id);
+        }
+        let line = line.with(self.headline_line(h, title));
+        let mut body = vec![line.into()];
+        self.elements(n, &mut body);
+        let mut item = Element::new(Tag::Li)
+            .class("org-headline")
+            .class(&format!("org-level-{}", h.level()));
+        if let Some(id) = section_id {
+            item = item.attr(Attr::Id, id);
+        }
+        let item = item.with(body).into();
+        match out.last_mut() {
+            Some(Node::Element(list)) if is_headline_list(list) => push(&mut list.children, item),
+            _ => {
+                let list = Element::new(Tag::Ul).class("org-headlines");
+                push(out, list.with(vec![item]).into());
+            }
+        }
     }
 
     /// The headline's line: TODO keyword, priority, title and tags.
@@ -412,6 +461,13 @@ impl Builder<'_> {
             .with(vec![code.into()]);
         push(out, pre.into());
     }
+}
+
+/// A list [`Builder::low_level_headline`] opened.
+fn is_headline_list(e: &Element) -> bool {
+    e.tag == Tag::Ul
+        && e.get(Attr::Class)
+            .is_some_and(|c| c.split(' ').any(|c| c == "org-headlines"))
 }
 
 /// `[@N]`'s N when it is a decimal number.

@@ -57,6 +57,7 @@
 //! | Construct | Rendered as |
 //! |---|---|
 //! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h--untitled` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title as rendered inline-only (its macros expanded), babel objects dropped, its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
+//! | headline deeper than [`RenderOptions::headline_levels`] | as Org's export renders a low-level headline: a list item. A run of such sibling headlines is one `<ul class="org-headlines">`; each is `<li class="org-headline org-level-N">` (with the section's `id`) holding `<div class="org-headline-title" id="h-SLUG">` (the headline's line, as in a heading) and then its section and sub-headlines. Off by default: every level a heading |
 //! | section, zeroth section | its elements, unwrapped |
 //! | paragraph | `<p>` |
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |
@@ -155,6 +156,67 @@ pub struct RenderOptions {
     pub property_drawers: bool,
     /// The HTML level a top-level headline renders at. See [`ToplevelHlevel`].
     pub toplevel_hlevel: ToplevelHlevel,
+    /// How many headline levels render as headings; deeper ones render as
+    /// list items. See [`HeadlineLevels`]. `None` (the default): every
+    /// level is a heading.
+    pub headline_levels: Option<HeadlineLevels>,
+}
+
+/// Org's `:headline-levels` (`#+OPTIONS: H:N`, `org-export-headline-levels`):
+/// a headline whose RELATIVE level is above N renders as Org's export renders
+/// a low-level headline (`org-export-low-level-p`), as a list item (see the
+/// table above), and its sub-headlines with it.
+///
+/// The relative level is counted in stars, as `org-export-get-relative-level`
+/// counts it: from the least level among the document's rendered top-level
+/// headlines (`org-export--get-min-level`; an excluded or COMMENT one does
+/// not count), which is relative level 1. A document whose headlines start
+/// at `**` caps `***` under `H:1`. The HTML heading level
+/// ([`ToplevelHlevel`]) plays no part: with `toplevel_hlevel` 2 and `H:2`,
+/// `**` is an `<h3>` and `***` a list item, as in Org.
+///
+/// [`HeadlineLevels::from_level`] counts from a given level instead: Org's
+/// export of a subtree, whose root is relative level 1.
+///
+/// mae-org does not read `#+OPTIONS:` (registered: `options-keyword`); a
+/// host that exports as Org does reads `H:` there and passes it. Org's own
+/// default is [`HeadlineLevels::ORG_DEFAULT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HeadlineLevels {
+    levels: usize,
+    from: Option<usize>,
+}
+
+impl HeadlineLevels {
+    /// `org-export-headline-levels`' default.
+    pub const ORG_DEFAULT: usize = 3;
+
+    /// `levels` heading levels, counted from the document's top level.
+    /// 0 makes every headline a list item, as `H:0` does in Org.
+    pub fn new(levels: usize) -> Self {
+        HeadlineLevels { levels, from: None }
+    }
+
+    /// The same number of levels counted from headlines of `level` stars
+    /// (relative level 1; a shallower headline is a heading).
+    pub fn from_level(self, level: usize) -> Self {
+        HeadlineLevels {
+            from: Some(level),
+            ..self
+        }
+    }
+
+    pub fn levels(self) -> usize {
+        self.levels
+    }
+
+    /// Whether a headline of `level` stars renders as a list item, when the
+    /// document's top level is `top`.
+    pub(crate) fn caps(self, level: usize, top: usize) -> bool {
+        let base = self.from.unwrap_or(top);
+        // relative = level - base + 1 > levels, without underflow.
+        level.saturating_add(1) > self.levels.saturating_add(base)
+    }
 }
 
 /// The HTML heading level a top-level headline renders at: Org's

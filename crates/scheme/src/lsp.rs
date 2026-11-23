@@ -841,16 +841,16 @@ mod tests {
     /// Diagnostics (read + compile, no execution) cost grows linearly with the
     /// number of top-level forms. A ratio, not a budget (issue #947): "under 5 ms
     /// for a 3-line fib" fails on a busy runner and says nothing about growth.
-    /// 500 -> 8,000 forms (16x) costs ~16x if linear, ~256x if quadratic.
-    ///
-    /// Calibrated 2026-11-18 (best of seven, three runs each): real code grew
-    /// 15.6x-19.7x in release and 16.3x-17.2x in debug; a behaviour-preserving
-    /// quadratic mutant (every form compared with every other, release) grew
-    /// 90x-94x. 48x sits between them (mutants/timing-947.toml).
+    /// 32,000 -> 128,000 forms (4x) costs ~4x if linear, ~16x if quadratic.
+    /// Both sizes are far past the last-level cache (#961): the old 500 -> 8,000
+    /// pair put the small input in cache and the large one out, so the ratio
+    /// included the cache-to-memory step (80x for 16x nodes on CI). No work
+    /// counter fits here (the cost is spread over the reader and compiler), so
+    /// this stays a non-gating timing test. Bound 8x, midway between 4x and 16x.
     #[test]
     #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn diagnostics_grow_linearly_not_quadratically() {
-        const DIAG_MAX_RATIO: f64 = 48.0;
+        const DIAG_MAX_RATIO: f64 = 8.0;
         let vm = Vm::new();
         let src = |n: usize| -> String {
             (0..n)
@@ -858,7 +858,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let (small, large) = (src(500), src(8000));
+        let (small, large) = (src(32_000), src(128_000));
         assert!(diagnostics(&vm, &small, "p.scm").is_empty());
         assert!(diagnostics(&vm, &large, "p.scm").is_empty());
         // A broken form is still reported, at its own line (correctness, kept).
@@ -866,8 +866,8 @@ mod tests {
         assert!(!diagnostics(&vm, &bad, "p.scm").is_empty());
 
         let (ratio, s, l) = crate::timing::growth_ratio(
-            7,
-            16,
+            3,
+            1,
             || {
                 std::hint::black_box(diagnostics(&vm, &small, "p.scm"));
             },
@@ -875,38 +875,36 @@ mod tests {
                 std::hint::black_box(diagnostics(&vm, &large, "p.scm"));
             },
         );
-        eprintln!("diagnostics growth 500->8000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
+        eprintln!("diagnostics growth 32000->128000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
             ratio < DIAG_MAX_RATIO,
-            "diagnostics time grew {ratio:.0}x for 16x forms ({s:.5}s -> {l:.5}s); \
-             linear ~16x, quadratic ~256x"
+            "diagnostics time grew {ratio:.1}x for 4x forms ({s:.5}s -> {l:.5}s); \
+             linear ~4x, quadratic ~16x"
         );
     }
 
-    /// `document_symbols` is a single pass over the lines. 2,000 -> 32,000 lines
-    /// (16x) costs ~16x if linear, ~256x if quadratic. A ratio, not a budget
-    /// (issue #947).
-    ///
-    /// Calibrated 2026-11-18: real code grew 14.8x-17.8x in release and
-    /// 15.3x-16.9x in debug; a quadratic mutant (each line rescans the earlier
-    /// ones, release) grew 217x-232x. 64x sits between them.
+    /// `document_symbols` is a single pass over the lines. 32,000 -> 128,000
+    /// lines (4x) costs ~4x if linear, ~16x if quadratic. Both sizes are past
+    /// the last-level cache (#961). A counter would only count lines, which
+    /// cannot see a rescan hidden inside a helper, so this stays a non-gating
+    /// timing test. Bound 8x, midway between 4x and 16x.
     #[test]
     #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn document_symbols_grow_linearly_not_quadratically() {
-        const SYMBOLS_MAX_RATIO: f64 = 64.0;
+        const SYMBOLS_MAX_RATIO: f64 = 8.0;
         let src = |n: usize| -> String {
             (0..n)
                 .map(|i| format!("(define fn-{i} (lambda (x) x))"))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let (small, large) = (src(2000), src(32000));
-        assert_eq!(document_symbols(&small, "p.scm").len(), 2000);
-        assert_eq!(document_symbols(&large, "p.scm").len(), 32000);
+        let (small, large) = (src(32_000), src(128_000));
+        assert_eq!(document_symbols(&small, "p.scm").len(), 32_000);
+        assert_eq!(document_symbols(&large, "p.scm").len(), 128_000);
 
         let (ratio, s, l) = crate::timing::growth_ratio(
-            7,
-            16,
+            5,
+            1,
             || {
                 std::hint::black_box(document_symbols(&small, "p.scm"));
             },
@@ -914,11 +912,11 @@ mod tests {
                 std::hint::black_box(document_symbols(&large, "p.scm"));
             },
         );
-        eprintln!("document_symbols growth 2000->32000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
+        eprintln!("document_symbols growth 32000->128000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
             ratio < SYMBOLS_MAX_RATIO,
-            "document_symbols time grew {ratio:.0}x for 16x lines ({s:.5}s -> {l:.5}s); \
-             linear ~16x, quadratic ~256x"
+            "document_symbols time grew {ratio:.1}x for 4x lines ({s:.5}s -> {l:.5}s); \
+             linear ~4x, quadratic ~16x"
         );
     }
 

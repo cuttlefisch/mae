@@ -528,12 +528,6 @@ impl Editor {
                 exported.raw_html
             ));
         }
-        if exported.settings.headline_cap_ignored {
-            notes.push(
-                "#+OPTIONS: H: is ignored: every headline level is exported as a heading"
-                    .to_string(),
-            );
-        }
         if notes.is_empty() {
             String::new()
         } else {

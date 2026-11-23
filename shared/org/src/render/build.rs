@@ -79,6 +79,10 @@ pub(crate) struct DocCx<'a> {
     source: Option<&'a Document>,
     /// What property values' macros expand with, made when one needs it.
     values: std::cell::OnceCell<super::expand::ValueCx>,
+    /// The level Org's export counts headline levels from
+    /// (`org-export--get-min-level`): the least level of a top-level
+    /// headline the semantics do not skip; 1 when there is none.
+    top_level: usize,
 }
 
 pub(crate) struct Builder<'a> {
@@ -201,7 +205,7 @@ impl<'a> DocCx<'a> {
         sem: &'a Semantics,
         source: Option<&'a Document>,
     ) -> Rc<DocCx<'a>> {
-        let skip = sem
+        let skip: HashSet<(u32, u32, SyntaxKind)> = sem
             .unrendered
             .iter()
             .map(|u| (u.span.start, u.span.end, u.element))
@@ -223,7 +227,20 @@ impl<'a> DocCx<'a> {
             .iter()
             .flat_map(|s| s.done.iter().cloned())
             .collect();
+        let top_level = doc
+            .syntax()
+            .children()
+            .filter(|c| c.kind() == HEADLINE)
+            .filter(|c| {
+                let s = Span::of(c);
+                !skip.contains(&(s.start, s.end, HEADLINE))
+            })
+            .filter_map(crate::views::Headline::cast)
+            .map(|h| h.level())
+            .min()
+            .unwrap_or(1);
         Rc::new(DocCx {
+            top_level,
             skip,
             links,
             transclusions,
@@ -361,6 +378,14 @@ impl<'a> Builder<'a> {
             push(&mut body, section.into());
         }
         body
+    }
+
+    /// Whether a headline of `level` stars renders as a list item
+    /// ([`super::HeadlineLevels`]).
+    pub fn low_level(&self, level: usize) -> bool {
+        self.opts
+            .headline_levels
+            .is_some_and(|h| h.caps(level, self.cx.top_level))
     }
 
     /// Whether the semantics skipped `n`.
@@ -742,6 +767,7 @@ pub(crate) fn rendering_outside(
             images: true,
             property_drawers: true,
             toplevel_hlevel: super::ToplevelHlevel::default(),
+            headline_levels: None,
         };
         let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
         first.blank = Some(body);

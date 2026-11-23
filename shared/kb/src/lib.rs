@@ -58,6 +58,19 @@ pub mod org_ingest;
 pub mod project_identity;
 #[cfg(test)]
 mod storage_feature_guard_tests;
+/// Test-only count of per-entry work done by `KnowledgeBase::search` (#961).
+/// Compiled out of non-test builds, so no release hot path pays for it.
+#[cfg(test)]
+pub(crate) mod search_work {
+    use std::cell::Cell;
+    thread_local!(static VISITS: Cell<u64> = const { Cell::new(0) });
+    pub fn bump() {
+        VISITS.with(|v| v.set(v.get() + 1));
+    }
+    pub fn take() -> u64 {
+        VISITS.with(|v| v.replace(0))
+    }
+}
 pub mod store;
 pub mod system_kb;
 pub mod watch;
@@ -1875,6 +1888,8 @@ impl KnowledgeBase {
         let mut title_hits = Vec::new();
         let mut body_hits = Vec::new();
         for (id, cache) in self.lower.iter() {
+            #[cfg(test)]
+            search_work::bump();
             if cache.title.contains(&q)
                 || cache.lowered_id.contains(&q)
                 || cache.aliases.iter().any(|a| a.contains(&q))
@@ -1899,6 +1914,8 @@ impl KnowledgeBase {
             .lower
             .iter()
             .filter_map(|(id, cache)| {
+                #[cfg(test)]
+                search_work::bump();
                 let best = [&cache.lowered_id, &cache.title]
                     .into_iter()
                     .chain(cache.aliases.iter())
@@ -3356,46 +3373,38 @@ mod tests {
         kb
     }
 
-    /// Search is a single pass over the corpus. A ratio, not a budget (issue
-    /// #947): "under 200 ms for 2,000 nodes" fails on a busy runner and cannot see
-    /// a quadratic search until it is enormous. 500 -> 8,000 nodes (16x) costs ~16x
-    /// if linear, ~256x if quadratic. (A search that bypasses the lowercase cache
-    /// is only a constant factor slower and is not what this guards.)
-    ///
-    /// Calibrated 2026-11-18: real code grew 14.9x-18.7x in release and
-    /// 16.1x-17.9x in debug; a quadratic mutant (every entry compared with every
-    /// entry, release) grew 217x-234x. 64x sits between them.
+    /// Search does work linear in the corpus. Counts entries visited instead of
+    /// timing them (#961): the time ratio between a cache-resident and a
+    /// cache-missing corpus measured the memory hierarchy (80x for 16x nodes on
+    /// CI), not the algorithm. The count is exact: one visit per entry per pass,
+    /// so a hit query is `n` and a miss (substring pass, then the fuzzy
+    /// fallback) is `2n`. The bound is the size ratio plus a rounding margin; a
+    /// per-entry rescan of the corpus would give `n * n`.
     #[test]
-    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
-    fn search_grows_linearly_not_quadratically() {
-        const SEARCH_MAX_RATIO: f64 = 64.0;
-        let small = kb_with_nodes(500);
-        let large = kb_with_nodes(8000);
-        assert_eq!(small.search("needle").len(), 6, "needle-0,97,..,485");
-        assert_eq!(large.search("needle").len(), 83);
-
-        // Equal windows: the small search is timed over 16 runs (the size
-        // ratio), so both windows last about as long and are equally exposed to
-        // preemption. One 91 us run against one 8.5 ms run measured 93x on
-        // macOS CI for code that grows ~16x.
-        let (mut bs, mut bl) = (f64::MAX, f64::MAX);
-        for _ in 0..7 {
-            let t = std::time::Instant::now();
-            for _ in 0..16 {
-                std::hint::black_box(small.search("needle"));
+    fn search_work_grows_linearly_not_quadratically() {
+        let (small_n, large_n) = (500usize, 8000usize);
+        let (small, large) = (kb_with_nodes(small_n), kb_with_nodes(large_n));
+        for (query, passes) in [("needle", 1u64), ("zzqq-no-such-text", 2)] {
+            crate::search_work::take();
+            let hits_small = small.search(query).len();
+            let w_small = crate::search_work::take();
+            let hits_large = large.search(query).len();
+            let w_large = crate::search_work::take();
+            if passes == 1 {
+                assert_eq!((hits_small, hits_large), (6, 83), "needle-0,97,..");
             }
-            bs = bs.min(t.elapsed().as_secs_f64() / 16.0);
-            let t = std::time::Instant::now();
-            std::hint::black_box(large.search("needle"));
-            bl = bl.min(t.elapsed().as_secs_f64());
+            // Pins the exact count so a counter that silently stopped counting
+            // fails here rather than passing as "0 <= 0".
+            assert_eq!(w_small, passes * small_n as u64, "{query}: small work");
+            assert_eq!(w_large, passes * large_n as u64, "{query}: large work");
+            let size_ratio = (large_n / small_n) as u64;
+            assert!(
+                w_large <= w_small * size_ratio * 5 / 4,
+                "{query}: search work grew {w_small} -> {w_large} for {size_ratio}x nodes; \
+                 linear is {size_ratio}x, quadratic {}x",
+                size_ratio * size_ratio
+            );
         }
-        let ratio = bl / bs.max(1e-6);
-        eprintln!("kb search growth 500->8000: {ratio:.1}x ({bs:.6}s -> {bl:.6}s)");
-        assert!(
-            ratio < SEARCH_MAX_RATIO,
-            "search time grew {ratio:.0}x for 16x nodes ({bs:.6}s -> {bl:.6}s); \
-             linear ~16x, quadratic ~256x"
-        );
     }
 
     #[test]
