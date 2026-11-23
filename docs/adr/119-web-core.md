@@ -724,9 +724,11 @@ app, as tag listings only.
 
 Every live route needs a bearer token or the browser client's session (A5, A6). Feed readers and
 crawlers have neither, so a live feed or sitemap would serve nobody. The RSS feed (P-75), the sitemap
-(P-76) and the route-history redirects (P-03–P-06) are produced by the export only. P-78 still applies
-to the live app's content index (`/kb/<kb-id>/index.json`). The live app's "what's new" (P-163) is a
-page, not a feed.
+(P-76), the static redirects and the two address forms they serve (P-03, P-04), the route-history
+redirects (P-05, P-06) and the safe-file-name rule for them (P-08) are produced by the export only. The
+live app has one address per page, `/kb/<kb-id>/<id>` (P-01, P-02 for page IDs; P-07's 404 for an
+unpublished ID), and A3's ID rule is its counterpart to P-08. P-78 still applies to the live app's
+content index (`/kb/<kb-id>/index.json`). The live app's "what's new" (P-163) is a page, not a feed.
 
 ### B3. The home page is operator configuration
 
