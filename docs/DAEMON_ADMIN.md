@@ -616,6 +616,12 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   issuer, subject and principal (else `4403 principal_changed`). Any refusal of the ticket itself is
   `ticket_invalid` with the old deadline standing. The new deadline is the minting token's expiry,
   capped by `ws_max_idp_session_secs` for a bound IdP token.
+  **Revocation through a ticket renewal waits for the capped deadline.** After `binding unbind` (or
+  a rebind to another key), a socket renewing with a **token** closes at once, `4403
+  principal_changed`; one renewing with a **ticket** minted before the change gets `ticket_invalid`
+  and keeps its old deadline — at most `ws_max_idp_session_secs` (900 s by default) after its binding
+  was last read, or the token's own expiry when that cap is `0`. Keep the cap short if unbinding must
+  take effect quickly for browser clients behind a backend.
 - **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A reply over `ws_max_outbound_bytes`
   closes `1011` with reason `response_too_large`; by default that bound holds one document at
   `max_document_size_bytes` as base64 plus 1 MiB (15,029,592 at the stock 10 MB), never less than

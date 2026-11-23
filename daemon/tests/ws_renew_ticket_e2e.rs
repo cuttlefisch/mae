@@ -126,6 +126,47 @@ async fn a_ticket_renews_and_moves_the_deadline() {
     );
 }
 
+/// Send `session/renew` with `params`; the very next frame must be the `4403`
+/// close. An answer to the renewal, or any other frame first, fails at once
+/// rather than after a timeout. `path` names the credential in the failure.
+async fn renew_closes_4403(ws: &mut Ws, params: Value, path: &str) {
+    ws.send(json!({"jsonrpc": "2.0", "id": 1, "method": "session/renew", "params": params}))
+        .await;
+    match ws.next().await {
+        Event::Close(code, reason) => assert_eq!(
+            (code, reason.as_str()),
+            (4403, "principal_changed"),
+            "{path} renewal"
+        ),
+        Event::Text(v) => panic!(
+            "{path} renewal: expected the close, got a frame (renewed: {})",
+            v["result"].is_object()
+        ),
+        Event::End => panic!("{path} renewal: the socket ended without a close frame"),
+    }
+}
+
+/// B3 on both renewal paths, which share `SessionAuth::same_identity`: one
+/// socket presents a ticket minted NOW by `renewing`, the other `renewing`
+/// itself, and each must close `4403` without renewing.
+async fn both_renewals_close_4403(
+    d: &Daemon,
+    by_ticket: &mut Ws,
+    by_token: &mut Ws,
+    renewing: &str,
+) {
+    let t = ticket(d, renewing, Some(ORIGIN_A)).await;
+    renew_closes_4403(by_ticket, json!({ "ticket": t }), "ticket").await;
+    renew_closes_4403(by_token, json!({ "token": renewing }), "token").await;
+}
+
+/// The principal a socket's `session/hello` names.
+fn principal_of(hello: &Value) -> &str {
+    hello["params"]["principal"]
+        .as_str()
+        .expect("hello names a principal")
+}
+
 /// F2: a valid ticket for ANOTHER subject closes the socket `4403`, as a
 /// token for another subject does, and never answers the renewal.
 #[tokio::test]
@@ -133,26 +174,13 @@ async fn a_ticket_for_another_subject_closes_4403() {
     let d = spawn(Opts::default()).await;
     let (mut ws, _, _) = browser_socket(&d, &d.token(&member(), 3600)).await;
     let other = ticket(&d, &d.token(&member(), 3600), Some(ORIGIN_A)).await;
-    ws.send(
-        json!({"jsonrpc": "2.0", "id": 1, "method": "session/renew", "params": {"ticket": other}}),
-    )
-    .await;
-    // The very next frame is the close: an answer to the renewal, or any
-    // other frame first, fails at once rather than after a timeout.
-    match ws.next().await {
-        Event::Close(code, reason) => {
-            assert_eq!((code, reason.as_str()), (4403, "principal_changed"))
-        }
-        Event::Text(v) => panic!(
-            "expected the close, got a frame: {}",
-            v["result"].is_object()
-        ),
-        Event::End => panic!("the socket ended without a close frame"),
-    }
+    renew_closes_4403(&mut ws, json!({ "ticket": other }), "ticket").await;
 }
 
 /// F2/F3: reused, unknown, from another allowed origin, or with no origin: all
-/// one refusal, `ticket_invalid`, and the socket stays open.
+/// one refusal, `ticket_invalid`, and the socket stays open. The reverse holds
+/// too: a socket upgraded with NO `Origin` (a non-browser client) cannot renew
+/// with a ticket minted for an origin, while an originless ticket renews it.
 #[tokio::test]
 async fn refused_tickets_all_read_the_same_and_leave_the_socket_open() {
     let d = spawn(Opts::default()).await;
@@ -176,6 +204,22 @@ async fn refused_tickets_all_read_the_same_and_leave_the_socket_open() {
     let no_origin = refusal_of(&renew_ticket(&mut ws, 5, &originless).await);
     assert_eq!(no_origin, unknown, "no origin at all");
     still_open(&mut ws, 6).await;
+
+    let mut bare = connect_bearer(&d, &token, None).await;
+    let for_an_origin = ticket(&d, &token, Some(ORIGIN_A)).await;
+    let socket_has_none = refusal_of(&renew_ticket(&mut bare, 1, &for_an_origin).await);
+    assert_eq!(
+        socket_has_none, unknown,
+        "a ticket for an origin, no-origin socket"
+    );
+    still_open(&mut bare, 2).await;
+    let also_originless = ticket(&d, &token, None).await;
+    let renewed = renew_ticket(&mut bare, 3, &also_originless).await;
+    assert!(
+        ok(&renewed),
+        "an originless ticket renews it: {}",
+        renewed["error"]
+    );
 }
 
 /// F3: a ticket past its lifetime reads as unknown. The daemon runs 1-second
@@ -303,8 +347,16 @@ async fn a_token_renewal_is_unchanged() {
 
 /// `GET /ws` with a bearer header from `origin`, expected to open.
 async fn connect_bearer_from(d: &Daemon, token: &str, origin: &str) -> Ws {
+    connect_bearer(d, token, Some(origin)).await
+}
+
+/// `GET /ws` with a bearer header, from `origin` or with no `Origin` at all (a
+/// non-browser client), expected to open.
+async fn connect_bearer(d: &Daemon, token: &str, origin: Option<&str>) -> Ws {
     let auth = format!("Bearer {token}");
-    let r = upgrade(d, "mae.v1", &[("Authorization", &auth), ("Origin", origin)]).await;
+    let mut headers = vec![("Authorization", auth.as_str())];
+    headers.extend(origin.map(|o| ("Origin", o)));
+    let r = upgrade(d, "mae.v1", &headers).await;
     assert_eq!(r.status, 101, "bearer upgrade refused: {}", r.body);
     let mut ws = r.ws.unwrap();
     ws.until(|v| v["method"] == "session/hello").await;
@@ -410,4 +462,70 @@ async fn a_bound_idp_ticket_rereads_its_binding_at_renewal() {
     ws.send(json!({"jsonrpc": "2.0", "id": 4, "method": "session/renew", "params": {"ticket": rebound}}))
         .await;
     assert_eq!(ws.closed().await, (4403, "principal_changed".to_string()));
+}
+
+/// B3, the issuer clause: the same subject string from another issuer is
+/// another identity. An IdP subject is whatever string its issuer chooses;
+/// here it equals the member's fingerprint and the operator binds it to that
+/// same key, so the IdP token and a self-issued token for the key carry the
+/// same `sub` and resolve to the same principal, and differ ONLY in `iss`.
+#[tokio::test]
+async fn the_same_subject_from_another_issuer_closes_4403() {
+    let (d, pem) = idp_daemon(None).await;
+    let fp = member();
+    bind(&d, &fp, &fp);
+    let own = d.token(&fp, 3600);
+    let idp = idp_token(&pem, &fp, &[GROUP]);
+    // Control: the IdP token is accepted and names the same principal.
+    let (_, idp_hello, _) = browser_socket(&d, &idp).await;
+    assert_eq!(principal_of(&idp_hello), fp, "the IdP token names the key");
+    let (mut by_ticket, hello, _) = browser_socket(&d, &own).await;
+    assert_eq!(principal_of(&hello), fp);
+    let (mut by_token, _, _) = browser_socket(&d, &own).await;
+    both_renewals_close_4403(&d, &mut by_ticket, &mut by_token, &idp).await;
+}
+
+/// B3, the principal clause: same issuer, same subject, but rebound to another
+/// key between the socket's opening and its renewal (Amendment 2, E2). The
+/// rebind is the only thing that changes; the IdP token is the same one.
+#[tokio::test]
+async fn the_same_subject_rebound_to_another_key_closes_4403() {
+    let (d, pem) = idp_daemon(None).await;
+    let sub = format!("{}@idp", fresh());
+    let first = member();
+    bind(&d, &sub, &first);
+    let token = idp_token(&pem, &sub, &[GROUP]);
+    let (mut by_ticket, hello, _) = browser_socket(&d, &token).await;
+    assert_eq!(principal_of(&hello), first);
+    let (mut by_token, _, _) = browser_socket(&d, &token).await;
+    unbind(&d, &sub);
+    let second = member();
+    bind(&d, &sub, &second);
+    // Control: the same token now names the second key.
+    let (_, rebound, _) = browser_socket(&d, &token).await;
+    assert_eq!(principal_of(&rebound), second, "the rebind took");
+    both_renewals_close_4403(&d, &mut by_ticket, &mut by_token, &token).await;
+}
+
+/// B3, the subject clause: same issuer, same principal, another subject. The
+/// binding table is one-to-one, so the key moves: unbound from the first
+/// subject, then bound to a second (a person's IdP account replaced).
+#[tokio::test]
+async fn another_subject_bound_to_the_same_key_closes_4403() {
+    let (d, pem) = idp_daemon(None).await;
+    let fp = member();
+    let first = format!("{}@idp", fresh());
+    bind(&d, &first, &fp);
+    let opening = idp_token(&pem, &first, &[GROUP]);
+    let (mut by_ticket, hello, _) = browser_socket(&d, &opening).await;
+    assert_eq!(principal_of(&hello), fp);
+    let (mut by_token, _, _) = browser_socket(&d, &opening).await;
+    unbind(&d, &first);
+    let second = format!("{}@idp", fresh());
+    bind(&d, &second, &fp);
+    let renewing = idp_token(&pem, &second, &[GROUP]);
+    // Control: the second subject names the same key.
+    let (_, moved, _) = browser_socket(&d, &renewing).await;
+    assert_eq!(principal_of(&moved), fp, "the second subject names the key");
+    both_renewals_close_4403(&d, &mut by_ticket, &mut by_token, &renewing).await;
 }

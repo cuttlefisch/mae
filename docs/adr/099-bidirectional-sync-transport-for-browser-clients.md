@@ -567,6 +567,18 @@ renewal does: the next mint answers `identity_not_bound`, no ticket can renew, a
 its deadline, which E2's cap already bounds. A binding table that cannot be read is a fault, not a
 verdict on the ticket, and is answered as it is on every route (`internal_fault`).
 
+**Revocation through a ticket renewal waits for the deadline.** Stated plainly, because the two
+renewal paths differ here and an operator unbinding someone must not assume otherwise: when a bound
+IdP subject is unbound (or rebound to another key) while its socket is open, a **token** renewal
+closes the socket at once with `4403 principal_changed` (E2), but a **ticket** renewal — of a ticket
+minted before the change — gets `ticket_invalid` and the socket **keeps its old deadline**. That
+deadline is the one E2 capped when the socket opened or last renewed: at most
+`ws_max_idp_session_secs` (900 s by default) after the binding was last read, or the minting token's
+own `exp` when the cap is `0`. Revocation of a socket renewed only by tickets therefore takes effect
+at that capped deadline, not at the unbind; a ticket minted after the change cannot renew either (the
+mint answers `identity_not_bound` after an unbind, and one minted after a rebind names another
+principal and closes `4403`).
+
 ### F4. The deadline, and where E2's cap is applied
 
 A ticket carries its minting token's `exp`, **uncapped**. Spending it (at the upgrade or at a
@@ -584,8 +596,14 @@ identities and freshly minted tickets:
 
 - a valid ticket renews, moves the deadline past the first token's, and is never echoed back;
 - a valid ticket for another subject closes `4403` and does not renew;
+- each of B3's three identity clauses alone closes `4403`, on both the ticket and the token path:
+  the same subject from another issuer (a self-issued token, and a bound IdP token whose subject
+  string equals the key's fingerprint and is bound to that key), the same issuer and subject rebound
+  to another key, and the same key moved from one subject to another;
 - a reused, unknown, other-origin and origin-less ticket all give the same error object, and the
-  socket stays open; so does an expired ticket, and a ticket whose minting token has expired;
+  socket stays open; so does an expired ticket, and a ticket whose minting token has expired; and a
+  socket upgraded with no `Origin` refuses a ticket minted for one, while an origin-less ticket
+  renews it;
 - a ticket spent by the upgrade cannot renew, and one spent by a renewal cannot open a socket;
 - both credentials, neither, or both `null` is `invalid_params`, and a ticket beside a token is spent;
 - a token renewal is unchanged (renews; a bad token is `invalid_token`; another subject closes `4403`);
@@ -594,8 +612,9 @@ identities and freshly minted tickets:
   key closes `4403`.
 
 Declared mutants (`mutants/ws-renew-ticket.toml`) remove, one at a time, the origin check, the
-identity check, single use, the ticket's lifetime, the token's expiry, and E2's cap on the ticket
-path; each must be caught.
+identity check, each of its three clauses, single use, the ticket's lifetime, the token's expiry,
+the binding re-read and E2's cap on the ticket path, and let a socket with no `Origin` accept a
+ticket for any origin; each must be caught.
 
 ### Rejected in this amendment
 

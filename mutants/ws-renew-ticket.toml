@@ -78,3 +78,50 @@ find = '''    if g.bound_idp {
         match credential::still_bound('''
 replace = '''    if false && g.bound_idp {
         match credential::still_bound('''
+
+# B3's identity is three clauses, and each has a test in which ONLY that one
+# differs: a test changing several at once (a fresh member changes subject and
+# principal together) cannot see one clause removed. Both renewal paths, token
+# and ticket, go through `same_identity`, and each named test drives both.
+
+[[mutant]]
+id = "ws-renew-ticket/identity-issuer-clause-dropped"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(the_same_subject_from_another_issuer_closes_4403)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        self.issuer == issuer && self.subject == subject && self.principal == principal'''
+replace = '''        self.subject == subject && self.principal == principal'''
+
+[[mutant]]
+id = "ws-renew-ticket/identity-subject-clause-dropped"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(another_subject_bound_to_the_same_key_closes_4403)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        self.issuer == issuer && self.subject == subject && self.principal == principal'''
+replace = '''        self.issuer == issuer && self.principal == principal'''
+
+[[mutant]]
+id = "ws-renew-ticket/identity-principal-clause-dropped"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(the_same_subject_rebound_to_another_key_closes_4403)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        self.issuer == issuer && self.subject == subject && self.principal == principal'''
+replace = '''        self.issuer == issuer && self.subject == subject'''
+
+# The reverse origin case: a socket upgraded with no `Origin` (a non-browser
+# client) must not accept a ticket minted for an origin.
+[[mutant]]
+id = "ws-renew-ticket/missing-origin-matches-any"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(refused_tickets_all_read_the_same_and_leave_the_socket_open)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        Some(g) if &g.origin == origin && g.token_expires_at > now_unix() => g,'''
+replace = '''        Some(g) if (origin.is_none() || &g.origin == origin) && g.token_expires_at > now_unix() => g,'''
