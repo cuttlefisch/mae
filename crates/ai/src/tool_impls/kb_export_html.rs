@@ -56,7 +56,7 @@ fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<(
 
 /// Write the exported page: refuse MAE configuration, create the parent
 /// directory, then write atomically.
-fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
+fn write_export(editor: &Editor, out_path: &std::path::Path, html: &str) -> Result<(), String> {
     // ADR-089 D4. For every caller: a Scheme hook an agent installed runs this
     // later without the AI-origin mark (principle #6's known tension), and an
     // HTML page is never a legitimate MAE config file.
@@ -67,6 +67,8 @@ fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
             out_path.display()
         ));
     }
+    // Confined like every agent write (#969).
+    editor.refuse_untrusted_write(out_path, mae_core::editor::WriteOrigin::Agent)?;
     if let Some(parent) = out_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -557,8 +559,7 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
-    editor.refuse_untrusted_write(&out_path, mae_core::editor::WriteOrigin::Agent)?;
-    write_export(&out_path, &html)?;
+    write_export(editor, &out_path, &html)?;
 
     Ok(format!(
         "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}{}",

@@ -80,14 +80,12 @@ targets = ["-p", "mae-core", "--lib"]
 filter = "test(ex_rename_and_copy_are_confined_where_they_write_for_an_ai_only)"
 [[mutant.edit]]
 file = "crates/core/src/editor/command.rs"
-find = '''                        if let Err(e) =
-                            self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
-                        {
-                            self.set_status(e);
-                            return true;
-                        }
-                        match std::fs::copy(&old_path, &new) {'''
-replace = '''                        match std::fs::copy(&old_path, &new) {'''
+find = '''        if let Err(e) = self.refuse_untrusted_write(&new, super::WriteOrigin::Command) {
+            self.set_status(e);
+            return;
+        }
+        match std::fs::copy(&old_path, &new) {'''
+replace = '''        match std::fs::copy(&old_path, &new) {'''
 
 [[mutant]]
 id = "core-write-refusal/tangle-unchecked"

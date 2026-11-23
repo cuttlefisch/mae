@@ -386,72 +386,11 @@ impl Editor {
                 true
             }
             "rename" => {
-                if let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) {
-                    let idx = self.active_buffer_idx();
-                    if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
-                        let new = std::path::PathBuf::from(new_path);
-                        // An AI-originated rename is a write at both ends (#969).
-                        if let Err(e) = self
-                            .refuse_untrusted_write(&old_path, super::WriteOrigin::Command)
-                            .and_then(|()| {
-                                self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
-                            })
-                        {
-                            self.set_status(e);
-                            return true;
-                        }
-                        match std::fs::rename(&old_path, &new) {
-                            Ok(()) => {
-                                self.buffers[idx].set_file_path(new.clone());
-                                self.buffers[idx].name =
-                                    new.file_name().map_or(new_path.to_string(), |n| {
-                                        n.to_string_lossy().to_string()
-                                    });
-                                self.redetect_language_for(idx);
-                                self.set_status(format!(
-                                    "Renamed: {} → {}",
-                                    old_path.display(),
-                                    new.display()
-                                ));
-                            }
-                            Err(e) => self.set_status(format!("Rename failed: {}", e)),
-                        }
-                    } else {
-                        self.set_status("Buffer has no file path");
-                    }
-                } else {
-                    self.set_status("Usage: :rename <new-path>");
-                }
+                self.ex_rename(args);
                 true
             }
             "copy" => {
-                if let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) {
-                    let idx = self.active_buffer_idx();
-                    if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
-                        let new = std::path::PathBuf::from(new_path);
-                        if let Err(e) =
-                            self.refuse_untrusted_write(&new, super::WriteOrigin::Command)
-                        {
-                            self.set_status(e);
-                            return true;
-                        }
-                        match std::fs::copy(&old_path, &new) {
-                            Ok(_) => {
-                                self.open_file(new.display().to_string());
-                                self.set_status(format!(
-                                    "Copied: {} → {}",
-                                    old_path.display(),
-                                    new.display()
-                                ));
-                            }
-                            Err(e) => self.set_status(format!("Copy failed: {}", e)),
-                        }
-                    } else {
-                        self.set_status("Buffer has no file path");
-                    }
-                } else {
-                    self.set_status("Usage: :copy <new-path>");
-                }
+                self.ex_copy(args);
                 true
             }
             "saveas" => {
@@ -1426,6 +1365,77 @@ impl Editor {
                 path.display()
             )),
             Err(e) => self.set_status(e),
+        }
+    }
+}
+
+/// The ex `:rename` and `:copy` effects, split out of `execute_command`
+/// (#969 added their write refusals, which the per-function ratchet counts).
+impl Editor {
+    /// `:rename <new-path>`: move the active buffer's file. An AI-originated
+    /// rename is a write at both ends, so both are refused like a save (#969).
+    fn ex_rename(&mut self, args: Option<&str>) {
+        let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+            self.set_status("Usage: :rename <new-path>");
+            return;
+        };
+        let idx = self.active_buffer_idx();
+        let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) else {
+            self.set_status("Buffer has no file path");
+            return;
+        };
+        let new = std::path::PathBuf::from(new_path);
+        if let Err(e) = self
+            .refuse_untrusted_write(&old_path, super::WriteOrigin::Command)
+            .and_then(|()| self.refuse_untrusted_write(&new, super::WriteOrigin::Command))
+        {
+            self.set_status(e);
+            return;
+        }
+        match std::fs::rename(&old_path, &new) {
+            Ok(()) => {
+                self.buffers[idx].set_file_path(new.clone());
+                self.buffers[idx].name = new
+                    .file_name()
+                    .map_or(new_path.to_string(), |n| n.to_string_lossy().to_string());
+                self.redetect_language_for(idx);
+                self.set_status(format!(
+                    "Renamed: {} → {}",
+                    old_path.display(),
+                    new.display()
+                ));
+            }
+            Err(e) => self.set_status(format!("Rename failed: {}", e)),
+        }
+    }
+
+    /// `:copy <new-path>`: copy the active buffer's file and open the copy.
+    /// Only the target is written, so only it is refused (#969).
+    fn ex_copy(&mut self, args: Option<&str>) {
+        let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+            self.set_status("Usage: :copy <new-path>");
+            return;
+        };
+        let idx = self.active_buffer_idx();
+        let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) else {
+            self.set_status("Buffer has no file path");
+            return;
+        };
+        let new = std::path::PathBuf::from(new_path);
+        if let Err(e) = self.refuse_untrusted_write(&new, super::WriteOrigin::Command) {
+            self.set_status(e);
+            return;
+        }
+        match std::fs::copy(&old_path, &new) {
+            Ok(_) => {
+                self.open_file(new.display().to_string());
+                self.set_status(format!(
+                    "Copied: {} → {}",
+                    old_path.display(),
+                    new.display()
+                ));
+            }
+            Err(e) => self.set_status(format!("Copy failed: {}", e)),
         }
     }
 }
