@@ -18,6 +18,31 @@ pub(super) mod agenda_work {
     }
 }
 
+/// One TODO node's agenda line: state, priority, title and tags.
+fn todo_line(node: &mae_kb::Node) -> AgendaLine {
+    #[cfg(test)]
+    agenda_work::bump();
+    let state = node.todo_state.as_deref().unwrap_or("TODO");
+    let pri_str = node
+        .priority
+        .map(|c| format!("[#{}] ", c))
+        .unwrap_or_default();
+    let tags_str = if node.tags.is_empty() {
+        String::new()
+    } else {
+        format!("  :{}", node.tags.join(":"))
+    };
+    AgendaLine {
+        text: format!("  {} {}{}{}", state, pri_str, node.title, tags_str),
+        kind: AgendaLineKind::TodoItem {
+            state: state.to_string(),
+            priority: node.priority,
+        },
+        node_id: Some(node.id.clone()),
+        source_file: None,
+    }
+}
+
 impl Editor {
     /// Open or refresh the `*Agenda*` buffer with TODO items from the KB.
     pub fn open_agenda(&mut self, filter: AgendaFilter) {
@@ -102,30 +127,7 @@ impl Editor {
                 source_file: None,
             });
         } else {
-            for node in &nodes {
-                #[cfg(test)]
-                agenda_work::bump();
-                let state = node.todo_state.as_deref().unwrap_or("TODO");
-                let pri_str = node
-                    .priority
-                    .map(|c| format!("[#{}] ", c))
-                    .unwrap_or_default();
-                let tags_str = if node.tags.is_empty() {
-                    String::new()
-                } else {
-                    format!("  :{}", node.tags.join(":"))
-                };
-                let line_text = format!("  {} {}{}{}", state, pri_str, node.title, tags_str);
-                lines.push(AgendaLine {
-                    text: line_text,
-                    kind: AgendaLineKind::TodoItem {
-                        state: state.to_string(),
-                        priority: node.priority,
-                    },
-                    node_id: Some(node.id.clone()),
-                    source_file: None,
-                });
-            }
+            lines.extend(nodes.iter().map(todo_line));
         }
 
         lines.push(AgendaLine {
