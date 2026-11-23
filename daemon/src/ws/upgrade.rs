@@ -20,7 +20,7 @@ use super::credential::{self, Refused};
 use super::{now_unix, WsState, PROTOCOL_V1, SUPPORTED_PROTOCOLS};
 use crate::conn_limit::ConnGuard;
 use crate::oauth::{self, json_response, unauthorized, with_no_store, Listener};
-use mae_daemon::oauth_self_issue::Credential;
+use mae_daemon::oauth_self_issue::{Credential, ValidatedPrincipal};
 use mae_mcp::protocol::McpError;
 
 type HttpResponse = Response<Full<Bytes>>;
@@ -40,11 +40,20 @@ pub(super) struct SessionAuth {
     pub subject: String,
     pub principal: String,
     /// The session's first deadline, unix seconds: the credential's expiry,
-    /// capped for a bound IdP token (`credential::session_deadline`).
+    /// capped for a bound IdP token (`credential::capped_deadline`).
     pub deadline: u64,
-    /// Whether the credential was a bound identity-provider token, whose
-    /// binding a ticket re-reads at redemption (Amendment 2, E1).
-    pub bound_idp: bool,
+    /// The upgrade request's `Origin`, if it had one. A ticket presented to
+    /// `session/renew` must have been minted for this same origin (ADR-099
+    /// Amendment 3, F2), exactly as one presented at the upgrade must.
+    pub origin: Option<String>,
+}
+
+impl SessionAuth {
+    /// Same issuer, same subject, and the same principal they resolve to now
+    /// (B3; Amendment 2, E2): what every renewal must carry, token or ticket.
+    pub(super) fn same_identity(&self, issuer: &str, subject: &str, principal: &str) -> bool {
+        self.issuer == issuer && self.subject == subject && self.principal == principal
+    }
 }
 
 /// Route one request to `/ws` or `/ws/ticket`. Only called when `ws_enabled`.
@@ -125,13 +134,17 @@ fn invalid_token(listener: &Listener, refusal: McpError) -> Refusal {
     Box::new(resp)
 }
 
-/// The one refusal for every ticket that cannot be spent (B1). Its bytes do
-/// not depend on why: unknown, used, expired and misbound read the same.
+/// The one refusal for every ticket that cannot be spent (B1), as the upgrade
+/// answers it. Its bytes do not depend on why: unknown, used, expired and
+/// misbound read the same.
 fn ticket_invalid(listener: &Listener) -> Refusal {
-    invalid_token(
-        listener,
-        McpError::ticket_invalid("the connect ticket is not valid".to_string()),
-    )
+    invalid_token(listener, ticket_invalid_error())
+}
+
+/// The error behind every ticket refusal, at the upgrade and at
+/// `session/renew` alike: one message, whatever the reason.
+pub(super) fn ticket_invalid_error() -> McpError {
+    McpError::ticket_invalid("the connect ticket is not valid".to_string())
 }
 
 /// A token [`credential::socket_principal`] refused, as the listener answers it.
@@ -191,52 +204,76 @@ fn request_origin(req: &Request<Incoming>) -> Result<Option<String>, ()> {
 /// Validate a bearer token: this daemon's own, or, with `ws_accept_bound_idp`,
 /// a bound identity-provider token whose principal is the bound fingerprint
 /// (B6; Amendment 2, E1).
-async fn bearer_auth(token: &str, listener: &Listener) -> Result<SessionAuth, Refusal> {
-    let vp = credential::socket_principal(token, listener)
+async fn bearer_principal(token: &str, listener: &Listener) -> Result<ValidatedPrincipal, Refusal> {
+    credential::socket_principal(token, listener)
         .await
-        .map_err(|why| refused(listener, why))?;
+        .map_err(|why| refused(listener, why))
+}
+
+/// [`bearer_principal`], as the identity of a socket upgraded from `origin`.
+async fn bearer_auth(
+    token: &str,
+    origin: Option<String>,
+    listener: &Listener,
+) -> Result<SessionAuth, Refusal> {
+    let vp = bearer_principal(token, listener).await?;
     Ok(SessionAuth {
         deadline: credential::session_deadline(&vp, listener),
-        bound_idp: vp.credential == Credential::IdpBound,
         issuer: vp.issuer,
         subject: vp.subject,
         principal: vp.principal,
+        origin,
     })
 }
 
-/// Turn a presented ticket into the session's identity. Unknown, used,
-/// expired, minted for another origin, or outliving its token: all one
-/// refusal, `ticket_invalid`.
-fn ticket_auth(
+/// Why a presented ticket could not be spent.
+#[derive(Debug)]
+pub(super) enum TicketRefused {
+    /// Unknown, used, expired, minted for another origin, outliving its
+    /// token, or its binding changed: B1's one refusal, `ticket_invalid`.
+    Invalid,
+    /// The binding table could not be read: a fault, not a verdict on the
+    /// ticket, answered as that fault is on every route.
+    Fault(Refused),
+}
+
+/// Spend a ticket `TicketStore::redeem` returned, presented from `origin`.
+/// This is the ONE redemption, shared by the upgrade (B1) and a ticket
+/// `session/renew` (Amendment 3, F2). Unknown, used or expired (`None`),
+/// minted for another origin, or outliving its token: all
+/// [`TicketRefused::Invalid`].
+///
+/// A ticket minted by a bound IdP token is re-resolved here, so an unbind or a
+/// rebind inside its TTL spends nothing (Amendment 2, E1). The refusal is the
+/// ticket's own: B1 keeps one refusal whatever the reason, and a fresh mint
+/// with the same token then answers `identity_not_bound`.
+///
+/// The deadline is the minting token's `exp`, capped from now for a bound IdP
+/// token (E2) — now being when its binding was last read — by the same
+/// `credential::capped_deadline` a bearer token's deadline goes through.
+pub(super) async fn spend_ticket(
     grant: Option<TicketGrant>,
     origin: &Option<String>,
     listener: &Listener,
-) -> Result<SessionAuth, Refusal> {
-    match grant {
-        Some(g) if &g.origin == origin && g.token_expires_at > now_unix() => Ok(SessionAuth {
-            issuer: g.issuer,
-            subject: g.subject,
-            principal: g.principal,
-            deadline: g.token_expires_at,
-            bound_idp: g.bound_idp,
-        }),
-        _ => Err(ticket_invalid(listener)),
+) -> Result<SessionAuth, TicketRefused> {
+    let g = match grant {
+        Some(g) if &g.origin == origin && g.token_expires_at > now_unix() => g,
+        _ => return Err(TicketRefused::Invalid),
+    };
+    if g.bound_idp {
+        match credential::still_bound(listener, &g.issuer, &g.subject, &g.principal).await {
+            Ok(true) => {}
+            Ok(false) => return Err(TicketRefused::Invalid),
+            Err(why) => return Err(TicketRefused::Fault(why)),
+        }
     }
-}
-
-/// A ticket minted by a bound IdP token is re-resolved at redemption, so an
-/// unbind or a rebind inside its TTL opens nothing (Amendment 2, E1). The
-/// refusal is the ticket's own: B1 keeps one refusal whatever the reason, and
-/// a fresh mint with the same token then answers `identity_not_bound`.
-async fn recheck_ticket(auth: SessionAuth, listener: &Listener) -> Result<SessionAuth, Refusal> {
-    if !auth.bound_idp {
-        return Ok(auth);
-    }
-    match credential::still_bound(listener, &auth.issuer, &auth.subject, &auth.principal).await {
-        Ok(true) => Ok(auth),
-        Ok(false) => Err(ticket_invalid(listener)),
-        Err(why) => Err(refused(listener, why)),
-    }
+    Ok(SessionAuth {
+        deadline: credential::capped_deadline(g.token_expires_at, g.bound_idp, listener),
+        issuer: g.issuer,
+        subject: g.subject,
+        principal: g.principal,
+        origin: g.origin,
+    })
 }
 
 /// Exactly one credential: the bearer header, or one ticket (B1).
@@ -246,19 +283,21 @@ async fn credential(
     listener: &Listener,
 ) -> Result<SessionAuth, Refusal> {
     let bearer = oauth::extract_bearer_token(req);
+    let origin = request_origin(req).unwrap_or(None);
     let auth = match (bearer, tickets.len()) {
         (None, 0) => Err(Box::new(unauthorized(
             &listener.config,
             "missing credential",
         ))),
-        (Some(token), 0) => bearer_auth(token, listener).await,
+        (Some(token), 0) => bearer_auth(token, origin, listener).await,
         (None, 1) => {
-            let origin = request_origin(req).unwrap_or(None);
             let grant = tickets.into_iter().next().flatten();
-            match ticket_auth(grant, &origin, listener) {
-                Ok(auth) => recheck_ticket(auth, listener).await,
-                Err(refusal) => Err(refusal),
-            }
+            spend_ticket(grant, &origin, listener)
+                .await
+                .map_err(|why| match why {
+                    TicketRefused::Invalid => ticket_invalid(listener),
+                    TicketRefused::Fault(why) => refused(listener, why),
+                })
         }
         _ => Err(Box::new(bad_request(
             "invalid_request",
@@ -452,18 +491,20 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
     let Some(token) = oauth::extract_bearer_token(req) else {
         return unauthorized(&listener.config, "missing bearer token");
     };
-    let auth = match bearer_auth(token, listener).await {
-        Ok(a) if !a.principal.is_empty() => a,
+    let vp = match bearer_principal(token, listener).await {
+        Ok(vp) if !vp.principal.is_empty() => vp,
         Ok(_) => return unauthorized(&listener.config, "MissingPrincipalClaim"),
         Err(resp) => return *resp,
     };
+    // The token's own `exp`, uncapped: a bound IdP ticket is capped when it
+    // is spent (`spend_ticket`), from when its binding is read again.
     let grant = TicketGrant {
-        issuer: auth.issuer,
-        subject: auth.subject,
-        principal: auth.principal,
-        token_expires_at: auth.deadline,
+        bound_idp: vp.credential == Credential::IdpBound,
+        issuer: vp.issuer,
+        subject: vp.subject,
+        principal: vp.principal,
+        token_expires_at: vp.expires_at,
         origin: request_origin(req).unwrap_or(None),
-        bound_idp: auth.bound_idp,
     };
     match ws.tickets.mint(grant, Instant::now()) {
         Ok(ticket) => json_response(

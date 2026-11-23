@@ -1,0 +1,80 @@
+# Renewing a sync WebSocket with a connect ticket (ADR-099 Amendment 3): one
+# mutant per guard on the ticket path. The redemption is shared with the
+# upgrade (daemon/src/ws/upgrade.rs `spend_ticket`, daemon/src/ws/
+# connect_ticket.rs `redeem`), so each guard removed here also opens the
+# upgrade; the named test drives it through `session/renew`. Tests:
+# daemon/tests/ws_renew_ticket_e2e.rs.
+
+[[mutant]]
+id = "ws-renew-ticket/origin-not-checked"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(refused_tickets_all_read_the_same_and_leave_the_socket_open)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        Some(g) if &g.origin == origin && g.token_expires_at > now_unix() => g,'''
+replace = '''        Some(g) if (true || &g.origin == origin) && g.token_expires_at > now_unix() => g,'''
+
+[[mutant]]
+id = "ws-renew-ticket/identity-not-checked"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(a_ticket_for_another_subject_closes_4403)"
+[[mutant.edit]]
+file = "daemon/src/ws/session.rs"
+find = '''            .same_identity(&auth.issuer, &auth.subject, &auth.principal)'''
+replace = '''            .same_identity(&self.auth.issuer, &self.auth.subject, &self.auth.principal)'''
+
+[[mutant]]
+id = "ws-renew-ticket/ticket-reusable"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(a_ticket_is_spent_once_across_the_upgrade_and_renewal)"
+[[mutant.edit]]
+file = "daemon/src/ws/connect_ticket.rs"
+find = '''        let entry = entries.remove(&key(ticket))?;
+        (entry.valid_until > now).then_some(entry.grant)'''
+replace = '''        let entry = entries.get(&key(ticket))?;
+        (entry.valid_until > now).then_some(entry.grant.clone())'''
+
+[[mutant]]
+id = "ws-renew-ticket/ticket-lifetime-ignored"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(an_expired_ticket_does_not_renew)"
+[[mutant.edit]]
+file = "daemon/src/ws/connect_ticket.rs"
+find = '''        (entry.valid_until > now).then_some(entry.grant)'''
+replace = '''        (true || entry.valid_until > now).then_some(entry.grant)'''
+
+[[mutant]]
+id = "ws-renew-ticket/token-expiry-ignored"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(a_ticket_outliving_its_token_does_not_renew)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        Some(g) if &g.origin == origin && g.token_expires_at > now_unix() => g,'''
+replace = '''        Some(g) if &g.origin == origin && (true || g.token_expires_at > now_unix()) => g,'''
+
+[[mutant]]
+id = "ws-renew-ticket/idp-cap-skipped"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(a_bound_idp_ticket_renewal_is_capped)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''        deadline: credential::capped_deadline(g.token_expires_at, g.bound_idp, listener),'''
+replace = '''        deadline: g.token_expires_at,'''
+
+[[mutant]]
+id = "ws-renew-ticket/binding-not-reread"
+runner = "daemon"
+targets = ["--test", "ws_renew_ticket_e2e"]
+filter = "test(a_bound_idp_ticket_rereads_its_binding_at_renewal)"
+[[mutant.edit]]
+file = "daemon/src/ws/upgrade.rs"
+find = '''    if g.bound_idp {
+        match credential::still_bound('''
+replace = '''    if false && g.bound_idp {
+        match credential::still_bound('''

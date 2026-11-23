@@ -47,7 +47,9 @@ pub(crate) struct TicketGrant {
     pub issuer: String,
     pub subject: String,
     pub principal: String,
-    /// The minting token's `exp` (unix seconds): the session's deadline.
+    /// The minting token's `exp` (unix seconds), uncapped. Spending the ticket
+    /// (`upgrade::spend_ticket`) refuses it once this has passed, and makes it
+    /// the session's deadline, capped there for a bound IdP token (E2).
     pub token_expires_at: u64,
     pub origin: Option<String>,
     /// Minted by a bound identity-provider token: redemption re-reads the
