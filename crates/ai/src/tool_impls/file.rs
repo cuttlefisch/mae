@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use mae_core::editor::WriteOrigin;
 use mae_core::Editor;
 
 pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -118,6 +119,8 @@ pub fn execute_ai_save(editor: &mut Editor, args: &serde_json::Value) -> Result<
         PathBuf::from(p)
     };
 
+    // Confined like every agent write (#969): the path is the agent's choice.
+    editor.refuse_untrusted_write(&resolved, WriteOrigin::Agent)?;
     match editor.ai_save(&resolved) {
         Ok(n) => Ok(format!("Saved {} entries to {}", n, resolved.display())),
         Err(e) => Err(e),
@@ -200,6 +203,14 @@ pub fn execute_rename_file(
         }
     }
 
+    // Confined at the effect (#969): the source is the file this call really
+    // moves, the active buffer's, which the tool's `old_path` argument never
+    // names. Checking only the arguments let a rename move a file from outside
+    // the test sandbox into it.
+    for candidate in [&old_path, &new] {
+        editor.refuse_untrusted_write(candidate, WriteOrigin::Agent)?;
+    }
+
     // An archived KB source file is the only copy of what the store lost at
     // ingest — see `kb_archive_removal_refusal`.
     if let Some(msg) = editor.kb_archive_removal_refusal(&old_path, "rename_file") {
@@ -252,6 +263,8 @@ pub fn execute_create_file(
     if let Some(msg) = super::stale_archive::refuse_write(editor, &path, "create_file") {
         return Err(msg);
     }
+    // The test sandbox, judged where this write lands (#969).
+    editor.refuse_untrusted_write(file_path, WriteOrigin::Agent)?;
 
     // Create parent directories if needed
     if let Some(parent) = file_path.parent() {
@@ -522,5 +535,115 @@ mod stale_archive_write_tests {
             !err.contains("STALE CONTENT"),
             "and must not leak the content it refused to serve"
         );
+    }
+}
+
+/// #969: the self-test sandbox is enforced at these tools' effects, not only
+/// by the dispatcher's argument guard. Each call here bypasses that guard and
+/// opens no dispatch scope, so only the effect can refuse.
+#[cfg(test)]
+mod sandbox_effect_tests {
+    use super::*;
+
+    struct Sandboxed {
+        _tmp: tempfile::TempDir,
+        editor: Editor,
+        sandbox: PathBuf,
+        outside: PathBuf,
+    }
+
+    fn sandboxed() -> Sandboxed {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sandbox = tmp.path().join("sandbox");
+        let outside = tmp.path().join("real").join("victim.rs");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "real\n").unwrap();
+        let mut editor = Editor::new();
+        editor.test_sandbox_dir = Some(sandbox.clone());
+        Sandboxed {
+            _tmp: tmp,
+            editor,
+            sandbox,
+            outside,
+        }
+    }
+
+    /// The rename moves the ACTIVE buffer's file, which no argument names, so
+    /// an `old_path` inside the sandbox said nothing about what moved.
+    #[test]
+    fn rename_file_refuses_moving_a_real_file_into_the_sandbox() {
+        let mut s = sandboxed();
+        s.editor.open_file(s.outside.display().to_string());
+        let decoy = s.sandbox.join("decoy.rs");
+        let target = s.sandbox.join("stolen.rs");
+        let result = execute_rename_file(
+            &mut s.editor,
+            &serde_json::json!({
+                "old_path": decoy.display().to_string(),
+                "new_path": target.display().to_string(),
+            }),
+        );
+        assert!(result.is_err(), "{result:?}");
+        assert!(
+            s.outside.exists() && !target.exists(),
+            "the real file moved"
+        );
+    }
+
+    /// Positive control: a buffer whose file is inside the sandbox renames.
+    #[test]
+    fn rename_file_inside_the_sandbox_still_works() {
+        let mut s = sandboxed();
+        let from = s.sandbox.join("a.rs");
+        std::fs::write(&from, "x\n").unwrap();
+        s.editor.open_file(from.display().to_string());
+        let to = s.sandbox.join("b.rs");
+        execute_rename_file(
+            &mut s.editor,
+            &serde_json::json!({ "new_path": to.display().to_string() }),
+        )
+        .expect("rename inside the sandbox");
+        assert!(to.exists() && !from.exists());
+    }
+
+    /// A create outside the sandbox is refused at the effect, and nothing is
+    /// written. (A relative path is judged against the working directory; that
+    /// is tested in mae-core without a write, so a regression here cannot
+    /// litter the checkout.)
+    #[test]
+    fn create_file_outside_the_sandbox_is_refused_at_the_effect() {
+        let mut s = sandboxed();
+        let planted = s.outside.with_file_name("planted.rs");
+        let result = execute_create_file(
+            &mut s.editor,
+            &serde_json::json!({ "path": planted.display().to_string(), "content": "x" }),
+        );
+        assert!(result.is_err() && !planted.exists(), "{result:?}");
+
+        let inside = s.sandbox.join("ok.txt");
+        execute_create_file(
+            &mut s.editor,
+            &serde_json::json!({ "path": inside.display().to_string(), "content": "x" }),
+        )
+        .expect("a create inside the sandbox");
+    }
+
+    /// `ai_save` writes a transcript to a path the agent chooses.
+    #[test]
+    fn ai_save_outside_the_sandbox_is_refused() {
+        let mut s = sandboxed();
+        s.editor
+            .buffers
+            .push(mae_core::buffer::Buffer::new_conversation("*AI*"));
+        let planted = s.outside.with_file_name("transcript.json");
+        let args = serde_json::json!({ "path": planted.display().to_string() });
+        let result = execute_ai_save(&mut s.editor, &args);
+        assert!(result.is_err() && !planted.exists(), "{result:?}");
+
+        let inside = s.sandbox.join("transcript.json");
+        let args = serde_json::json!({ "path": inside.display().to_string() });
+        execute_ai_save(&mut s.editor, &args).expect("a save inside the sandbox");
+        assert!(inside.exists());
     }
 }

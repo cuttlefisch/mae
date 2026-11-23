@@ -292,7 +292,7 @@ impl Editor {
     /// resolves the user's stores BEFORE the system stores, so a node created under
     /// a guidance id (`hub:testing`) silently replaced the shipped practice for
     /// every later session. Gated on AI origin, not tier, like
-    /// `refuse_ai_save_of_protected_config`: a human may still name their own note
+    /// `refuse_untrusted_write`: a human may still name their own note
     /// `index`. Covers every owner, since a user instance can shadow too.
     fn kb_refuse_agent_shadowing_system_node(&self, id: &str) -> Result<(), String> {
         if !self.is_ai_originated_dispatch() {
