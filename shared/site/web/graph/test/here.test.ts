@@ -134,13 +134,20 @@ describe("showHere: is the pin drawn (as the page script asks)", () => {
 
 describe("the occupancy grid", () => {
   it("counts the taken cells under any box, as a cell-by-cell count does", () => {
+    // Half the time an edge or a size falls exactly on a cell boundary (a multiple of 3): a box that
+    // only touches a cell does not take it.
+    const onBoundary = (lo: number, hi: number) =>
+      fc.oneof(
+        real(lo, hi),
+        fc.integer({ min: Math.ceil(lo / 3), max: Math.floor(hi / 3) }).map((k) => k * 3),
+      );
     fc.assert(
       fc.property(
         fc.array(fc.boolean(), { minLength: 12 * 9, maxLength: 12 * 9 }),
-        real(-10, 40),
-        real(-10, 30),
-        real(0, 40),
-        real(0, 30),
+        onBoundary(-10, 40),
+        onBoundary(-10, 30),
+        onBoundary(0, 40),
+        onBoundary(0, 30),
         (cells, x, y, w, h) => {
           const g = makeGrid(36, 27, 3, cells.map(Number));
           let n = 0;
@@ -152,6 +159,50 @@ describe("the occupancy grid", () => {
         },
       ),
     );
+  });
+  it("counts a cell that the box only grazes by a hair, as the exact overlap does (CI, 2026-11-23)", () => {
+    // Found by a fresh CI seed: the box's right edge, x + w = 5e-324, is past the cell's left edge (0),
+    // but (x + w) / 3 underflows to 0 and the grid's last column came out before the first. The same
+    // rounding can misplace any edge that lies within a rounding step of a cell boundary.
+    const cells = new Array<number>(12 * 9).fill(0);
+    cells[8 * 12] = 1; // row 8 (y 24 to 27), column 0 (x 0 to 3)
+    const g = makeGrid(36, 27, 3, cells);
+    const b = { x: -5e-324, y: 24.000000000931323, w: 1e-323, h: 0 };
+    expect(overlaps({ x: 0, y: 24, w: 3, h: 3 }, b)).toBe(true);
+    expect(busy(g, b)).toBe(1);
+    // And at an ordinary size: a right edge a rounding step past a cell boundary.
+    const edge = { x: 0, y: 0, w: 24 + 24 * Number.EPSILON, h: 3 };
+    const row = new Array<number>(12 * 9).fill(0);
+    row[8] = 1; // row 0, column 8 (x 24 to 27)
+    expect(overlaps({ x: 24, y: 0, w: 3, h: 3 }, edge)).toBe(true);
+    expect(busy(makeGrid(36, 27, 3, row), edge)).toBe(1);
+  });
+  it("a box that only touches a cell's edge does not take it", () => {
+    const row = new Array<number>(12 * 9).fill(0);
+    row[0] = 1; // row 0, column 0 (x 0 to 3)
+    row[2] = 1; // row 0, column 2 (x 6 to 9)
+    const g = makeGrid(36, 27, 3, row);
+    expect(busy(g, { x: 3, y: 0, w: 3, h: 3 })).toBe(0);
+    expect(busy(g, { x: 3, y: 0, w: 3.5, h: 3 })).toBe(1);
+    expect(busy(g, { x: 2.5, y: 0, w: 3.5, h: 3 })).toBe(1);
+  });
+  it("with a fractional cell, an edge on a cell boundary still only touches it, though the division rounds", () => {
+    // Cell 0.1: 3 * 0.1 / 0.1 rounds to just over 3 (so ceil says 4), and 43 * 0.1 / 0.1 to just
+    // under 43 (so floor says 42); the products put the edge exactly on the boundary.
+    const cell = 0.1;
+    const end = 3 * cell;
+    const start = 43 * cell;
+    expect(Math.ceil(end / cell)).toBe(4);
+    expect(Math.floor(start / cell)).toBe(42);
+    const one = (c: number) => {
+      const cells = new Array<number>(45).fill(0);
+      cells[c] = 1;
+      return makeGrid(4.5, cell, cell, cells);
+    };
+    expect(busy(one(3), { x: 0, y: 0, w: end, h: cell })).toBe(0);
+    expect(busy(one(2), { x: 0, y: 0, w: end, h: cell })).toBe(1);
+    expect(busy(one(42), { x: start, y: 0, w: 0.05, h: cell })).toBe(0);
+    expect(busy(one(43), { x: start, y: 0, w: 0.05, h: cell })).toBe(1);
   });
   it("geometry helpers: distance to and nearest point of a box", () => {
     const b = { x: 10, y: 10, w: 10, h: 10 };
