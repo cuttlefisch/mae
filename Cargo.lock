@@ -3508,6 +3508,7 @@ dependencies = [
  "alacritty_terminal",
  "mae-mcp",
  "portable-pty",
+ "rustix-openpty",
  "tempfile",
  "tracing",
 ]

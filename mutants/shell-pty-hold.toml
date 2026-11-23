@@ -1,0 +1,14 @@
+# The PTY's terminal side is held open on Linux so a fast child's last
+# output is not lost when the terminal lock is held across its exit (#965).
+# The mutant releases the hold; the repro must then see a blank terminal.
+
+[[mutant]]
+id = "shell-pty-hold/hold-released"
+runner = "editor"
+targets = ["-p", "mae-shell", "--lib"]
+filter = "test(output_written_while_the_terminal_is_locked_survives_the_childs_exit)"
+[[mutant.edit]]
+file = "crates/shell/src/terminal.rs"
+find = '''    Ok((pty, Some(hold)))'''
+replace = '''    drop(hold);
+    Ok((pty, None))'''

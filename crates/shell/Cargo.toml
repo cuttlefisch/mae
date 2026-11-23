@@ -10,6 +10,12 @@ alacritty_terminal = "0.26"
 portable-pty = "0.9"
 tracing = { workspace = true }
 
+# #965: open the PTY ourselves (the same call alacritty's `tty::new` makes) so
+# the terminal keeps its own handle on the PTY's terminal side. Linux only:
+# that is where the output loss happens.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix-openpty = "0.2"
+
 [dev-dependencies]
 # `ready::wait_until_blocking`: the shared bounded wait the tests poll the
 # terminal with, instead of fixed sleeps.

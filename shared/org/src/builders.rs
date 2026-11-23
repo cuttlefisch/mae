@@ -149,6 +149,12 @@ impl RenderOptions {
         self.toplevel_hlevel = level;
         self
     }
+
+    /// [`RenderOptions::headline_levels`].
+    pub fn with_headline_levels(mut self, levels: Option<crate::HeadlineLevels>) -> Self {
+        self.headline_levels = levels;
+        self
+    }
 }
 
 impl Resolved {
