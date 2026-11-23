@@ -2,8 +2,13 @@
 //!
 //! The chrome takes its words from here, never from a literal, so a second
 //! locale changes every one of them. `en-US` is the fallback for a locale with
-//! no catalogue. Proper names the engine never translates (palette and product
-//! names) are not here.
+//! no catalogue, and [`resolve`] says when it was used, so the chrome can mark
+//! what it wrote from it `lang="en-US"` (ADR-119 A4). A catalogue is complete
+//! by construction: a missing field does not compile. Proper names the engine
+//! never translates (palette and product names) are not here.
+//!
+//! Translations are written for this catalogue, never copied from another
+//! generator's locale files. `eo` is proposed and awaits a speaker's review.
 
 /// One locale's engine strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,35 +81,159 @@ const FR_FR: Strings = Strings {
     ],
 };
 
+const ES_ES: Strings = Strings {
+    locale: "es-ES",
+    backlinks: "Enlaces a esta p\u{e1}gina",
+    contents: "\u{cd}ndice",
+    tags: "Etiquetas",
+    tag_page_open: "P\u{e1}ginas con la etiqueta \u{ab}",
+    tag_page_close: "\u{bb}",
+    mode_toggle: "Modo oscuro",
+    palette_menu: "Paleta de colores",
+    accent_default: "Predeterminado",
+    accents: &[
+        ("red", "Rojo"),
+        ("orange", "Naranja"),
+        ("yellow", "Amarillo"),
+        ("green", "Verde"),
+        ("teal", "Verde azulado"),
+        ("cyan", "Cian"),
+        ("blue", "Azul"),
+        ("violet", "Violeta"),
+        ("magenta", "Magenta"),
+    ],
+};
+const EO: Strings = Strings {
+    locale: "eo",
+    backlinks: "Ligiloj al \u{109}i tiu pa\u{11d}o",
+    contents: "Enhavo",
+    tags: "Etikedoj",
+    tag_page_open: "Pa\u{11d}oj kun la etikedo \u{201c}",
+    tag_page_close: "\u{201d}",
+    mode_toggle: "Malhela re\u{11d}imo",
+    palette_menu: "Kolorpaletro",
+    accent_default: "Defa\u{16d}lta",
+    accents: &[
+        ("red", "Ru\u{11d}a"),
+        ("orange", "Oran\u{11d}a"),
+        ("yellow", "Flava"),
+        ("green", "Verda"),
+        ("teal", "Bluverda"),
+        ("cyan", "Cejana"),
+        ("blue", "Blua"),
+        ("violet", "Viola"),
+        ("magenta", "Magenta"),
+    ],
+};
+
+/// Every catalogue, by its locale tag; `en-US` is also the fallback.
+const CATALOGUES: [&Strings; 4] = [&EN_US, &FR_FR, &ES_ES, &EO];
+
+/// The catalogue for `locale`, and whether it fell back: `(en-US's, true)`
+/// for a locale with no catalogue. A caller writing chrome from a fallback
+/// marks it `lang="en-US"` (the catalogue's own `locale`), while the page's
+/// language stays the configured one.
+pub fn resolve(locale: &str) -> (&'static Strings, bool) {
+    match CATALOGUES.iter().find(|s| s.locale == locale) {
+        Some(s) => (s, false),
+        None => (&EN_US, true),
+    }
+}
+
 /// The catalogue for `locale`, or `en-US`'s when there is none.
 pub fn for_locale(locale: &str) -> &'static Strings {
-    match locale {
-        "fr-FR" => &FR_FR,
-        _ => &EN_US,
-    }
+    resolve(locale).0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Every string a catalogue holds, by name. The destructuring is
+    /// exhaustive, so a new field does not compile until it is listed here.
+    fn fields(s: &Strings) -> Vec<(String, &'static str)> {
+        let Strings {
+            locale: _,
+            backlinks,
+            contents,
+            tags,
+            tag_page_open,
+            tag_page_close,
+            mode_toggle,
+            palette_menu,
+            accent_default,
+            accents,
+        } = *s;
+        let mut out: Vec<(String, &'static str)> = [
+            ("backlinks", backlinks),
+            ("contents", contents),
+            ("tags", tags),
+            ("tag_page_open", tag_page_open),
+            ("tag_page_close", tag_page_close),
+            ("mode_toggle", mode_toggle),
+            ("palette_menu", palette_menu),
+            ("accent_default", accent_default),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        out.extend(accents.iter().map(|(id, n)| (format!("accent {id}"), *n)));
+        out
+    }
+
+    /// Each other locale changes every string relative to en-US, except the
+    /// ones declared here as the same in both languages: colour words the
+    /// languages share, and eo's closing quotation mark, which is en-US's.
+    /// A declared exception that differs fails too, so the list stays true.
     #[test]
-    fn a_second_locale_changes_every_string() {
-        let (en, fr) = (for_locale("en-US"), for_locale("fr-FR"));
-        assert_ne!(en.backlinks, fr.backlinks);
-        assert_ne!(en.tags, fr.tags);
-        assert_ne!(en.contents, fr.contents);
-        assert_ne!(en.tag_page_open, fr.tag_page_open);
-        assert_ne!(en.tag_page_close, fr.tag_page_close);
-        assert_ne!(en.mode_toggle, fr.mode_toggle);
-        assert_ne!(en.palette_menu, fr.palette_menu);
-        assert_ne!(en.accent_default, fr.accent_default);
-        assert_ne!(en.accents, fr.accents);
-        assert_eq!(
-            for_locale("xx-YY"),
-            en,
-            "an unknown locale falls back to en-US"
-        );
+    fn every_other_locale_changes_every_string_it_really_translates() {
+        let same: [(&str, &[&str]); 3] = [
+            (
+                "fr-FR",
+                &[
+                    "accent orange",
+                    "accent cyan",
+                    "accent violet",
+                    "accent magenta",
+                ],
+            ),
+            ("es-ES", &["accent magenta"]),
+            ("eo", &["tag_page_close", "accent magenta"]),
+        ];
+        let en = fields(for_locale("en-US"));
+        for (locale, shared) in same {
+            let (words, fell_back) = resolve(locale);
+            assert!(!fell_back, "{locale}");
+            let theirs = fields(words);
+            assert_eq!(
+                en.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                theirs.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                "{locale}: the same strings, in the same order"
+            );
+            for ((k, e), (_, t)) in en.iter().zip(&theirs) {
+                assert!(!t.is_empty(), "{locale}: {k} is empty");
+                assert_eq!(
+                    e == t,
+                    shared.contains(&k.as_str()),
+                    "{locale}: {k} is {t:?}, en-US {e:?}"
+                );
+            }
+        }
+    }
+
+    /// The catalogues are found, never the fallback: a configured es-ES or eo
+    /// that rendered en-US's words would pass every other test.
+    #[test]
+    fn every_catalogued_locale_is_found_and_anything_else_falls_back() {
+        for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
+            let (words, fell_back) = resolve(locale);
+            assert!(!fell_back, "{locale} fell back");
+            assert_eq!(words.locale, locale);
+        }
+        for other in ["xx-YY", "es", "es-MX", "eo-XX", ""] {
+            assert_eq!(resolve(other), (&EN_US, true), "{other:?}");
+            assert_eq!(for_locale(other), &EN_US, "{other:?}");
+        }
     }
 
     /// P-94: every accent the palettes offer has a name in every catalogue,
@@ -124,7 +253,7 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert!(ids.contains(&"orange") && ids.len() >= 7, "{ids:?}");
-        for words in [for_locale("en-US"), for_locale("fr-FR")] {
+        for words in CATALOGUES {
             for id in &ids {
                 let named = words.accents.iter().find(|(k, _)| k == id);
                 assert!(

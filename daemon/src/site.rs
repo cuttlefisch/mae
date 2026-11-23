@@ -273,6 +273,49 @@ impl<'a> From<&'a str> for Chrome<'a> {
     }
 }
 
+/// The configured locale's catalogue, and how the chrome marks what it writes
+/// from it (ADR-119 A4). A locale with no catalogue gets en-US's words, and
+/// every element holding them carries `lang="en-US"` so a screen reader voices
+/// them as written, while `<html lang>` stays the configured locale; content
+/// inside such an element (a tag) carries the configured locale back. A found
+/// catalogue is in the page's own language: no marks.
+///
+/// Not marked: a listing's `<title>`, which repeats its heading. It is plain
+/// text holding the operator's site title too, so it cannot mark one part.
+struct Words {
+    s: &'static mae_site::strings::Strings,
+    /// ` lang="en-US"` on an element holding fallback words; empty otherwise.
+    mark: String,
+    /// ` lang="<configured>"` on content inside a marked element; empty otherwise.
+    unmark: String,
+}
+
+impl Words {
+    fn of(lang: &str) -> Self {
+        match mae_site::strings::resolve(lang) {
+            (s, false) => Words {
+                s,
+                mark: String::new(),
+                unmark: String::new(),
+            },
+            (s, true) => Words {
+                s,
+                mark: format!(" lang=\"{}\"", escape(s.locale)),
+                unmark: format!(" lang=\"{}\"", escape(lang)),
+            },
+        }
+    }
+
+    /// Escaped content inside marked chrome, with the page's language back.
+    fn content(&self, escaped: &str) -> String {
+        if self.unmark.is_empty() {
+            escaped.to_string()
+        } else {
+            format!("<span{}>{escaped}</span>", self.unmark)
+        }
+    }
+}
+
 /// The HTML document for a found page: the core's fixed chrome around the
 /// sanitised article (added after sanitising, D19). `title` is escaped here.
 pub fn document<'a>(
@@ -284,24 +327,24 @@ pub fn document<'a>(
     toc: &[mae_site::TocEntry],
 ) -> String {
     let chrome = chrome.into();
-    let words = mae_site::strings::for_locale(chrome.lang);
+    let words = Words::of(chrome.lang);
     let article = format!(
         "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
         escape(title),
-        tags_list(words.tags, tags),
+        tags_list(&words, tags),
     );
     // The side panels sit outside the main landmark (P-165).
     let panels = format!(
         "{}{}",
-        toc_nav(words.contents, toc),
-        backlinks_nav(words.backlinks, backlinks)
+        toc_nav(&words, toc),
+        backlinks_nav(&words, backlinks)
     );
     shell(chrome, title, &article, &panels)
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the
 /// heading carries on this page; nothing for a page with fewer than two.
-fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
+fn toc_nav(words: &Words, toc: &[mae_site::TocEntry]) -> String {
     if toc.len() < 2 {
         return String::new();
     }
@@ -317,8 +360,9 @@ fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
         })
         .collect();
     format!(
-        "<nav id=\"mae-toc\" aria-labelledby=\"mae-toc-h\"><h2 id=\"mae-toc-h\">{}</h2><ol>{items}</ol></nav>",
-        escape(label)
+        "<nav id=\"mae-toc\" aria-labelledby=\"mae-toc-h\"><h2 id=\"mae-toc-h\"{}>{}</h2><ol>{items}</ol></nav>",
+        words.mark,
+        escape(words.s.contents)
     )
 }
 
@@ -330,10 +374,21 @@ pub fn listing_document<'a>(
     items: &[(String, String)],
 ) -> String {
     let chrome = chrome.into();
-    let words = mae_site::strings::for_locale(chrome.lang);
+    let words = Words::of(chrome.lang);
     let heading = match kind {
-        Listing::Tags => words.tags.to_string(),
-        Listing::Tag(t) => format!("{}{t}{}", words.tag_page_open, words.tag_page_close),
+        Listing::Tags => words.s.tags.to_string(),
+        Listing::Tag(t) => format!("{}{t}{}", words.s.tag_page_open, words.s.tag_page_close),
+    };
+    // The visible heading marks the catalogue's words, and gives the tag, which
+    // is content, the page's language back.
+    let shown = match kind {
+        Listing::Tags => escape(&heading),
+        Listing::Tag(t) => format!(
+            "{}{}{}",
+            escape(words.s.tag_page_open),
+            words.content(&escape(t)),
+            escape(words.s.tag_page_close)
+        ),
     };
     let list: String = items
         .iter()
@@ -343,8 +398,8 @@ pub fn listing_document<'a>(
         chrome,
         &heading,
         &format!(
-            "<section id=\"mae-listing\"><h1>{}</h1><ul>{list}</ul></section>",
-            escape(&heading)
+            "<section id=\"mae-listing\"><h1{}>{shown}</h1><ul>{list}</ul></section>",
+            words.mark
         ),
         "",
     )
@@ -361,7 +416,7 @@ pub fn listing_document<'a>(
 /// blocks rendering until the reader's choice is on `<html>`, so the first
 /// frame already has it (P-91, P-93).
 fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
-    let words = mae_site::strings::for_locale(chrome.lang);
+    let words = Words::of(chrome.lang);
     let (doc_title, site_link) = match chrome.site {
         Some((site, home)) => (
             format!("{} \u{2014} {}", escape(title), escape(site)),
@@ -371,7 +426,7 @@ fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
     };
     let header = format!(
         "<header id=\"mae-header\">{site_link}{}</header>",
-        theme_controls(words)
+        theme_controls(&words)
     );
     let aside = if panels.is_empty() {
         String::new()
@@ -399,43 +454,57 @@ fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
 /// menu from the palette data the pre-paint script published, and shows the
 /// box once it works, so without JavaScript the controls are absent. The box
 /// carries the words the menu needs (the default accent's label, each
-/// accent's name) for the behaviour to read; core chrome, never content.
-fn theme_controls(words: &mae_site::strings::Strings) -> String {
+/// accent's name) for the behaviour to read; core chrome, never content. A
+/// fallback marks the box, so the menu the behaviour builds inside it is
+/// marked too.
+fn theme_controls(words: &Words) -> String {
     let accents: String = words
+        .s
         .accents
         .iter()
         .map(|(id, name)| format!(" data-accent-{}=\"{}\"", escape(id), escape(name)))
         .collect();
     format!(
-        "<div id=\"mae-theme\" class=\"mae-theme\" hidden data-default-label=\"{}\"{accents}>\
+        "<div id=\"mae-theme\" class=\"mae-theme\" hidden{} data-default-label=\"{}\"{accents}>\
          <button type=\"button\" id=\"mae-mode-toggle\" aria-pressed=\"false\">\
          <span class=\"mae-mode-icon\" aria-hidden=\"true\"></span>{}</button>\
          <button type=\"button\" id=\"mae-palette-button\" aria-haspopup=\"menu\" \
          aria-expanded=\"false\" aria-controls=\"mae-palette-menu\">{}</button></div>",
-        escape(words.accent_default),
-        escape(words.mode_toggle),
-        escape(words.palette_menu),
+        words.mark,
+        escape(words.s.accent_default),
+        escape(words.s.mode_toggle),
+        escape(words.s.palette_menu),
     )
 }
 
 /// A page's tags, each linking to its tag page (P-70); nothing when untagged.
-fn tags_list(label: &str, tags: &[(String, String)]) -> String {
+/// The list's name is the catalogue's; on a fallback the list is marked and
+/// each tag, which is content, gets the page's language back.
+fn tags_list(words: &Words, tags: &[(String, String)]) -> String {
     if tags.is_empty() {
         return String::new();
     }
     let items: String = tags
         .iter()
-        .map(|(t, href)| format!("<li><a href=\"{}\">{}</a></li>", escape(href), escape(t)))
+        .map(|(t, href)| {
+            format!(
+                "<li{}><a href=\"{}\">{}</a></li>",
+                words.unmark,
+                escape(href),
+                escape(t)
+            )
+        })
         .collect();
     format!(
-        "<ul id=\"mae-tags\" aria-label=\"{}\">{items}</ul>",
-        escape(label)
+        "<ul id=\"mae-tags\"{} aria-label=\"{}\">{items}</ul>",
+        words.mark,
+        escape(words.s.tags)
     )
 }
 
 /// The page's backlinks (P-36), named by the locale's words; nothing when
 /// no published page links here.
-fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
+fn backlinks_nav(words: &Words, backlinks: &[mae_site::Backlink]) -> String {
     if backlinks.is_empty() {
         return String::new();
     }
@@ -451,8 +520,9 @@ fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
         .collect();
     format!(
         "<nav id=\"mae-backlinks\" aria-labelledby=\"mae-backlinks-h\">\
-         <h2 id=\"mae-backlinks-h\">{}</h2><ul>{items}</ul></nav>",
-        escape(label)
+         <h2 id=\"mae-backlinks-h\"{}>{}</h2><ul>{items}</ul></nav>",
+        words.mark,
+        escape(words.s.backlinks)
     )
 }
 

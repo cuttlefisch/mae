@@ -272,15 +272,26 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
 }
 
 /// The palette menu's golden fixture (ADR-119 A2) starts from this shell's
-/// page: input.html is the document for its fixed inputs, each asset's
-/// content hash replaced by zeros, so a shell change cannot leave the
-/// fixture the browser client checks describing another page.
+/// page: each input is the document for its fixed inputs in one locale, each
+/// asset's content hash replaced by zeros, so a shell or catalogue change
+/// cannot leave the fixture the browser client checks describing another page.
 #[test]
 fn the_palette_menu_fixture_is_the_daemons_page() {
-    let fixture =
-        include_str!("../../../docs/verification/fixtures/components/palette-menu/input.html");
+    fixture_page(
+        "en-US",
+        include_str!("../../../docs/verification/fixtures/components/palette-menu/input.html"),
+    );
+    fixture_page(
+        "es-ES",
+        include_str!(
+            "../../../docs/verification/fixtures/components/palette-menu/input-es-ES.html"
+        ),
+    );
+}
+
+fn fixture_page(lang: &str, fixture: &str) {
     let chrome = site::Chrome {
-        lang: "en-US",
+        lang,
         site: Some(("Parity fixture", "/kb/parity-fixture/")),
     };
     let mut html = site::document(
@@ -296,7 +307,10 @@ fn the_palette_menu_fixture_is_the_daemons_page() {
         let stem = stem.rsplit_once('-').expect("stem-hash").0;
         html = html.replace(asset.name, &format!("{stem}-{}.{ext}", "0".repeat(16)));
     }
-    assert_eq!(html, fixture, "regenerate input.html from this output");
+    assert_eq!(
+        html, fixture,
+        "{lang}: regenerate its input from this output"
+    );
 }
 
 /// P-91, P-93: the mode toggle and the palette button sit in the header,
@@ -305,7 +319,7 @@ fn the_palette_menu_fixture_is_the_daemons_page() {
 /// words. Attribute values are escaped.
 #[test]
 fn the_theme_controls_are_in_the_header_in_the_locales_words() {
-    for locale in ["en-US", "fr-FR"] {
+    for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
         let words = mae_site::strings::for_locale(locale);
         let html = site::document(locale, "T", "<p>x</p>", &[], &[], &[]);
         let (before_main, after) = html.split_once("<main").expect("a main landmark");
@@ -773,4 +787,195 @@ fn the_site_title_heads_every_page_outside_main() {
             && !head_of_body.contains("<a "),
         "{bare}"
     );
+}
+
+/// Each text run and attribute value of a page the shell wrote, with the
+/// language in effect there (the nearest `lang`) and whether it is in the
+/// `<title>`. Enough of a parser for the shell's own output: every value is
+/// quoted and escaped, and no element but the void ones goes unclosed.
+fn scoped(html: &str) -> Vec<(String, String, bool)> {
+    const VOID: [&str; 4] = ["meta", "link", "br", "img"];
+    let mut stack: Vec<(String, String)> = Vec::new();
+    let mut out = Vec::new();
+    let mut rest = html;
+    let now = |st: &[(String, String)]| st.last().map(|(_, l)| l.clone()).unwrap_or_default();
+    let in_title = |st: &[(String, String)]| st.iter().any(|(t, _)| t == "title");
+    while let Some(i) = rest.find('<') {
+        if !rest[..i].trim().is_empty() {
+            out.push((rest[..i].to_string(), now(&stack), in_title(&stack)));
+        }
+        let j = i + rest[i..].find('>').expect("a closed tag");
+        let tag = &rest[i + 1..j];
+        rest = &rest[j + 1..];
+        if tag.starts_with('!') {
+            continue;
+        }
+        if let Some(name) = tag.strip_prefix('/') {
+            let at = stack.iter().rposition(|(t, _)| t == name).expect(name);
+            stack.truncate(at);
+            continue;
+        }
+        let (name, mut attrs) = tag.split_once(' ').unwrap_or((tag, ""));
+        let mut lang = now(&stack);
+        let mut values = Vec::new();
+        while let Some(eq) = attrs.find("=\"") {
+            let key = attrs[..eq].trim().rsplit(' ').next().unwrap_or_default();
+            let end = eq + 2 + attrs[eq + 2..].find('"').expect("a quoted value");
+            let value = &attrs[eq + 2..end];
+            if key == "lang" {
+                lang = value.to_string();
+            }
+            values.push(value.to_string());
+            attrs = &attrs[end + 1..];
+        }
+        for v in values {
+            out.push((v, lang.clone(), in_title(&stack)));
+        }
+        if !VOID.contains(&name) {
+            stack.push((name.to_string(), lang));
+        }
+    }
+    out
+}
+
+/// Every string of the en-US catalogue, each accent name included.
+fn en_us_strings() -> Vec<&'static str> {
+    let w = mae_site::strings::for_locale("en-US");
+    let mut all = vec![
+        w.backlinks,
+        w.contents,
+        w.tags,
+        w.tag_page_open,
+        w.tag_page_close,
+        w.mode_toggle,
+        w.palette_menu,
+        w.accent_default,
+    ];
+    all.extend(w.accents.iter().map(|(_, n)| *n));
+    all
+}
+
+/// ADR-119 A4: a locale with no catalogue gets en-US's words, and every
+/// element holding them is marked `lang="en-US"` (a screen reader voices
+/// them as English), while `<html lang>` stays the configured locale and the
+/// content (titles, tags, headings, backlinks) keeps it. Checked over every
+/// text and attribute of a page and both listings, not element by element,
+/// so a new piece of chrome written unmarked fails here. The one exception
+/// is the `<title>`: plain text that cannot mark part of itself.
+#[test]
+fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
+    let toc = vec![
+        mae_site::TocEntry {
+            level: 2,
+            text: "zeta heading".into(),
+            anchor: "a".into(),
+        },
+        mae_site::TocEntry {
+            level: 2,
+            text: "eta heading".into(),
+            anchor: "b".into(),
+        },
+    ];
+    let backlinks = vec![mae_site::Backlink {
+        id: "x".into(),
+        title: "theta source".into(),
+        href: "/kb/k/x".into(),
+    }];
+    let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
+    let items = vec![("kappa page".to_string(), "/kb/k/kappa".to_string())];
+    let pages = [
+        site::document(
+            "xx-YY",
+            "lambda title",
+            "<p>mu body</p>",
+            &backlinks,
+            &tags,
+            &toc,
+        ),
+        site::listing_document("xx-YY", &site::Listing::Tags, &tags),
+        site::listing_document("xx-YY", &site::Listing::Tag("iota".into()), &items),
+    ];
+    let en = en_us_strings();
+    let mut seen: Vec<&str> = Vec::new();
+    for page in &pages {
+        assert!(page.contains(r#"<html lang="xx-YY">"#), "{page}");
+        for (text, lang, in_title) in scoped(page) {
+            for word in en.iter().filter(|w| text.contains(**w)) {
+                seen.push(word);
+                assert!(
+                    lang == "en-US" || in_title,
+                    "{word:?} in {text:?} is in {lang:?}: {page}"
+                );
+            }
+            let content = [
+                "zeta heading",
+                "eta heading",
+                "theta source",
+                "iota",
+                "kappa page",
+                "lambda title",
+                "mu body",
+            ];
+            if content.contains(&text.as_str()) {
+                assert_eq!(lang, "xx-YY", "{text:?}: {page}");
+            }
+        }
+    }
+    for word in &en {
+        assert!(seen.contains(word), "{word:?} was never written");
+    }
+}
+
+/// A found catalogue is in the page's own language: nothing is marked, and a
+/// configured es-ES or eo page never carries en-US's words.
+#[test]
+fn a_catalogued_locale_marks_nothing() {
+    let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
+    for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
+        let pages = [
+            site::document(locale, "T", "<p>x</p>", &[], &tags, &[]),
+            site::listing_document(locale, &site::Listing::Tag("iota".into()), &tags),
+        ];
+        for page in pages {
+            assert_eq!(page.matches(" lang=").count(), 1, "{locale}: {page}");
+            assert!(page.contains(&format!(r#"<html lang="{locale}">"#)));
+            if locale != "en-US" {
+                let w = mae_site::strings::for_locale("en-US");
+                for word in [w.mode_toggle, w.palette_menu, w.tags] {
+                    assert!(!page.contains(word), "{locale}: {word}: {page}");
+                }
+            }
+        }
+    }
+}
+
+/// The theme box, configured es-ES, carries the es-ES words the palette menu
+/// reads, pinned as written rather than read back from the catalogue.
+#[test]
+fn the_theme_box_carries_the_es_es_labels() {
+    let html = site::document("es-ES", "T", "<p>x</p>", &[], &[], &[]);
+    let box_ = html
+        .split_once(r#"<div id="mae-theme""#)
+        .expect("the box")
+        .1
+        .split_once("</div>")
+        .expect("closed")
+        .0;
+    for want in [
+        r#" data-default-label="Predeterminado""#,
+        r#" data-accent-red="Rojo""#,
+        r#" data-accent-orange="Naranja""#,
+        r#" data-accent-yellow="Amarillo""#,
+        r#" data-accent-green="Verde""#,
+        r#" data-accent-teal="Verde azulado""#,
+        r#" data-accent-cyan="Cian""#,
+        r#" data-accent-blue="Azul""#,
+        r#" data-accent-violet="Violeta""#,
+        r#" data-accent-magenta="Magenta""#,
+        "</span>Modo oscuro</button>",
+        r#"aria-controls="mae-palette-menu">Paleta de colores</button>"#,
+    ] {
+        assert!(box_.contains(want), "{want}: {box_}");
+    }
+    assert!(!box_.contains(" lang="), "{box_}");
 }

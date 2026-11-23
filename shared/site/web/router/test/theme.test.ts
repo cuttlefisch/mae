@@ -446,6 +446,17 @@ describe("the controls (P-91, P-93, P-94, P-99)", () => {
     ]);
   });
 
+  // ADR-119 A4: on a locale with no catalogue the daemon marks the box
+  // lang="en-US"; the menu built from the box's words is in that language.
+  it("the menu is built inside the box, so a fallback box's lang covers it", () => {
+    const fallback = HEADER.replace('class="mae-theme" hidden', 'class="mae-theme" hidden lang="en-US"');
+    const { win } = browser({ html: PAGE(fallback).replace('<html lang="en-US">', '<html lang="xx-YY">') });
+    mountControls(win);
+    const menu = byId(win, "mae-palette-menu");
+    const accent = byId(win, "mae-accent-menu-gruvbox").querySelector("[data-accent]")!;
+    for (const e of [menu, accent]) expect(e.closest("[lang]")?.getAttribute("lang")).toBe("en-US");
+  });
+
   it("keyboard: open on the checked palette, move, choose with its remembered accent, focus back", () => {
     const { win, root } = browser({ stored: { "mae.palette": "nord", "mae.accent.gruvbox": "yellow" } });
     mountControls(win);
