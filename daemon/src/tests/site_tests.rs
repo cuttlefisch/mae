@@ -513,3 +513,93 @@ fn the_side_panels_sit_outside_the_main_landmark() {
     // A page with no panels has no empty aside.
     assert!(!site::document("en-US", "T", "<p>b</p>", &[], &[], &[]).contains("<aside"));
 }
+
+/// The fixture's files as `kb seed` writes them: each through the seed's own
+/// split and file-to-node mapping, so tags, properties and title sit in the
+/// node's fields, not in its body. (The tests above put `#+filetags` in the
+/// body, which the seed never does; that is how a site serving no tags at all
+/// passed them.)
+async fn seed_files(doc_store: &DocStore, kb_id: &str, files: &[&str]) -> Vec<String> {
+    let nodes: Vec<KbNodeDoc> = files
+        .iter()
+        .map(|text| {
+            let f = mae_daemon::seed::split(text).expect("a fixture file splits");
+            mae_daemon::seed::node_from_file(&f, 0)
+        })
+        .collect();
+    let owner = Arc::new(Identity::generate("owner"));
+    doc_store.set_signer(Arc::clone(&owner));
+    let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
+    coll.set_transport_policy(TransportPolicy::Hub);
+    coll.upsert_member(READER, "reader", Role::Viewer);
+    let mut ids = Vec::new();
+    for n in &nodes {
+        let id = n.id();
+        let _ = coll.add_node(&id, &n.title());
+        ids.push(id);
+    }
+    doc_store
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), BY)
+        .await
+        .unwrap();
+    for (n, id) in nodes.iter().zip(&ids) {
+        doc_store
+            .share_doc(
+                &mae_sync::kb_node_doc_name(kb_id, id),
+                &n.encode_state(),
+                BY,
+            )
+            .await
+            .unwrap();
+    }
+    ids
+}
+
+/// P-70, P-71, P-73 on seeded content: the tags `#+filetags` declared reach the
+/// page, the tag index and each tag's page. At b122cc83 every one was empty,
+/// because a page was rebuilt from the node's title and body alone.
+#[tokio::test]
+async fn a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages() {
+    let store = fresh_doc_store().await;
+    let ids = seed_files(
+        &store,
+        "kb-seeded",
+        &[
+            include_str!("../../../docs/verification/fixtures/kb-site-parity/bundle/index.org"),
+            include_str!(
+                "../../../docs/verification/fixtures/kb-site-parity/bundle/guides/getting-started.org"
+            ),
+        ],
+    )
+    .await;
+    let view = |v: site::View| {
+        let s = store.clone();
+        async move {
+            site::view(
+                &s,
+                "kb-seeded",
+                &v,
+                Some(READER),
+                LIMITS,
+                &Default::default(),
+            )
+            .await
+        }
+    };
+    let SitePage::Found { title, tags, .. } = view(site::View::Page(ids[0].clone())).await else {
+        panic!("the fixture home page");
+    };
+    assert_eq!(title, "Fixture home");
+    let names: Vec<&str> = tags.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, vec!["fixture", "home"]);
+    let SitePage::Listing { items, .. } = view(site::View::Tags).await else {
+        panic!("the tag index");
+    };
+    let all: Vec<&str> = items.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(all, vec!["fixture", "guides", "home"]);
+    let SitePage::Listing { items, .. } = view(site::View::Tag("guides".into())).await else {
+        panic!("the guides tag page");
+    };
+    let titles: Vec<&str> = items.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(titles, vec!["Getting started"]);
+}

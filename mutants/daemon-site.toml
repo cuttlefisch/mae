@@ -52,3 +52,13 @@ filter = "test(the_home_page_is_the_declared_node_or_else_the_tag_index)"
 file = "daemon/src/site.rs"
 find = '''        View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {'''
 replace = '''        View::Home(declared) => match declared {'''
+
+[[mutant]]
+id = "daemon-site/page-tags-dropped"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''    let filetags = if tags.is_empty() {'''
+replace = '''    let filetags = if true {'''

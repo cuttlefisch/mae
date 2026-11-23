@@ -67,6 +67,7 @@ mod plan;
 mod report;
 mod split;
 
+pub use apply::node_from_file;
 pub use apply::{
     apply, build_collection, build_node, ApplyError, ApplyOutcome, ApplyRefusalKind, ApplyTarget,
 };

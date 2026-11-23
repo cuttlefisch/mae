@@ -172,7 +172,7 @@ async fn readable_sources(
         if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
             return Err(SitePage::TooLarge);
         }
-        if let Some(text) = page_source(&node_id, &title, &body) {
+        if let Some(text) = page_source(&node_id, &doc) {
             sources.push(SourcePage {
                 origin: node_id,
                 text,
@@ -228,21 +228,39 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
     }
 }
 
-/// A node as the Org text of its page: its ID and title, then its body. A
-/// node ID that could not be one property value (whitespace, nothing) has no
-/// page; a title's line breaks are folded so it stays one keyword line.
-fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
-    // The core's own rule for an address (controls, White_Space, bidi
-    // controls, U+FEFF): one rule on every side.
+/// A node as the Org text of its page: its ID, title and file tags, then its
+/// body. Any node has a page, however it was written (seed, editor, tool), so
+/// this is not the seed export's file, which refuses a node that would not
+/// seed back exactly.
+///
+/// The tags come from the node's own field, which is where `kb seed` and the
+/// editor keep `#+filetags`; a page built from title and body alone had none,
+/// so no tag page ever listed a seeded page. Only valid Org tags are written
+/// (P-73), so a tag cannot add a line, and a title's line breaks are folded so
+/// it stays one keyword line. No page for a node whose ID could not be an
+/// address (the core's own rule: controls, White_Space, bidi controls, U+FEFF).
+fn page_source(node_id: &str, doc: &KbNodeDoc) -> Option<String> {
     if node_id.is_empty() || node_id.chars().any(mae_site::address::refused_in_id) {
         return None;
     }
-    let title: String = title
+    let title: String = doc
+        .title()
         .chars()
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect();
+    let tags: Vec<String> = doc
+        .tags()
+        .into_iter()
+        .filter(|t| mae_site::address::valid_tag(t))
+        .collect();
+    let filetags = if tags.is_empty() {
+        String::new()
+    } else {
+        format!("#+filetags: :{}:\n", tags.join(":"))
+    };
     Some(format!(
-        ":PROPERTIES:\n:ID: {node_id}\n:END:\n#+title: {title}\n\n{body}\n"
+        ":PROPERTIES:\n:ID: {node_id}\n:END:\n#+title: {title}\n{filetags}\n{}\n",
+        doc.body()
     ))
 }
 
@@ -414,13 +432,23 @@ mod tests {
         );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/title&gt;"), "{html}");
-        let src = page_source("n", "T\n#+title: evil\n:END:", "b").unwrap();
+        // Neither a title nor a tag can add a keyword line.
+        let evil = KbNodeDoc::new(
+            "n",
+            "T\n#+title: evil\n:END:",
+            "b",
+            &["ok".into(), "x:\n#+title: evil".into(), "a b".into()],
+        );
+        let src = page_source("n", &evil).unwrap();
         assert_eq!(
             src.lines().filter(|l| l.starts_with("#+title:")).count(),
             1,
             "{src}"
         );
-        assert_eq!(page_source("a b", "t", "b"), None);
-        assert_eq!(page_source("", "t", "b"), None);
+        assert!(src.contains("#+filetags: :ok:\n"), "{src}");
+        let plain = KbNodeDoc::new("n", "t", "b", &[]);
+        assert!(page_source("n", &plain).is_some());
+        assert_eq!(page_source("a b", &plain), None);
+        assert_eq!(page_source("", &plain), None);
     }
 }
