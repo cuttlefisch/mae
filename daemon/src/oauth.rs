@@ -66,6 +66,8 @@ pub struct ResourceServerConfig {
     pub site_enabled: bool,
     /// `config::OAuthConfig::site_locale`.
     pub site_locale: String,
+    /// `config::OAuthConfig::site_hidden_namespaces`.
+    pub site_hidden_namespaces: Vec<String>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -648,6 +650,11 @@ async fn handle_request(
     if let Some(resp) = public_response(&req, config, doc_store) {
         return Ok(resp);
     }
+    // ADR-119 L1a: the site's static assets are public (no KB content, and a
+    // `<link>` cannot carry a bearer token), served only when the site is on.
+    if config.site_enabled && req.uri().path().starts_with(mae_site::assets::PREFIX) {
+        return Ok(site_asset(&req));
+    }
     // ADR-099: `/ws` and `/ws/ticket` exist only when `ws_enabled`; otherwise
     // they are ordinary paths and fall through to the authenticated default.
     if crate::ws::is_ws_path(req.uri().path()) && listener.ws.is_some() {
@@ -672,8 +679,8 @@ async fn handle_request(
     // ADR-119 L1a: the live KB site, read-only, when enabled. Authenticated
     // like every route here; the KB's read gate decides the rest.
     if config.site_enabled {
-        if let Some((kb_id, id)) = site_path(req.uri().path()) {
-            return Ok(site_route(&req, &listener, &principal, &kb_id, &id).await);
+        if let Some((kb_id, view)) = site_path(req.uri().path()) {
+            return Ok(site_route(&req, &listener, &principal, &kb_id, &view).await);
         }
     }
 
@@ -708,13 +715,25 @@ async fn handle_request(
 
 /// `/kb/<kb-id>/<id>`, with `<id>` percent-decoded. One segment each: any
 /// other shape is not a site path.
-pub(crate) fn site_path(path: &str) -> Option<(String, String)> {
+pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> {
+    use mae_daemon::site::View;
     let rest = path.strip_prefix("/kb/")?;
-    let (kb, id) = rest.split_once('/')?;
-    if kb.is_empty() || id.is_empty() || id.contains('/') {
+    let (kb, rest) = rest.split_once('/')?;
+    if kb.is_empty() || rest.is_empty() {
         return None;
     }
-    Some((kb.to_string(), percent_decode(id)?))
+    let view = match rest.split_once('/') {
+        // `tags` is reserved (a page cannot hold it, P-166): the tag index.
+        None if rest == "tags" => View::Tags,
+        // Also reserved: the content index (P-77).
+        None if rest == "index.json" => View::Index,
+        None => View::Page(percent_decode(rest)?),
+        Some(("tags", tag)) if !tag.is_empty() && !tag.contains('/') => {
+            View::Tag(percent_decode(tag)?)
+        }
+        Some(_) => return None,
+    };
+    Some((kb.to_string(), view))
 }
 
 /// `%XX` decoded; `None` for a bad escape or text that is not UTF-8.
@@ -746,7 +765,7 @@ async fn site_route(
     listener: &Listener,
     principal: &ValidatedPrincipal,
     kb_id: &str,
-    id: &str,
+    view: &mae_daemon::site::View,
 ) -> Response<Full<Bytes>> {
     use mae_daemon::site::{self, SitePage};
     let config = &listener.config;
@@ -771,21 +790,54 @@ async fn site_route(
         Ok(lease) => lease,
         Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
     };
-    match site::page(
+    match site::view(
         store,
         kb_id,
-        id,
+        view,
         Some(&principal.principal),
         site::SiteLimits {
             max_scan_nodes: config.kb_query_max_scan_nodes,
             max_body_bytes: config.kb_query_max_body_bytes,
         },
+        &mae_site::SiteOptions {
+            hidden_namespaces: config.site_hidden_namespaces.clone(),
+        },
     )
     .await
     {
-        SitePage::Found { title, html } => site_response(
+        SitePage::Found {
+            title,
+            html,
+            backlinks,
+            tags,
+            toc,
+        } => site_response(
             StatusCode::OK,
-            site::document(&config.site_locale, &title, &html),
+            site::document(&config.site_locale, &title, &html, &backlinks, &tags, &toc),
+        ),
+        SitePage::Index(entries) => {
+            let pages: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.id, "title": e.title, "href": e.href,
+                        "tags": e.tags, "links": e.links, "text": e.text,
+                    })
+                })
+                .collect();
+            let mut r = site_response(
+                StatusCode::OK,
+                serde_json::json!({ "pages": pages }).to_string(),
+            );
+            r.headers_mut().insert(
+                "content-type",
+                hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            r
+        }
+        SitePage::Listing { kind, items } => site_response(
+            StatusCode::OK,
+            site::listing_document(&config.site_locale, &kind, &items),
         ),
         SitePage::NotFound => not_found(),
         SitePage::TooLarge => site_response(
@@ -793,6 +845,26 @@ async fn site_route(
             "this KB is larger than the site derives per request".into(),
         ),
     }
+}
+
+/// One embedded site asset (`mae_site::assets`), by its content-addressed
+/// name: immutable for a year, since a change always gets a new name. Any
+/// other path under the prefix, or a method but GET, is the site's 404.
+fn site_asset(req: &Request<Incoming>) -> Response<Full<Bytes>> {
+    let asset = (req.method() == hyper::Method::GET)
+        .then(|| mae_site::assets::at(req.uri().path()))
+        .flatten();
+    let Some(asset) = asset else {
+        return site_response(StatusCode::NOT_FOUND, "not found".into());
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", asset.content_type)
+        .header("content-security-policy", mae_daemon::site::CSP)
+        .header("x-content-type-options", "nosniff")
+        .header("cache-control", "public, max-age=31536000, immutable")
+        .body(Full::new(Bytes::from_static(asset.body.as_bytes())))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// An HTML (or plain refusal) response with the site's headers: its CSP,

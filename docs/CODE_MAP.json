@@ -1391,11 +1391,19 @@
           "kind": "mod"
         },
         {
+          "name": "assets",
+          "kind": "mod"
+        },
+        {
           "name": "derive",
           "kind": "mod"
         },
         {
           "name": "sanitize",
+          "kind": "mod"
+        },
+        {
+          "name": "strings",
           "kind": "mod"
         }
       ]

@@ -29,18 +29,55 @@
 
 use crate::doc_store::DocStore;
 use crate::kb_query;
-use mae_site::{derive, Addressing, SourcePage};
+use mae_site::{derive_with, Addressing, SourcePage};
 use mae_sync::kb::{Encryption, KbNodeDoc};
 
 /// What the route answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SitePage {
-    /// A page: its title (raw text) and its sanitised article HTML.
-    Found { title: String, html: String },
+    /// A page: its title (raw text), its sanitised article HTML, its
+    /// backlinks, and its tags as `(tag, href)`.
+    Found {
+        title: String,
+        html: String,
+        backlinks: Vec<mae_site::Backlink>,
+        tags: Vec<(String, String)>,
+        toc: Vec<mae_site::TocEntry>,
+    },
+    /// The content index (P-77): one entry per published page.
+    Index(Vec<mae_site::IndexEntry>),
+    /// A listing the engine generates: the tag index or one tag's pages, as
+    /// `(text, href)` entries.
+    Listing {
+        kind: Listing,
+        items: Vec<(String, String)>,
+    },
     /// Every refusal and every absence, alike.
     NotFound,
-    /// The KB has more nodes than this listener derives per request.
+    /// The KB is larger than this listener derives per request.
     TooLarge,
+}
+
+/// Which generated listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listing {
+    /// Every tag (P-71).
+    Tags,
+    /// The pages of one tag (P-70).
+    Tag(String),
+}
+
+/// What a request asks for under `/kb/<kb-id>/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    /// `/kb/<kb-id>/<id>`.
+    Page(String),
+    /// `/kb/<kb-id>/tags`.
+    Tags,
+    /// `/kb/<kb-id>/tags/<tag>`.
+    Tag(String),
+    /// `/kb/<kb-id>/index.json`.
+    Index,
 }
 
 /// What one page request may read (D21).
@@ -60,18 +97,64 @@ pub async fn page(
     principal: Option<&str>,
     limits: SiteLimits,
 ) -> SitePage {
+    view(
+        doc_store,
+        kb_id,
+        &View::Page(id.to_string()),
+        principal,
+        limits,
+        &mae_site::SiteOptions::default(),
+    )
+    .await
+}
+
+/// One view of `kb_id`, as `principal` may read it.
+pub async fn view(
+    doc_store: &DocStore,
+    kb_id: &str,
+    view: &View,
+    principal: Option<&str>,
+    limits: SiteLimits,
+    opts: &mae_site::SiteOptions,
+) -> SitePage {
+    let (sources, addressing) = match readable_sources(doc_store, kb_id, principal, limits).await {
+        Ok(v) => v,
+        Err(answer) => return answer,
+    };
+    // Rendering is CPU work: off the async workers.
+    let view = view.clone();
+    let opts = opts.clone();
+    let answered = tokio::task::spawn_blocking(move || {
+        answer(
+            &derive_with(&sources, &addressing, &opts),
+            &addressing,
+            view,
+        )
+    })
+    .await;
+    answered.unwrap_or(SitePage::NotFound)
+}
+
+/// The KB's pages as sources, once the read gate admits `principal` and the
+/// KB is within `limits`; otherwise the answer to give.
+async fn readable_sources(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    limits: SiteLimits,
+) -> Result<(Vec<SourcePage>, Addressing), SitePage> {
     let Ok(addressing) = Addressing::live(kb_id) else {
-        return SitePage::NotFound;
+        return Err(SitePage::NotFound);
     };
     let Ok((coll, encryption)) = kb_query::load_gated(doc_store, kb_id, principal).await else {
-        return SitePage::NotFound;
+        return Err(SitePage::NotFound);
     };
     if !matches!(encryption, Encryption::None) {
-        return SitePage::NotFound;
+        return Err(SitePage::NotFound);
     }
     let nodes = coll.list_nodes();
     if nodes.len() > limits.max_scan_nodes {
-        return SitePage::TooLarge;
+        return Err(SitePage::TooLarge);
     }
     let mut sources = Vec::with_capacity(nodes.len());
     for (node_id, _) in nodes {
@@ -84,7 +167,7 @@ pub async fn page(
         };
         let (title, body) = (doc.title(), doc.body());
         if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
-            return SitePage::TooLarge;
+            return Err(SitePage::TooLarge);
         }
         if let Some(text) = page_source(&node_id, &title, &body) {
             sources.push(SourcePage {
@@ -93,16 +176,45 @@ pub async fn page(
             });
         }
     }
-    // Rendering is CPU work: off the async workers.
-    let id = id.to_string();
-    let derived =
-        tokio::task::spawn_blocking(move || derive(&sources, &addressing).pages.remove(&id)).await;
-    match derived {
-        Ok(Some(p)) => SitePage::Found {
-            title: p.title,
-            html: p.html,
+    Ok((sources, addressing))
+}
+
+/// The answer to `view` from a derived KB.
+fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePage {
+    match view {
+        View::Page(id) => match site.pages.get(&id) {
+            Some(p) => SitePage::Found {
+                title: p.title.clone(),
+                html: p.html.clone(),
+                backlinks: p.backlinks.clone(),
+                tags: p
+                    .tags
+                    .iter()
+                    .map(|t| (t.clone(), addressing.tag_href(t)))
+                    .collect(),
+                toc: p.toc.clone(),
+            },
+            None => SitePage::NotFound,
         },
-        Ok(None) | Err(_) => SitePage::NotFound,
+        View::Tags => SitePage::Listing {
+            kind: Listing::Tags,
+            items: site
+                .tags
+                .keys()
+                .map(|t| (t.clone(), addressing.tag_href(t)))
+                .collect(),
+        },
+        View::Index => SitePage::Index(site.index.clone()),
+        View::Tag(tag) => match site.tags.get(&tag) {
+            Some(pages) => SitePage::Listing {
+                kind: Listing::Tag(tag),
+                items: pages
+                    .iter()
+                    .map(|p| (p.title.clone(), p.href.clone()))
+                    .collect(),
+            },
+            None => SitePage::NotFound,
+        },
     }
 }
 
@@ -110,7 +222,9 @@ pub async fn page(
 /// node ID that could not be one property value (whitespace, nothing) has no
 /// page; a title's line breaks are folded so it stays one keyword line.
 fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
-    if node_id.is_empty() || node_id.chars().any(char::is_whitespace) {
+    // The core's own rule for an address (controls, White_Space, bidi
+    // controls, U+FEFF): one rule on every side.
+    if node_id.is_empty() || node_id.chars().any(mae_site::address::refused_in_id) {
         return None;
     }
     let title: String = title
@@ -124,15 +238,122 @@ fn page_source(node_id: &str, title: &str, body: &str) -> Option<String> {
 
 /// The HTML document for a found page: the core's fixed chrome around the
 /// sanitised article (added after sanitising, D19). `title` is escaped here.
-pub fn document(lang: &str, title: &str, article: &str) -> String {
+pub fn document(
+    lang: &str,
+    title: &str,
+    article: &str,
+    backlinks: &[mae_site::Backlink],
+    tags: &[(String, String)],
+    toc: &[mae_site::TocEntry],
+) -> String {
+    let words = mae_site::strings::for_locale(lang);
+    shell(
+        lang,
+        title,
+        &format!(
+            "{}<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>{}",
+            toc_nav(words.contents, toc),
+            escape(title),
+            tags_list(words.tags, tags),
+            backlinks_nav(words.backlinks, backlinks),
+        ),
+    )
+}
+
+/// The page's table of contents (P-79): one link per heading, to the id the
+/// heading carries on this page; nothing for a page with fewer than two.
+fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
+    if toc.len() < 2 {
+        return String::new();
+    }
+    let items: String = toc
+        .iter()
+        .map(|e| {
+            format!(
+                "<li class=\"mae-toc-l{}\"><a href=\"#{}\">{}</a></li>",
+                e.level,
+                escape(&e.anchor),
+                escape(&e.text)
+            )
+        })
+        .collect();
+    format!(
+        "<nav id=\"mae-toc\" aria-labelledby=\"mae-toc-h\"><h2 id=\"mae-toc-h\">{}</h2><ol>{items}</ol></nav>",
+        escape(label)
+    )
+}
+
+/// The HTML document for a generated listing: the tag index or one tag's
+/// pages (P-70, P-71), headed in the locale's words.
+pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) -> String {
+    let words = mae_site::strings::for_locale(lang);
+    let heading = match kind {
+        Listing::Tags => words.tags.to_string(),
+        Listing::Tag(t) => format!("{}{t}{}", words.tag_page_open, words.tag_page_close),
+    };
+    let list: String = items
+        .iter()
+        .map(|(text, href)| format!("<li><a href=\"{}\">{}</a></li>", escape(href), escape(text)))
+        .collect();
+    shell(
+        lang,
+        &heading,
+        &format!(
+            "<section id=\"mae-listing\"><h1>{}</h1><ul>{list}</ul></section>",
+            escape(&heading)
+        ),
+    )
+}
+
+/// The document around a page's main content: lang, the palette, the title,
+/// one main landmark (P-165).
+fn shell(lang: &str, title: &str, main: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>{}</title></head><body><main id=\"mae-main\"><article id=\"mae-article\">\
-         <h1>{}</h1>{article}</article></main></body></html>\n",
+         <link rel=\"stylesheet\" href=\"{}\">\
+         <title>{}</title></head><body><main id=\"mae-main\">{main}</main></body></html>\n",
         escape(lang),
+        mae_site::assets::href(mae_site::assets::PALETTE),
         escape(title),
-        escape(title)
+    )
+}
+
+/// A page's tags, each linking to its tag page (P-70); nothing when untagged.
+fn tags_list(label: &str, tags: &[(String, String)]) -> String {
+    if tags.is_empty() {
+        return String::new();
+    }
+    let items: String = tags
+        .iter()
+        .map(|(t, href)| format!("<li><a href=\"{}\">{}</a></li>", escape(href), escape(t)))
+        .collect();
+    format!(
+        "<ul id=\"mae-tags\" aria-label=\"{}\">{items}</ul>",
+        escape(label)
+    )
+}
+
+/// The page's backlinks (P-36), named by the locale's words; nothing when
+/// no published page links here.
+fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
+    if backlinks.is_empty() {
+        return String::new();
+    }
+    let items: String = backlinks
+        .iter()
+        .map(|b| {
+            format!(
+                "<li><a href=\"{}\">{}</a></li>",
+                escape(&b.href),
+                escape(&b.title)
+            )
+        })
+        .collect();
+    format!(
+        "<nav id=\"mae-backlinks\" aria-labelledby=\"mae-backlinks-h\">\
+         <h2 id=\"mae-backlinks-h\">{}</h2><ul>{items}</ul></nav>",
+        escape(label)
     )
 }
 
@@ -163,7 +384,14 @@ mod tests {
 
     #[test]
     fn a_title_cannot_break_out_of_its_element_or_its_keyword_line() {
-        let html = document("en-US", "</title><script>alert(1)</script>", "<p>x</p>");
+        let html = document(
+            "en-US",
+            "</title><script>alert(1)</script>",
+            "<p>x</p>",
+            &[],
+            &[],
+            &[],
+        );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/title&gt;"), "{html}");
         let src = page_source("n", "T\n#+title: evil\n:END:", "b").unwrap();

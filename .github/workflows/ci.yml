@@ -895,6 +895,17 @@ jobs:
         run: npm run lint
       - name: Tests (vitest run; the palette package builds dist/ first)
         run: npm test
+      # The palette's dist/ is committed: the daemon embeds it (owner,
+      # 2026-11-22). The build is byte-deterministic, so the copy npm test just
+      # rebuilt must equal the committed one exactly.
+      - name: Committed palette dist/ matches a fresh build
+        run: |
+          git diff --exit-code -- palette/dist
+          if [ -n "$(git status --porcelain -- palette/dist)" ]; then
+            git status --porcelain -- palette/dist
+            echo "::error::palette/dist differs from a fresh build: run npm run build and commit it"
+            exit 1
+          fi
 
   lint-nonrust:
     name: shell + yaml + ansible lint
