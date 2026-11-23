@@ -112,7 +112,7 @@ impl TicketStore {
         rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
         // base64url without padding: 43 characters, every one a valid
         // subprotocol token character (RFC 7230 `tchar`), as the client's
-        // script (`tests/data/c-guion-v2.json`) expects.
+        // script (`tests/data/c-script-v3.json`) expects.
         let ticket = data_encoding::BASE64URL_NOPAD.encode(&bytes);
         entries.insert(
             key(&ticket),

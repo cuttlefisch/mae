@@ -1,0 +1,395 @@
+{
+  "format": "c-script-v3",
+  "description": "Frame script of the browser client against MAE's WebSocket (ADR-099, amendment 1, B1-B6): what the client sends and what it expects, scenario by scenario. HTTP refusals carry the listener's usual body {error, error_description} and kind: the client decides by kind. session/hello also carries limits.max_outbound_bytes, the most the daemon sends in one message (the example is the default: a node at MAE's 10 MB, in base64, plus 1 MiB of envelope); a response over it closes with 1011 and response_too_large. v3 is v2 in English, with the same scenarios, frames and assertions.",
+  "scenarios": [
+    {
+      "name": "ticket and connection",
+      "steps": [
+        {
+          "client": {
+            "http": "POST",
+            "path": "/ws/ticket",
+            "headers": {
+              "Authorization": "Bearer <token>",
+              "Origin": "<page origin>"
+            }
+          }
+        },
+        {
+          "daemon": {
+            "status": 200,
+            "json": {
+              "ticket": "TICKET-43-base64url-characters-of-256-bits",
+              "expires_in": 30
+            }
+          }
+        },
+        {
+          "client": {
+            "websocket": "/ws",
+            "subprotocols": ["mae.v1", "mae.ticket.TICKET-43-base64url-characters-of-256-bits"],
+            "headers": {
+              "Origin": "<the same origin>"
+            }
+          }
+        },
+        {
+          "daemon": {
+            "chosen_subprotocol": "mae.v1"
+          },
+          "client_checks": "the chosen one is mae.v1 and never carries the ticket"
+        },
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "session/hello",
+              "params": {
+                "protocol": "mae.v1",
+                "principal": "test-principal",
+                "auth_deadline": "2026-11-11T12:00:00Z",
+                "limits": {
+                  "max_frame_bytes": 1048576,
+                  "max_open_docs": 64,
+                  "max_outbound_bytes": 15029592
+                }
+              }
+            }
+          },
+          "note": "a notification, without id; auth_deadline in RFC 3339 UTC"
+        }
+      ]
+    },
+    {
+      "name": "used, expired or unknown ticket",
+      "steps": [
+        {
+          "client": {
+            "websocket": "/ws",
+            "subprotocols": ["mae.v1", "mae.ticket.<used|expired|made-up>"]
+          }
+        },
+        {
+          "daemon": {
+            "status": 401,
+            "json": {
+              "error": "invalid_token",
+              "error_description": "<text>",
+              "kind": "ticket_invalid"
+            },
+            "www_authenticate": true
+          },
+          "client_checks": "the three responses, byte for byte the same"
+        }
+      ]
+    },
+    {
+      "name": "credential in the URL",
+      "steps": [
+        {
+          "client": {
+            "websocket": "/ws?ticket=TICKET-43-base64url-characters-of-256-bits",
+            "subprotocols": ["mae.v1"]
+          }
+        },
+        {
+          "daemon": {
+            "status": 400,
+            "json": {
+              "error": "invalid_request",
+              "error_description": "<text>",
+              "kind": "credential_in_url"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "no version in common",
+      "steps": [
+        {
+          "client": {
+            "websocket": "/ws",
+            "subprotocols": ["mae.v2", "mae.ticket.TICKET-43-base64url-characters-of-256-bits"]
+          }
+        },
+        {
+          "daemon": {
+            "status": 400,
+            "json": {
+              "error": "invalid_request",
+              "error_description": "<text>",
+              "kind": "protocol_unsupported",
+              "supported": ["mae.v1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "origin not on the list",
+      "steps": [
+        {
+          "client": {
+            "http": "POST",
+            "path": "/ws/ticket",
+            "headers": {
+              "Origin": "https://not-allowed.example"
+            }
+          }
+        },
+        {
+          "daemon": {
+            "status": 403,
+            "json": {
+              "error": "access_denied",
+              "error_description": "<text>",
+              "kind": "origin_not_allowed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "renew before the deadline",
+      "steps": [
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "session/renew_needed",
+              "params": {
+                "auth_deadline": "2026-11-11T12:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "r-1",
+              "method": "session/renew",
+              "params": {
+                "token": "<new token>"
+              }
+            }
+          }
+        },
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "r-1",
+              "result": {
+                "auth_deadline": "2026-11-11T13:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "renew as another identity",
+      "steps": [
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "r-2",
+              "method": "session/renew",
+              "params": {
+                "token": "<token for another subject>"
+              }
+            }
+          }
+        },
+        {
+          "daemon": {
+            "close": {
+              "code": 4403,
+              "reason": "principal_changed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "deadline passed",
+      "steps": [
+        {
+          "daemon": {
+            "close": {
+              "code": 4401,
+              "reason": "token_expired"
+            }
+          }
+        },
+        {
+          "client_checks": "what was sent afterwards does not count as applied: it is sent again after reconnecting"
+        }
+      ]
+    },
+    {
+      "name": "two documents on one socket; one slow",
+      "steps": [
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "j-1",
+              "method": "kb/join",
+              "params": {
+                "kb_id": "kb-a"
+              }
+            }
+          }
+        },
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "u-1",
+              "method": "kb/node_update",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64>"
+              }
+            }
+          }
+        },
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "id": "u-2",
+              "method": "kb/node_update",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n2",
+                "update": "<base64>"
+              }
+            }
+          }
+        },
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "session/doc_closed",
+              "params": {
+                "doc": "<document name in the envelope>",
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "reason": "slow_consumer"
+              }
+            }
+          },
+          "client_checks": "reopens n1 (resynchronises); n2 carries on",
+          "note": "doc and kb_id always (also on collection documents); node_id on node documents; reason not_member or slow_consumer"
+        }
+      ]
+    },
+    {
+      "name": "member removed between renewals",
+      "steps": [
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "session/doc_closed",
+              "params": {
+                "doc": "<document name in the envelope>",
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "reason": "not_member"
+              }
+            }
+          },
+          "note": "doc and kb_id always (also on collection documents); node_id on node documents; reason not_member or slow_consumer"
+        },
+        {
+          "client_checks": "stops the nodes of that KB, without closing the session or the other KBs"
+        }
+      ]
+    },
+    {
+      "name": "frame too large",
+      "steps": [
+        {
+          "client_checks": "does not send a frame over limits.max_frame_bytes: that request fails, not the socket"
+        },
+        {
+          "daemon": {
+            "close": {
+              "code": 1009
+            }
+          },
+          "note": "if one arrives, the daemon closes the socket"
+        }
+      ]
+    },
+    {
+      "name": "presence",
+      "steps": [
+        {
+          "client": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "sync/awareness",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64 of a y-protocols awareness update>"
+              }
+            }
+          }
+        },
+        {
+          "daemon": {
+            "frame": {
+              "jsonrpc": "2.0",
+              "method": "sync/awareness",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64>",
+                "principals": {
+                  "<clientID>": "<sealed principal>"
+                }
+              }
+            }
+          },
+          "client_checks": "labels the cursor with the sealed principal, never with user"
+        }
+      ]
+    },
+    {
+      "name": "external issuer in the first slice",
+      "steps": [
+        {
+          "client": {
+            "http": "POST",
+            "path": "/ws/ticket",
+            "headers": {
+              "Authorization": "Bearer <token from an external issuer>"
+            }
+          }
+        },
+        {
+          "daemon": {
+            "status": 401,
+            "json": {
+              "error": "invalid_token",
+              "error_description": "<text>",
+              "kind": "issuer_not_supported"
+            },
+            "www_authenticate": true
+          }
+        }
+      ]
+    }
+  ],
+  "identity": "The Yjs clientID is derived from principal (the one in session/hello, equal to kb/join's) and the kb/join epoch, as in the 24 shared client-id test vectors."
+}
