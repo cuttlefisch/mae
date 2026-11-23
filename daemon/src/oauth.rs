@@ -763,6 +763,42 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// The home view with the node the operator declared for this KB (ADR-119
+/// Amendment 2 B3): configuration, never content. Other views unchanged.
+fn with_declared_home(
+    view: &mae_daemon::site::View,
+    config: &ResourceServerConfig,
+    kb_id: &str,
+) -> mae_daemon::site::View {
+    use mae_daemon::site::View;
+    match view {
+        View::Home(_) => View::Home(config.site_home.get(kb_id).cloned()),
+        other => other.clone(),
+    }
+}
+
+/// The content index (P-77) as JSON.
+fn index_response(entries: &[mae_site::IndexEntry]) -> Response<Full<Bytes>> {
+    let pages: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id, "title": e.title, "href": e.href,
+                "tags": e.tags, "links": e.links, "text": e.text,
+            })
+        })
+        .collect();
+    let mut r = site_response(
+        StatusCode::OK,
+        serde_json::json!({ "pages": pages }).to_string(),
+    );
+    r.headers_mut().insert(
+        "content-type",
+        hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    r
+}
+
 /// One live-site request (ADR-119 L1a): `GET` only, charged as a scan, and
 /// every refusal answered as one not-found (D7).
 async fn site_route(
@@ -795,19 +831,11 @@ async fn site_route(
         Ok(lease) => lease,
         Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
     };
-    // The home page is the operator's choice per KB (B3), never content's.
-    let declared;
-    let view = match view {
-        site::View::Home(_) => {
-            declared = site::View::Home(config.site_home.get(kb_id).cloned());
-            &declared
-        }
-        other => other,
-    };
+    let view = with_declared_home(view, config, kb_id);
     match site::view(
         store,
         kb_id,
-        view,
+        &view,
         Some(&principal.principal),
         site::SiteLimits {
             max_scan_nodes: config.kb_query_max_scan_nodes,
@@ -829,26 +857,7 @@ async fn site_route(
             StatusCode::OK,
             site::document(&config.site_locale, &title, &html, &backlinks, &tags, &toc),
         ),
-        SitePage::Index(entries) => {
-            let pages: Vec<serde_json::Value> = entries
-                .iter()
-                .map(|e| {
-                    serde_json::json!({
-                        "id": e.id, "title": e.title, "href": e.href,
-                        "tags": e.tags, "links": e.links, "text": e.text,
-                    })
-                })
-                .collect();
-            let mut r = site_response(
-                StatusCode::OK,
-                serde_json::json!({ "pages": pages }).to_string(),
-            );
-            r.headers_mut().insert(
-                "content-type",
-                hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
-            );
-            r
-        }
+        SitePage::Index(entries) => index_response(&entries),
         SitePage::Listing { kind, items } => site_response(
             StatusCode::OK,
             site::listing_document(&config.site_locale, &kind, &items),
