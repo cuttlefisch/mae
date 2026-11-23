@@ -410,7 +410,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `credential_in_url` | A query string on `/ws` or `/ws/ticket`; credentials never travel in a URL. HTTP `400`, `error: "invalid_request"`. | `GET /ws`, `POST /ws/ticket` | — |
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `awareness_not_owned` | A `sync/awareness` update in the y-protocols encoding names a client id another session on the same document already owns (ADR-099 B5). Nothing was relayed. | `sync/awareness` | — |
-| `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
+| `ticket_invalid` | A connect ticket that is unknown, used, expired, outlived by its token, bound to another origin, or whose IdP binding changed — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to a ticket `session/renew` (code `-32600`), and the old deadline stands. | `GET /ws`, `session/renew` | — |
 | `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds (on `/ws`: whenever `ws_accept_bound_idp` is off). HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
@@ -608,6 +608,21 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   for any KB document, `node_id` for a node document) and the rest of the session continues. A missed deadline closes `4401
   token_expired`, and no frame is applied after it. So removing a member takes effect on their open
   sockets at their next renewal at the latest — keep token lifetimes short.
+- **Renewing with a ticket (ADR-099 Amendment 3).** A browser whose tokens a confidential backend
+  holds renews with `session/renew {"ticket": …}` instead: the backend mints a fresh ticket with the
+  person's token (`POST /ws/ticket`, sending the browser page's `Origin`) and gives the browser only
+  the ticket. Exactly one of `token` and `ticket` must be present, else `invalid_params`. The ticket
+  is spent exactly as at the upgrade — single use across both, its token unexpired, minted for the
+  `Origin` this socket was opened with, a bound IdP binding re-read — and must carry the socket's
+  issuer, subject and principal (else `4403 principal_changed`). Any refusal of the ticket itself is
+  `ticket_invalid` with the old deadline standing. The new deadline is the minting token's expiry,
+  capped by `ws_max_idp_session_secs` for a bound IdP token.
+  **Revocation through a ticket renewal waits for the capped deadline.** After `binding unbind` (or
+  a rebind to another key), a socket renewing with a **token** closes at once, `4403
+  principal_changed`; one renewing with a **ticket** minted before the change gets `ticket_invalid`
+  and keeps its old deadline — at most `ws_max_idp_session_secs` (900 s by default) after its binding
+  was last read, or the token's own expiry when that cap is `0`. Keep the cap short if unbinding must
+  take effect quickly for browser clients behind a backend.
 - **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A reply over `ws_max_outbound_bytes`
   closes `1011` with reason `response_too_large`; by default that bound holds one document at
   `max_document_size_bytes` as base64 plus 1 MiB (15,029,592 at the stock 10 MB), never less than

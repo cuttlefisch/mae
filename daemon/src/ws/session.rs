@@ -15,7 +15,7 @@
 //! and the write timeout that drops a client that stops reading (D4).
 //!
 //! @ai-caution: [security] `session/*` frames never reach the session loop; a
-//! renewal token is validated here and never logged.
+//! renewal token or ticket is validated here and never logged.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,8 +31,9 @@ use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 use tokio_websockets::{CloseCode, Limits, Message, ServerBuilder, WebSocketStream};
 
+use super::connect_ticket::TicketGrant;
 use super::credential::{self, Refused};
-use super::upgrade::SessionAuth;
+use super::upgrade::{self, SessionAuth, TicketRefused};
 use super::{now_unix, WsSettings, PROTOCOL_V1};
 use crate::conn_limit::ConnGuard;
 use crate::oauth::Listener;
@@ -314,11 +315,33 @@ impl Driver {
         .await
     }
 
-    /// B3: validate the new token, refuse a changed identity, move the
-    /// deadline, and re-authorize every open document. The binding is resolved
-    /// again here (Amendment 2, E2), so an unbind or a rebind since the socket
-    /// opened closes it.
+    /// B3: a renewal presents exactly one credential, `token` (a bearer) or
+    /// `ticket` (a connect ticket, Amendment 3), and either refuses a changed
+    /// identity, moves the deadline and re-authorizes every open document.
+    /// Both or neither is `invalid_params`; `null` counts as absent.
     async fn renew(&mut self, id: Value, params: &Value) -> Flow {
+        let present = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
+        match (present("token"), present("ticket")) {
+            (true, false) => self.renew_with_token(id, params).await,
+            (false, true) => self.renew_with_ticket(id, params).await,
+            (true, true) => {
+                // B1: a presented ticket is spent whatever refuses the request.
+                let _ = self.redeem(params);
+                let msg = "present `token` or `ticket`, not both".to_string();
+                self.send_error(id, McpError::invalid_params("ticket", msg))
+                    .await
+            }
+            (false, false) => {
+                let msg = "missing 'token' or 'ticket'".to_string();
+                self.send_error(id, McpError::invalid_params("token", msg))
+                    .await
+            }
+        }
+    }
+
+    /// B3 with a bearer token. The binding is resolved again here (Amendment
+    /// 2, E2), so an unbind or a rebind since the socket opened closes it.
+    async fn renew_with_token(&mut self, id: Value, params: &Value) -> Flow {
         let token = params.get("token").and_then(Value::as_str).unwrap_or("");
         let vp = match credential::socket_principal(token, &self.listener).await {
             Ok(vp) => vp,
@@ -328,13 +351,63 @@ impl Driver {
         };
         // Issuer AND subject, as the token carries them, and the principal
         // they resolve to NOW: a rebind to another key changes only the last.
-        if vp.issuer != self.auth.issuer
-            || vp.subject != self.auth.subject
-            || vp.principal != self.auth.principal
+        if !self
+            .auth
+            .same_identity(&vp.issuer, &vp.subject, &vp.principal)
         {
             return self.principal_changed();
         }
         let deadline = credential::session_deadline(&vp, &self.listener);
+        self.renewed(id, deadline).await
+    }
+
+    /// Amendment 3, F2: renew with a connect ticket, so a browser whose
+    /// tokens a confidential backend holds never sees one. The ticket is
+    /// redeemed and spent exactly as at the upgrade (`upgrade::spend_ticket`:
+    /// single use, this socket's origin, its token unexpired, a bound IdP
+    /// binding re-read, the deadline capped by E2). Every refusal of the
+    /// ticket itself is the one `ticket_invalid`, and the old deadline stands;
+    /// a valid ticket for another identity closes `4403`, as a token does.
+    ///
+    /// @ai-caution: [security] Never log the ticket. It is spent (removed from
+    /// the store) before anything else is checked, so it can never be
+    /// presented again, here or at the upgrade.
+    async fn renew_with_ticket(&mut self, id: Value, params: &Value) -> Flow {
+        let grant = self.redeem(params);
+        let listener = Arc::clone(&self.listener);
+        let auth = match upgrade::spend_ticket(grant, &self.auth.origin, &listener).await {
+            Ok(auth) => auth,
+            Err(TicketRefused::Invalid) => {
+                return self.send_error(id, upgrade::ticket_invalid_error()).await
+            }
+            Err(TicketRefused::Fault(why)) => {
+                return self.send_error(id, why.into_rpc_error()).await
+            }
+        };
+        if !self
+            .auth
+            .same_identity(&auth.issuer, &auth.subject, &auth.principal)
+        {
+            return self.principal_changed();
+        }
+        self.renewed(id, auth.deadline).await
+    }
+
+    /// Remove `params.ticket` from the ticket store (single use, B1) and
+    /// return what it granted: `None` for unknown, used or expired alike.
+    fn redeem(&self, params: &Value) -> Option<TicketGrant> {
+        let ticket = params.get("ticket").and_then(Value::as_str).unwrap_or("");
+        let ws = self
+            .listener
+            .ws
+            .as_ref()
+            .expect("a socket exists only when ws is Some");
+        ws.tickets.redeem(ticket, std::time::Instant::now())
+    }
+
+    /// A renewal succeeded: move the deadline, answer it, and re-authorize
+    /// every open document (B3).
+    async fn renewed(&mut self, id: Value, deadline: u64) -> Flow {
         self.handle.set_deadline(deadline);
         self.renew_sent = false;
         let flow = self

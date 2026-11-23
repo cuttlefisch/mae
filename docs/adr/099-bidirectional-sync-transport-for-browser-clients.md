@@ -1,7 +1,8 @@
 # ADR-099: Bidirectional sync transport for browser clients
 
 **Status:** Accepted (design), with Amendment 1 (accepted 2026-11-11). Amendment 2 (2026-11-15,
-proposed): a linked IdP login may use the socket before #727.
+proposed): a linked IdP login may use the socket before #727. Amendment 3 (accepted 2026-11-24):
+renewing a socket with a connect ticket.
 **Depends on:** ADR-097 (Browser MAE is a KB surface — its D3 establishes that a one-directional
 transport cannot serve a write surface), ADR-052 (OAuth 2.1 resource server — the listener this
 extends), ADR-053 (the read-through query surface this sits beside), ADR-098 (the identity a
@@ -508,3 +509,121 @@ bindings.
   the same refusal as an unknown ticket.
 
 E4's checks are #727's, and so are their tests.
+
+## Amendment 3 (2026-11-24): renewing with a connect ticket
+
+**Status of this amendment:** Accepted (owner decision, 2026-11-24).
+
+B3 renews a socket with a bearer token in a `session/renew` frame. That assumes the browser holds
+the token. A browser client may instead be served by a confidential backend that holds the person's
+tokens and must never hand one to the browser: OAuth's recommended shape for a browser application
+(the "backend for frontend" of the IETF browser-based-apps guidance). Such a browser can open a
+socket, because the backend mints a connect ticket (B1) with the person's token and gives the browser
+only the ticket. Until this amendment it could not renew one. This amendment lets it renew with a
+fresh ticket, through exactly the checks a ticket already meets at the upgrade.
+
+### F1. `session/renew` takes exactly one credential
+
+`session/renew` takes `params.token` (a bearer, as B3 says) **or** `params.ticket` (a connect ticket,
+the 43 characters `POST /ws/ticket` returned). Exactly one must be present; `null` counts as
+absent. Both, or neither, is refused `invalid_params` (code `-32602`), nothing renews and the old
+deadline stands. A ticket presented beside a token is spent all the same: B1's "consumed on its
+first presentation, whatever happens next" holds on this path too.
+
+### F2. A ticket renewal is the upgrade's redemption, plus B3's identity rule
+
+The ticket is redeemed by the same code that redeems one at the upgrade (`upgrade::spend_ticket`,
+over the same in-memory store), so it meets every B1 and E1 check, in one implementation:
+
+- it is removed from the store before anything else is checked: single use, across both paths. A
+  ticket that opened a socket cannot renew one, and a ticket spent by a renewal cannot open one;
+- it must be within its own lifetime (30 s at most), and its minting token's `exp` must not have
+  passed;
+- its bound `Origin` must equal the `Origin` **this socket was upgraded with** (recorded on the
+  session at the upgrade; `None` for a client that sent none). A backend minting for a browser
+  therefore sends the browser page's origin on `POST /ws/ticket`, which must be in
+  `ws_allowed_origins` as for any mint;
+- a ticket minted by a bound IdP token re-reads its binding (E1).
+
+The ticket's identity must then be the socket's: the same issuer, the same subject, and the same
+principal they resolve to now. Anything else closes the socket `4403 principal_changed`, exactly as a
+token renewal does (B3, E2). On success the deadline moves and every open document is re-authorized,
+as B3 says.
+
+### F3. One refusal
+
+A ticket that is unknown, reused, expired, outlived by its token, minted for another origin, or
+whose binding is gone or changed gets one answer, whatever the reason:
+
+```json
+{"jsonrpc": "2.0", "id": <id>, "error": {"code": -32600,
+ "message": "the connect ticket is not valid", "data": {"kind": "ticket_invalid"}}}
+```
+
+It is shaped as a refused token renewal is (a JSON-RPC error on the socket; the socket stays open and
+the old deadline stands), with B1's own kind, so the client knows to mint another ticket rather than
+fetch another token. A binding that is gone therefore does not close the socket here, as E2's token
+renewal does: the next mint answers `identity_not_bound`, no ticket can renew, and the socket ends at
+its deadline, which E2's cap already bounds. A binding table that cannot be read is a fault, not a
+verdict on the ticket, and is answered as it is on every route (`internal_fault`).
+
+**Revocation through a ticket renewal waits for the deadline.** Stated plainly, because the two
+renewal paths differ here and an operator unbinding someone must not assume otherwise: when a bound
+IdP subject is unbound (or rebound to another key) while its socket is open, a **token** renewal
+closes the socket at once with `4403 principal_changed` (E2), but a **ticket** renewal — of a ticket
+minted before the change — gets `ticket_invalid` and the socket **keeps its old deadline**. That
+deadline is the one E2 capped when the socket opened or last renewed: at most
+`ws_max_idp_session_secs` (900 s by default) after the binding was last read, or the minting token's
+own `exp` when the cap is `0`. Revocation of a socket renewed only by tickets therefore takes effect
+at that capped deadline, not at the unbind; a ticket minted after the change cannot renew either (the
+mint answers `identity_not_bound` after an unbind, and one minted after a rebind names another
+principal and closes `4403`).
+
+### F4. The deadline, and where E2's cap is applied
+
+A ticket carries its minting token's `exp`, **uncapped**. Spending it (at the upgrade or at a
+renewal) sets the session's deadline to that `exp`, capped by E2 for a bound IdP token through the
+one function a bearer token's deadline goes through, from the moment the ticket is spent. Before this
+amendment the cap was applied at the mint and the ticket carried the capped value: the cap is now
+measured from when the binding was last read, which is the spend, and a renewal by ticket cannot
+escape it. A ticket-opened bound IdP session can therefore last up to one ticket lifetime (30 s)
+longer than before, and no longer than `ws_max_idp_session_secs` after its binding was last checked.
+
+### F5. Tests
+
+In `daemon/tests/ws_renew_ticket_e2e.rs`, each against a real session, with freshly generated
+identities and freshly minted tickets:
+
+- a valid ticket renews, moves the deadline past the first token's, and is never echoed back;
+- a valid ticket for another subject closes `4403` and does not renew;
+- each of B3's three identity clauses alone closes `4403`, on both the ticket and the token path:
+  the same subject from another issuer (a self-issued token, and a bound IdP token whose subject
+  string equals the key's fingerprint and is bound to that key), the same issuer and subject rebound
+  to another key, and the same key moved from one subject to another;
+- a reused, unknown, other-origin and origin-less ticket all give the same error object, and the
+  socket stays open; so does an expired ticket, and a ticket whose minting token has expired; and a
+  socket upgraded with no `Origin` refuses a ticket minted for one, while an origin-less ticket
+  renews it;
+- a ticket spent by the upgrade cannot renew, and one spent by a renewal cannot open a socket;
+- both credentials, neither, or both `null` is `invalid_params`, and a ticket beside a token is spent;
+- a token renewal is unchanged (renews; a bad token is `invalid_token`; another subject closes `4403`);
+- a bound IdP ticket renewal is capped by E2, as is the socket the ticket opened;
+- a bound IdP ticket spent after an unbind gets the one refusal; one minted after a rebind to another
+  key closes `4403`.
+
+Declared mutants (`mutants/ws-renew-ticket.toml`) remove, one at a time, the origin check, the
+identity check, each of its three clauses, single use, the ticket's lifetime, the token's expiry,
+the binding re-read and E2's cap on the ticket path, and let a socket with no `Origin` accept a
+ticket for any origin; each must be caught.
+
+### Rejected in this amendment
+
+- **A server-to-server "renew socket N" call**, by which the backend would renew the browser's socket
+  directly with the person's token. It needs more surface for the same result: sockets would need
+  stable addresses a backend can name, a new authenticated control path from the backend into a live
+  session would have to be designed, authorized and tested, and the question "may this caller renew
+  that socket" has no answer today. Renewing by ticket reuses the mint route, the store and the
+  redemption the upgrade already has, and the browser that holds the socket stays the only party
+  acting on it.
+- **Letting the browser hold a token for renewal only.** It is the credential the backend exists to
+  keep out of the browser.
