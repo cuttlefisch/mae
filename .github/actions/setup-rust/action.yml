@@ -122,9 +122,18 @@ runs:
     - name: Configure sccache env
       if: inputs.sccache == 'true'
       shell: bash
+      # Start the server once, here. When the cache service is down it fails
+      # to start ("Timed out waiting for server startup", 2026-11-23, all day),
+      # and with RUSTC_WRAPPER set every compile then failed: a cache outage
+      # became a red build on every PR. Now the job builds without the cache
+      # instead: slower, never wrong. A running server is reused by cargo.
       run: |
-        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        if SCCACHE_GHA_ENABLED=true sccache --start-server; then
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        else
+          echo "::warning::sccache could not start; building without the compile cache"
+        fi
     - name: Disable incremental compilation
       if: inputs.incremental == 'false'
       shell: bash
