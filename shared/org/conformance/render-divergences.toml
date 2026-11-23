@@ -31,9 +31,25 @@ test = "drawers_other_than_properties_are_never_rendered"
 id = "options-keyword"
 what = "#+OPTIONS: (and the export settings it carries)"
 org = "applies it: todo:, tags:, ^:, toc:, num:, H:, … change what is exported"
-mae = "not read: the render is a function of the tree, its semantics and RenderOptions"
+mae = "not read: the render is a function of the tree, its semantics and RenderOptions; H: is RenderOptions::headline_levels (off by default), which MAE's org export reads from #+OPTIONS: and passes, Org's default 3 when there is none"
 reason = "#+OPTIONS configures an exporter run; MAE renders one page per node for a host that decides its own chrome. ADR-112 D4 lets declared config change the parse, not an exporter's choices; a caller wanting them sets RenderOptions."
 test = "options_keywords_are_not_read"
+
+[[divergence]]
+id = "low-level-headline-lists"
+what = "headlines deeper than H: (low-level headlines)"
+org = "a list item holding the headline's line and contents, in an <ol class=org-ol> when the headline is numbered (num:t, Org's default) and a <ul class=org-ul> when not"
+mae = "the same item in a <ul class=org-headlines> always, as Org with num:nil"
+reason = "mae-org numbers no headline (num: is not read, see options-keyword), so a numbered list under unnumbered headings would show numbers Org's own page never pairs with them."
+test = "low_level_headlines_are_an_unordered_list_whatever_num_says"
+
+[[divergence]]
+id = "heading-level-stars"
+what = "the HTML level of a heading in a document whose top-level headlines are deeper than one star"
+org = "h(relative level + org-html-toplevel-hlevel - 1): the least top-level headline level counts as 1 (org-export-get-relative-level), so a document of ** headlines starts at <h2>"
+mae = "h(stars + toplevel_hlevel - 1), at most h6, and the org-level-N class the stars; which headlines are list items under H: is counted as Org counts it, from the relative level"
+reason = "Recorded, not chosen: the stars mapping predates issue #951, which found it, and hosts style and link by it; changing it changes every such page and is left to its own change."
+test = "heading_tags_follow_the_stars_not_the_relative_level"
 
 [[divergence]]
 id = "latex"
