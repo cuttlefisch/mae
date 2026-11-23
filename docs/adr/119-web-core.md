@@ -3,8 +3,8 @@
 **Status:** Proposed (design), being built in phase order. Built: S0 (mae-org 0.10.0, #973), and L1a's
 first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
 `GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
-Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects)
-and where its home page comes from. Spikes
+Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
+where its home page comes from, and the retirement of ADR-073's view. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -740,10 +740,19 @@ home page. With no home node declared, or one that is unpublished or unreadable 
 cannot see the declared node as for one on a KB that declares none, so it says nothing about a node
 the reader cannot read (A5).
 
+### B4. ADR-073's live view is retired *(owner, 2026-11-23)*
+
+The live app supersedes ADR-073's view. Its `GET /kb/<kb-id>/view`, gated by `webview_enabled`, answers
+before authentication and before the live app, so a node whose ID is `view` could not be reached at its
+own address (A5's debt). The route is removed, and with it the reason to reserve `view`. `webview_enabled`
+is deprecated: accepted and ignored, with a startup warning, for one minor release, then removed.
+Rejected: reserving `view` under A3 (two renderers of one KB, and an ID withheld for an old path), and
+moving the view to another path (a breaking change that keeps the second renderer).
+
 ## Amendments this needs
 
-- **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. The `webview_enabled`
-  switch keeps gating it.
+- **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. Amendment 2 B4 retires
+  ADR-073's view and deprecates `webview_enabled`.
 - **ADR-074 Amendment 1:** its change index becomes a prerequisite for L1, not an optimisation.
 - **ADR-097 D1:** names this core.
 - **ADR-113:** D8's rule for which view a reader gets. Also that the
