@@ -130,11 +130,25 @@ const EO: Strings = Strings {
 const CATALOGUES: [&Strings; 4] = [&EN_US, &FR_FR, &ES_ES, &EO];
 
 /// The catalogue for `locale`, and whether it fell back: `(en-US's, true)`
-/// for a locale with no catalogue. A caller writing chrome from a fallback
-/// marks it `lang="en-US"` (the catalogue's own `locale`), while the page's
-/// language stays the configured one.
+/// for a locale whose language has no catalogue. A caller writing chrome
+/// from a fallback marks it `lang="en-US"` (the catalogue's own `locale`),
+/// while the page's language stays the configured one.
+///
+/// Matching is BCP 47 lookup (RFC 4647 §3.4), case-insensitive as tags are:
+/// the exact tag first (`es-es` is `es-ES`), then a catalogue of the same
+/// primary language (`es-MX` reads `es-ES`'s, which is the reader's language,
+/// so it is found, not a fallback). Only another language falls back.
 pub fn resolve(locale: &str) -> (&'static Strings, bool) {
-    match CATALOGUES.iter().find(|s| s.locale == locale) {
+    let primary = |tag: &str| tag.split('-').next().unwrap_or("").to_ascii_lowercase();
+    let exact = CATALOGUES
+        .iter()
+        .find(|s| s.locale.eq_ignore_ascii_case(locale));
+    let same_language = || {
+        CATALOGUES
+            .iter()
+            .find(|s| !locale.is_empty() && primary(s.locale) == primary(locale))
+    };
+    match exact.or_else(same_language) {
         Some(s) => (s, false),
         None => (&EN_US, true),
     }
@@ -148,6 +162,29 @@ pub fn for_locale(locale: &str) -> &'static Strings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BCP 47 lookup: tags are case-insensitive, and a regional variant reads
+    /// its language's catalogue; only another language falls back.
+    #[test]
+    fn a_locale_is_looked_up_as_bcp_47_tags_are() {
+        for (tag, want) in [
+            ("es-ES", "es-ES"),
+            ("es-es", "es-ES"),
+            ("ES-ES", "es-ES"),
+            ("es-MX", "es-ES"),
+            ("es", "es-ES"),
+            ("eo", "eo"),
+            ("EO", "eo"),
+            ("fr-CA", "fr-FR"),
+            ("en-GB", "en-US"),
+        ] {
+            let (s, fell_back) = resolve(tag);
+            assert_eq!((s.locale, fell_back), (want, false), "{tag}");
+        }
+        for tag in ["pt-BR", "de", "", "x", "-ES"] {
+            assert_eq!(resolve(tag), (&EN_US, true), "{tag}");
+        }
+    }
 
     /// Every string a catalogue holds, by name. The destructuring is
     /// exhaustive, so a new field does not compile until it is listed here.
@@ -230,7 +267,9 @@ mod tests {
             assert!(!fell_back, "{locale} fell back");
             assert_eq!(words.locale, locale);
         }
-        for other in ["xx-YY", "es", "es-MX", "eo-XX", ""] {
+        // Languages with no catalogue; a regional variant of a catalogued
+        // language is found by its language (a_locale_is_looked_up_as_bcp_47_tags_are).
+        for other in ["xx-YY", "pt-BR", "de", ""] {
             assert_eq!(resolve(other), (&EN_US, true), "{other:?}");
             assert_eq!(for_locale(other), &EN_US, "{other:?}");
         }

@@ -665,7 +665,10 @@ and are not in the catalogue.
 
 *(owner, 2026-11-23)* The reader ships four catalogues: `en-US`, `fr-FR`, `es-ES` and `eo`; `es-ES`
 and `eo` are complete, and `eo` awaits a speaker's review. A catalogue is complete by construction (a
-missing string does not compile), so a locale either has every string or falls back whole.
+missing string does not compile), so a locale either has every string or falls back whole. A
+configured locale is looked up as BCP 47 tags are (RFC 4647): case-insensitively, the exact tag first,
+then a catalogue of the same language (`es-MX` reads `es-ES`'s, as the reader's own language); only
+another language falls back.
 Translations are written fresh for the catalogue, never copied from another site generator's locale
 files (the Context's clean-room rule). Locale data (dates, numbers, plural rules, language names) will come from
 Unicode CLDR, through ICU4X in Rust and `Intl` in the browser, when the reader first renders any;
