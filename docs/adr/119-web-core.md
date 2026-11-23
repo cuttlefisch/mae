@@ -2,7 +2,9 @@
 
 **Status:** Proposed (design), being built in phase order. Built: S0 (mae-org 0.10.0, #973), and L1a's
 first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
-`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided. Spikes
+`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
+Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects)
+and where its home page comes from. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -693,6 +695,48 @@ token. So:
 
 The daemon's own refusal answers (A5) are unchanged, and the backend passes the daemon's CSP and
 security headers through with each page.
+
+## Amendment 2 (2026-11-23): what the live app does not serve, and its home page
+
+The parity specification was written for a static-site engine. Three of its groups assume things a
+live, signed-in app over a store-is-truth KB (ADR-110) does not have. The owner decided each
+*(owner, 2026-11-23)*.
+
+### B1. Folders are an export feature
+
+A native KB has no folders. After the cutover its nodes have no source file (`source_file` is `None`),
+so there is no path to list or to show as breadcrumbs. Folders exist only where a bundle on disk does,
+in the static export (X1). So:
+
+- **Export only:** folder listing pages (P-72) and the folder half of P-74, breadcrumbs (P-29), and a
+  configured descending order per folder (P-46).
+- **The live explorer and graph** cannot group by folder (P-39–P-44, P-54, P-59, P-67 as they concern
+  folders). Their live grouping is decided with the explorer slice of L1a and with L1c. The parity rows
+  apply to the live app in every respect except folders.
+- **Rejected:** a folder as a new node property (a schema change under ADR-093 to rebuild something
+  the cutover removed on purpose), and hierarchical tags read as folders (it overloads tags, and P-70's
+  tag rules would then decide navigation).
+
+D1's "tag and folder listings" and L1a's "tag and folder listings, breadcrumbs" read, for the live
+app, as tag listings only.
+
+### B2. Feeds, the sitemap and redirects are export features
+
+Every live route needs a bearer token or the browser client's session (A5, A6). Feed readers and
+crawlers have neither, so a live feed or sitemap would serve nobody. The RSS feed (P-75), the sitemap
+(P-76) and the route-history redirects (P-03–P-06) are produced by the export only. P-78 still applies
+to the live app's content index (`/kb/<kb-id>/index.json`). The live app's "what's new" (P-163) is a
+page, not a feed.
+
+### B3. The home page is operator configuration
+
+`/kb/<kb-id>/` serves the KB's home page: a node the **operator** names, per KB, in the daemon's site
+configuration, as the export's site directory names its what's-new node. Under D3, configuration comes
+from the operator, never from content, so no tag, property or reserved ID in a KB can make a node the
+home page. With no home node declared, or one that is unpublished or unreadable to the reader,
+`/kb/<kb-id>/` serves the tag index (A3). That makes the home address answer the same for a reader who
+cannot see the declared node as for one on a KB that declares none, so it says nothing about a node
+the reader cannot read (A5).
 
 ## Amendments this needs
 
