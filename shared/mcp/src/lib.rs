@@ -1221,7 +1221,7 @@ mod tests {
         assert!(msg.contains("test"));
     }
 
-    /// mae-web's sequence: `kb/join` grants `sync_update` straight on the
+    /// The browser client's sequence: `kb/join` grants `sync_update` straight on the
     /// broadcaster, then the client subscribes to `awareness_update`. Both
     /// must still be delivered: subscribing adds, it never replaces.
     #[tokio::test]
