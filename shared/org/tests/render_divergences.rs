@@ -9,8 +9,8 @@ mod support;
 
 use mae_org::seeded::HashSet;
 use mae_org::{
-    parse, render_html, semantics, semantics_with, ArchivedTrees, ParseOptions, RenderOptions,
-    Resolver, SemanticsOptions,
+    parse, render_html, semantics, semantics_with, ArchivedTrees, HeadlineLevels, ParseOptions,
+    RenderOptions, Resolver, SemanticsOptions,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -174,6 +174,23 @@ fn options_keywords_are_not_read() {
         !out.contains("table-of-contents") && !out.contains("1. "),
         "{out}"
     );
+}
+
+#[test]
+fn low_level_headlines_are_an_unordered_list_whatever_num_says() {
+    // Org's default (num:t) numbers `** B`, so its item would be in an <ol>.
+    for options in ["", "#+OPTIONS: num:t\n", "#+OPTIONS: num:nil\n"] {
+        let doc = format!("{options}* A\n** B\n** C\n");
+        let d = parse(&doc, &ParseOptions::default());
+        let opts = RenderOptions::default().with_headline_levels(Some(HeadlineLevels::new(1)));
+        let out = render_html(&d, &semantics(&d), &opts, &Resolver::default());
+        assert!(!out.contains("<ol"), "{out}");
+        assert_eq!(
+            out.matches("<ul class=\"org-headlines\">").count(),
+            1,
+            "{out}"
+        );
+    }
 }
 
 #[test]
