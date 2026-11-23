@@ -39,6 +39,48 @@ fn pty_child_pid(pty: &tty::Pty) -> u32 {
     }
 }
 
+#[cfg(target_os = "linux")]
+type PtyHold = std::os::fd::OwnedFd;
+#[cfg(not(target_os = "linux"))]
+type PtyHold = std::convert::Infallible;
+
+/// Open the PTY for a child, as `tty::new` does, keeping a handle on its
+/// terminal side.
+///
+/// @ai-caution: [shell] Do not go back to `tty::new` on Linux. alacritty's
+/// reader parses what it reads only once it holds the terminal lock, and
+/// while it cannot take the lock it keeps reading. Once the child has exited
+/// and the last handle on the terminal side is closed, Linux fails that read
+/// with `EIO`, and the reader returns the error with the bytes it had not
+/// parsed yet (`event_loop.rs::pty_read`, 0.26.0 and upstream master). So
+/// the last output of a fast child is lost whenever something holds the lock
+/// at that moment: the renderer, or a test polling the viewport. That was
+/// #965's blank terminal. With this handle open, the read reports
+/// "would block" instead, and the reader keeps its bytes until it gets the
+/// lock. The child's exit is still seen: alacritty watches the process, not
+/// the hang-up. macOS reports end-of-file there, which keeps the bytes, so
+/// nothing is needed elsewhere. Proven by
+/// `output_written_while_the_terminal_is_locked_survives_the_childs_exit`.
+#[cfg(target_os = "linux")]
+fn open_pty(
+    opts: &tty::Options,
+    window_size: WindowSize,
+) -> std::io::Result<(tty::Pty, Option<PtyHold>)> {
+    use tty::ToWinsize;
+    let pair = rustix_openpty::openpty(None, Some(&window_size.to_winsize()))?;
+    let hold = pair.user.try_clone()?;
+    let pty = tty::from_fd(opts, 0, pair.controller, pair.user)?;
+    Ok((pty, Some(hold)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_pty(
+    opts: &tty::Options,
+    window_size: WindowSize,
+) -> std::io::Result<(tty::Pty, Option<PtyHold>)> {
+    Ok((tty::new(opts, window_size, 0)?, None))
+}
+
 /// Terminal dimensions in cells.
 pub struct TermSize {
     pub columns: usize,
@@ -110,6 +152,11 @@ pub struct ShellTerminal {
 
     /// Custom text selection state for mouse-based text selection.
     selection: Option<ShellSelection>,
+
+    /// Our own handle on the PTY's terminal side, held for the terminal's
+    /// life so the child's last output is never lost (#965, see
+    /// [`open_pty`]). `None` where the loss cannot happen.
+    _pty_hold: Option<PtyHold>,
 }
 
 /// Resolve the user's interactive login-shell `PATH`, caching the result for
@@ -314,7 +361,7 @@ impl ShellTerminal {
         };
 
         tty::setup_env();
-        let pty = tty::new(&pty_opts, window_size, 0)?;
+        let (pty, pty_hold) = open_pty(&pty_opts, window_size)?;
         let child_pid = pty_child_pid(&pty);
         let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, true, false)?;
         let pty_tx = event_loop.channel();
@@ -332,6 +379,7 @@ impl ShellTerminal {
             child_pid,
             generation: 0,
             selection: None,
+            _pty_hold: pty_hold,
         })
     }
 
@@ -384,7 +432,7 @@ impl ShellTerminal {
         tty::setup_env();
 
         // Spawn the PTY.
-        let pty = tty::new(&pty_opts, window_size, 0)?;
+        let (pty, pty_hold) = open_pty(&pty_opts, window_size)?;
 
         // Extract child PID before the PTY is moved into the event loop.
         let child_pid = pty_child_pid(&pty);
@@ -412,6 +460,7 @@ impl ShellTerminal {
             child_pid,
             generation: 0,
             selection: None,
+            _pty_hold: pty_hold,
         })
     }
 
@@ -793,8 +842,50 @@ mod tests {
         script_path
     }
 
+    /// #965's mechanism, made to happen on demand. alacritty's reader parses
+    /// what it read only once it holds the terminal lock; while it does not,
+    /// it keeps reading. When the child has exited, that next read fails
+    /// (`EIO` on Linux) and the reader returns the error with the bytes it
+    /// had not parsed yet: the child's last output is lost. Anything that
+    /// holds the lock across a fast child's exit hits it: a test's viewport
+    /// poll, or the renderer.
+    ///
+    /// The lock is held until the child is reaped. The reader reaps only
+    /// after its read returns, and with the lock held that return can only be
+    /// the error path, so a reaped child means the window has been crossed.
+    #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "quarantined: a login bash in a PTY stayed blank for 30 s in CI (#965)"]
+    fn output_written_while_the_terminal_is_locked_survives_the_childs_exit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let script = tmp.path().join("say.sh");
+        std::fs::write(&script, "#!/bin/sh\necho MARKER=locked\n").expect("write script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut term = ShellTerminal::spawn_command(
+            80,
+            24,
+            script.to_str().unwrap(),
+            None,
+            std::collections::HashMap::new(),
+            false,
+        )
+        .expect("spawn");
+        let proc_dir = std::path::PathBuf::from(format!("/proc/{}", term.child_pid()));
+        // Not asserted: if the reader kept its bytes instead, it never
+        // returns, never reaps, and the marker must still appear below.
+        let reaped = {
+            let _held = term.term();
+            mae_mcp::ready::wait_until_blocking(|| !proc_dir.exists())
+        };
+        let what = format!(
+            "MARKER=locked after the lock is released (child reaped while locked: {reaped})"
+        );
+        wait_for_viewport(&mut term, &what, |v| v.contains("MARKER=locked"));
+    }
+
+    #[test]
     fn spawn_command_with_login_wrap_sources_bashrc() {
         // Regression test for the reported bug: `open-ai-agent`'s spawn path
         // (spawn_command) used to exec the target program directly with no
