@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "readme": "Mutation list for the router's unit suite (Vitest), the graph package's format: each find must occur once in the file; the named test must fail with it applied. MAE's tools/mutate does not run Vitest targets yet; run with the loop in the router PR's description.",
+  "timeout": 300,
+  "targets": {
+    "unit": {
+      "type": "vitest",
+      "command": [
+        "npx",
+        "--no-install",
+        "vitest",
+        "run"
+      ],
+      "files": [
+        "test/**/*.test.ts"
+      ]
+    }
+  },
+  "mutants": [
+    {
+      "name": "redirects followed (the login hop dies cross-origin)",
+      "file": "src/router.ts",
+      "find": "redirect: \"manual\",",
+      "replace": "redirect: \"follow\",",
+      "target": "unit",
+      "filter": "fetches the next page"
+    },
+    {
+      "name": "an earlier navigation is not aborted",
+      "file": "src/router.ts",
+      "find": "    inFlight?.abort();\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "latest of overlapping"
+    },
+    {
+      "name": "a non-200 page is swapped in",
+      "file": "src/router.ts",
+      "find": "if (r.type === \"opaqueredirect\" || r.status !== 200) return \"full\";",
+      "replace": "if (r.type === \"opaqueredirect\" || r.status >= 500) return \"full\";",
+      "target": "unit",
+      "filter": "swaps only a plain 200"
+    },
+    {
+      "name": "a page with other assets is swapped in",
+      "file": "src/router.ts",
+      "find": "return a.length === b.length && a.every((x, i) => x === b[i]);",
+      "replace": "return a.length === b.length;",
+      "target": "unit",
+      "filter": "other assets"
+    },
+    {
+      "name": "another origin is routed",
+      "file": "src/router.ts",
+      "find": "if (url.origin !== here.origin || !url.pathname.startsWith(SITE_PREFIX)) return null;",
+      "replace": "if (!url.pathname.startsWith(SITE_PREFIX)) return null;",
+      "target": "unit",
+      "filter": "leaves every other click"
+    },
+    {
+      "name": "a fragment move refetches the page",
+      "file": "src/router.ts",
+      "find": "    if (pageOf(url) === shown) return;\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "within the shown page"
+    },
+    {
+      "name": "components are not cleaned up before a swap",
+      "file": "src/router.ts",
+      "find": "    unmountAll();\n    doc.title = next.title;",
+      "replace": "    doc.title = next.title;",
+      "target": "unit",
+      "filter": "mounts each component once"
+    },
+    {
+      "name": "focus is not moved after a swap",
+      "file": "src/router.ts",
+      "find": "      focus.focus({ preventScroll: true });\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "fetches the next page"
+    },
+    {
+      "name": "the site header is not swapped",
+      "file": "src/router.ts",
+      "find": "    region(HEADER_ID, \"before\");\n",
+      "replace": "",
+      "target": "unit",
+      "filter": "site header"
+    }
+  ]
+}

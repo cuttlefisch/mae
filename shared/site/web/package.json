@@ -8,7 +8,8 @@
   },
   "workspaces": [
     "graph",
-    "palette"
+    "palette",
+    "router"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces",

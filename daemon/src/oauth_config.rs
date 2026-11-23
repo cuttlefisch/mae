@@ -102,6 +102,11 @@ pub struct OAuthConfig {
     /// never content (D3). A KB with no entry, or whose home node the reader
     /// cannot read, gets the tag index there. Default none.
     pub site_home: std::collections::BTreeMap<String, String>,
+    /// Each KB's site title (P-16), under `[oauth.site_title]`: KB ID → title.
+    /// Shown in every page's `<title>` and in the header linking to the KB's
+    /// home. Operator configuration, never content (D3). Never in a refusal:
+    /// the not-found is identical for every caller (A5). Default none.
+    pub site_title: std::collections::BTreeMap<String, String>,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -256,6 +261,7 @@ impl Default for OAuthConfig {
             site_locale: "en-US".to_string(),
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
+            site_title: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,

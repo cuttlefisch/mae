@@ -257,17 +257,34 @@ fn page_source(node_id: &str, doc: &KbNodeDoc) -> Option<String> {
     ))
 }
 
+/// What every page of one KB's site shares: its locale and, when the operator
+/// named one, the site's title (P-16) with the address of its home page. A
+/// plain locale string is a site without a title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chrome<'a> {
+    pub lang: &'a str,
+    /// `(site title, home href)`: operator configuration, never content (D3).
+    pub site: Option<(&'a str, &'a str)>,
+}
+
+impl<'a> From<&'a str> for Chrome<'a> {
+    fn from(lang: &'a str) -> Self {
+        Chrome { lang, site: None }
+    }
+}
+
 /// The HTML document for a found page: the core's fixed chrome around the
 /// sanitised article (added after sanitising, D19). `title` is escaped here.
-pub fn document(
-    lang: &str,
+pub fn document<'a>(
+    chrome: impl Into<Chrome<'a>>,
     title: &str,
     article: &str,
     backlinks: &[mae_site::Backlink],
     tags: &[(String, String)],
     toc: &[mae_site::TocEntry],
 ) -> String {
-    let words = mae_site::strings::for_locale(lang);
+    let chrome = chrome.into();
+    let words = mae_site::strings::for_locale(chrome.lang);
     let article = format!(
         "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
         escape(title),
@@ -279,7 +296,7 @@ pub fn document(
         toc_nav(words.contents, toc),
         backlinks_nav(words.backlinks, backlinks)
     );
-    shell(lang, title, &article, &panels)
+    shell(chrome, title, &article, &panels)
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the
@@ -307,8 +324,13 @@ fn toc_nav(label: &str, toc: &[mae_site::TocEntry]) -> String {
 
 /// The HTML document for a generated listing: the tag index or one tag's
 /// pages (P-70, P-71), headed in the locale's words.
-pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) -> String {
-    let words = mae_site::strings::for_locale(lang);
+pub fn listing_document<'a>(
+    chrome: impl Into<Chrome<'a>>,
+    kind: &Listing,
+    items: &[(String, String)],
+) -> String {
+    let chrome = chrome.into();
+    let words = mae_site::strings::for_locale(chrome.lang);
     let heading = match kind {
         Listing::Tags => words.tags.to_string(),
         Listing::Tag(t) => format!("{}{t}{}", words.tag_page_open, words.tag_page_close),
@@ -318,7 +340,7 @@ pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) 
         .map(|(text, href)| format!("<li><a href=\"{}\">{}</a></li>", escape(href), escape(text)))
         .collect();
     shell(
-        lang,
+        chrome,
         &heading,
         &format!(
             "<section id=\"mae-listing\"><h1>{}</h1><ul>{list}</ul></section>",
@@ -329,9 +351,22 @@ pub fn listing_document(lang: &str, kind: &Listing, items: &[(String, String)]) 
 }
 
 /// The document around a page's main content: lang, the palette, the title,
-/// one main landmark holding the content, and the side panels after it, in an
-/// `aside`, never inside `main` (P-165). No panels, no `aside`.
-fn shell(lang: &str, title: &str, main: &str, panels: &str) -> String {
+/// the site's header, one main landmark holding the content, and the side
+/// panels after it, in an `aside`. Header and panels are never inside `main`
+/// (P-165). No site title, no header and a bare page title; no panels, no
+/// `aside`.
+fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
+    let (doc_title, header) = match chrome.site {
+        Some((site, home)) => (
+            format!("{} \u{2014} {}", escape(title), escape(site)),
+            format!(
+                "<header id=\"mae-header\"><a href=\"{}\">{}</a></header>",
+                escape(home),
+                escape(site)
+            ),
+        ),
+        None => (escape(title), String::new()),
+    };
     let aside = if panels.is_empty() {
         String::new()
     } else {
@@ -342,11 +377,12 @@ fn shell(lang: &str, title: &str, main: &str, panels: &str) -> String {
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <link rel=\"stylesheet\" href=\"{}\">\
          <link rel=\"stylesheet\" href=\"{}\">\
-         <title>{}</title></head><body><main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
-        escape(lang),
+         <script type=\"module\" src=\"{}\"></script>\
+         <title>{doc_title}</title></head><body>{header}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
+        escape(chrome.lang),
         mae_site::assets::href(mae_site::assets::PALETTE),
         mae_site::assets::href(mae_site::assets::BASE),
-        escape(title),
+        mae_site::assets::href(mae_site::assets::ROUTER),
     )
 }
 
@@ -392,7 +428,8 @@ fn backlinks_nav(label: &str, backlinks: &[mae_site::Backlink]) -> String {
 /// styles from this origin only, no inline script, nothing framed or framing,
 /// no base or form target.
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
-                       connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+                       connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; \
+                       require-trusted-types-for 'script'; trusted-types mae-router";
 
 fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

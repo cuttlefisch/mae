@@ -156,7 +156,15 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
     else {
         panic!("the page publishes, inert");
     };
-    let doc = site::document("en-US", &title, &html, &[], &[], &[]).to_lowercase();
+    let doc = site::document("en-US", &title, &html, &[], &[], &[]);
+    // The page's one script is the core's router (D16); remove exactly that
+    // tag, and nothing script-like may remain.
+    let router = format!(
+        r#"<script type="module" src="{}"></script>"#,
+        mae_site::assets::href(mae_site::assets::ROUTER)
+    );
+    assert_eq!(doc.matches(&router).count(), 1, "{doc}");
+    let doc = doc.replace(&router, "").to_lowercase();
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
@@ -229,6 +237,13 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
     let base = mae_site::assets::href(mae_site::assets::BASE);
     let link = |h: &str| html.find(&format!(r#"<link rel="stylesheet" href="{h}">"#));
     assert!(link(&href) < link(&base) && link(&base).is_some(), "{html}");
+    // The router, a module script (deferred), never inline (D16, D19).
+    let router = mae_site::assets::href(mae_site::assets::ROUTER);
+    let script = html.find(&format!(
+        r#"<script type="module" src="{router}"></script>"#
+    ));
+    assert!(script.is_some() && link(&base) < script, "{html}");
+    assert_eq!(html.matches("<script").count(), 1, "{html}");
 }
 
 #[tokio::test]
@@ -623,4 +638,33 @@ async fn a_node_whose_id_is_view_is_served_at_its_address() {
         panic!("the page at /kb/kb-view/view: {page:?}");
     };
     assert_eq!(title, "A page named view");
+}
+
+/// P-16, P-165: with a site title, every page's `<title>` names page and
+/// site, and a header before the main landmark links the KB's home; both are
+/// escaped. Without one, neither appears.
+#[test]
+fn the_site_title_heads_every_page_outside_main() {
+    let chrome = site::Chrome {
+        lang: "en-US",
+        site: Some(("Parity <fixture>", "/kb/parity-fixture/")),
+    };
+    for doc in [
+        site::document(chrome, "Page & co", "<p>x</p>", &[], &[], &[]),
+        site::listing_document(chrome, &site::Listing::Tags, &[]),
+    ] {
+        assert!(
+            doc.contains("\u{2014} Parity &lt;fixture&gt;</title>"),
+            "{doc}"
+        );
+        let header = r#"<header id="mae-header"><a href="/kb/parity-fixture/">Parity &lt;fixture&gt;</a></header>"#;
+        let (before_main, after) = doc.split_once("<main").expect("a main landmark");
+        assert!(before_main.ends_with(header), "{doc}");
+        assert!(!after.contains("mae-header"), "{doc}");
+    }
+    let bare = site::document("en-US", "Page", "<p>x</p>", &[], &[], &[]);
+    assert!(
+        bare.contains("<title>Page</title>") && !bare.contains("<header"),
+        "{bare}"
+    );
 }

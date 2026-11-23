@@ -14,6 +14,10 @@ pub const PALETTE_CSS: &str = include_str!("../web/palette/dist/palette.css");
 /// (`shared/site/web/base/base.css`, hand-written).
 pub const BASE_CSS: &str = include_str!("../web/base/base.css");
 
+/// The in-page router (`shared/site/web/router/dist/router.js`, built from
+/// TypeScript by `tsc` and committed like the palette's output; ADR-119 D16).
+pub const ROUTER_JS: &str = include_str!("../web/router/dist/router.js");
+
 /// The URL prefix every asset is served under.
 pub const PREFIX: &str = "/site-assets/";
 
@@ -73,6 +77,7 @@ const fn ascii(bytes: &'static [u8]) -> &'static str {
 
 const PALETTE_NAME_BYTES: [u8; 28] = named(*b"palette-0000000000000000.css", 8, PALETTE_CSS);
 const BASE_NAME_BYTES: [u8; 25] = named(*b"base-0000000000000000.css", 5, BASE_CSS);
+const ROUTER_NAME_BYTES: [u8; 26] = named(*b"router-0000000000000000.js", 7, ROUTER_JS);
 
 /// The palette stylesheet.
 pub const PALETTE: Asset = Asset {
@@ -88,8 +93,15 @@ pub const BASE: Asset = Asset {
     body: BASE_CSS,
 };
 
+/// The router, loaded as a module script (deferred by default).
+pub const ROUTER: Asset = Asset {
+    name: ascii(&ROUTER_NAME_BYTES),
+    content_type: "text/javascript; charset=utf-8",
+    body: ROUTER_JS,
+};
+
 /// Every embedded asset.
-pub const ALL: &[Asset] = &[PALETTE, BASE];
+pub const ALL: &[Asset] = &[PALETTE, BASE, ROUTER];
 
 /// The asset served at `path`, if any (`/site-assets/<name>`, exactly).
 pub fn at(path: &str) -> Option<Asset> {
@@ -132,6 +144,10 @@ mod tests {
         assert_eq!(at(&format!("{}/", href(PALETTE))), None);
         assert_eq!(at(&href(BASE)), Some(BASE));
         assert!(BASE.name.starts_with("base-") && BASE.name.len() == 25);
+        assert_eq!(at(&href(ROUTER)), Some(ROUTER));
+        assert!(ROUTER.name.starts_with("router-") && ROUTER.name.ends_with(".js"));
+        // The committed build of the router, not a placeholder.
+        assert!(ROUTER.body.contains("mae-router") && ROUTER.body.contains("redirect: \"manual\""));
     }
 
     /// P-102 rests on the palette's contrast tests, so the base rules may

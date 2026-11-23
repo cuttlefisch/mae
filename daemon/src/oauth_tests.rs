@@ -130,6 +130,7 @@ mod tests {
             site_locale: "en-US".to_string(),
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
+            site_title: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
@@ -757,5 +758,19 @@ mod tests {
         }
         assert!(mae_daemon::site::CSP.contains("script-src 'self'"));
         assert!(!mae_daemon::site::CSP.contains("unsafe-inline"));
+    }
+
+    /// The CSP is a contract: the browser client's backend pins it exactly,
+    /// per daemon version, and the router's Trusted Types policy must be the
+    /// only one allowed (ADR-119 D16). A change here is deliberate and goes to
+    /// that backend first.
+    #[test]
+    fn the_site_csp_is_a_pinned_contract() {
+        assert_eq!(
+            mae_daemon::site::CSP,
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+             connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; \
+             require-trusted-types-for 'script'; trusted-types mae-router"
+        );
     }
 }

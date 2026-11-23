@@ -70,6 +70,8 @@ pub struct ResourceServerConfig {
     pub site_hidden_namespaces: Vec<String>,
     /// `config::OAuthConfig::site_home`.
     pub site_home: std::collections::BTreeMap<String, String>,
+    /// `config::OAuthConfig::site_title`.
+    pub site_title: std::collections::BTreeMap<String, String>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -802,6 +804,16 @@ async fn site_route(
         Err(_) => return site_response(StatusCode::TOO_MANY_REQUESTS, "quota exceeded".into()),
     };
     let view = with_declared_home(view, config, kb_id);
+    // The site's title and home link (P-16): only on a page the reader can
+    // read; every refusal below stays the one identical not-found (A5).
+    let home = format!("/kb/{kb_id}/");
+    let chrome = site::Chrome {
+        lang: &config.site_locale,
+        site: config
+            .site_title
+            .get(kb_id)
+            .map(|t| (t.as_str(), home.as_str())),
+    };
     match site::view(
         store,
         kb_id,
@@ -825,12 +837,12 @@ async fn site_route(
             toc,
         } => site_response(
             StatusCode::OK,
-            site::document(&config.site_locale, &title, &html, &backlinks, &tags, &toc),
+            site::document(chrome, &title, &html, &backlinks, &tags, &toc),
         ),
         SitePage::Index(entries) => index_response(&entries),
         SitePage::Listing { kind, items } => site_response(
             StatusCode::OK,
-            site::listing_document(&config.site_locale, &kind, &items),
+            site::listing_document(chrome, &kind, &items),
         ),
         SitePage::NotFound => not_found(),
         SitePage::TooLarge => site_response(
