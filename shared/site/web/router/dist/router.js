@@ -58,6 +58,20 @@ export function routableClick(click, link, here) {
     return url;
 }
 /**
+ * The element id a URL fragment names, decoded; the raw text when it is not
+ * valid percent-encoding (`#%E0`), which then simply names nothing. Never
+ * throws: it runs after the swap, when the URL has already changed.
+ */
+export function fragmentId(hash) {
+    const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+    try {
+        return decodeURIComponent(raw);
+    }
+    catch {
+        return raw;
+    }
+}
+/**
  * `swap` only for a plain 200 HTML page. A redirect (the login, on an expired
  * session: `opaqueredirect` under `redirect: "manual"`), an error status or
  * any other body is handed to the browser as a full navigation, which then
@@ -154,7 +168,7 @@ export function start(win) {
         mountAll();
     };
     const settle = (url, scrollY) => {
-        const target = url.hash ? doc.getElementById(decodeURIComponent(url.hash.slice(1))) : null;
+        const target = url.hash ? doc.getElementById(fragmentId(url.hash)) : null;
         if (scrollY !== null)
             win.scrollTo(0, scrollY);
         else if (target)
@@ -237,8 +251,11 @@ export function start(win) {
     });
     win.addEventListener("popstate", (ev) => {
         const url = new URL(win.location.href);
-        if (pageOf(url) === shown)
+        if (pageOf(url) === shown) {
+            // Back to the page on screen: whatever was loading is no longer wanted.
+            inFlight?.abort();
             return;
+        }
         const state = ev.state;
         void navigate(url, false, state?.scrollY ?? null);
     });

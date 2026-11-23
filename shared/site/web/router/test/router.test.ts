@@ -4,6 +4,7 @@
 import { Window } from "happy-dom";
 import { describe, expect, it, vi } from "vitest";
 import {
+  fragmentId,
   outcome,
   routableClick,
   start,
@@ -58,6 +59,15 @@ describe("routableClick", () => {
       [click(), link("http://[bad")],
     ];
     for (const [c, l] of cases) expect(routableClick(c, l, HERE), JSON.stringify([c, l])).toBeNull();
+  });
+});
+
+describe("fragmentId", () => {
+  it("decodes a fragment and never throws on a malformed one", () => {
+    expect(fragmentId("#sec%20one")).toBe("sec one");
+    expect(fragmentId("#cid-1")).toBe("cid-1");
+    expect(fragmentId("#%E0")).toBe("%E0");
+    expect(fragmentId("")).toBe("");
   });
 });
 
@@ -257,6 +267,30 @@ describe("navigation", () => {
     expect(requests).toHaveLength(1);
     expect(win.document.title).toBe("Alpha");
     expect(scrollTo).toHaveBeenLastCalledWith(0, 120);
+  });
+
+  it("lands a page whose link has a malformed fragment, focus and all", async () => {
+    const bad = page({ title: "Alpha", body: '<a id="bad" href="/kb/k/b#%E0">b</a>' });
+    const { doc, router } = setup("https://site.example/kb/k/a", bad, () => ({ body: B }));
+    clickOn(doc, "bad");
+    await router.pending();
+    expect(doc.title).toBe("Beta");
+    expect(doc.activeElement?.tagName).toBe("H1");
+  });
+
+  it("drops a navigation in flight when history returns to the shown page", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const { win, doc, router } = setup("https://site.example/kb/k/a", A, () => ({
+      body: B,
+      delay: slow,
+    }));
+    const going = router.navigate(new URL("https://site.example/kb/k/b"), true);
+    win.dispatchEvent(new win.PopStateEvent("popstate", { state: null }));
+    release();
+    await going;
+    expect(doc.title).toBe("Alpha");
+    expect(win.location.pathname).toBe("/kb/k/a");
   });
 
   it("leaves a history move within the shown page to the browser", async () => {

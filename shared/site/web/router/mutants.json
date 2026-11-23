@@ -28,8 +28,8 @@
     {
       "name": "an earlier navigation is not aborted",
       "file": "src/router.ts",
-      "find": "    inFlight?.abort();\n",
-      "replace": "",
+      "find": "    inFlight?.abort();\n    const ctl = new AbortController();",
+      "replace": "    const ctl = new AbortController();",
       "target": "unit",
       "filter": "latest of overlapping"
     },
@@ -60,8 +60,8 @@
     {
       "name": "a fragment move refetches the page",
       "file": "src/router.ts",
-      "find": "    if (pageOf(url) === shown) return;\n",
-      "replace": "",
+      "find": "    if (pageOf(url) === shown) {",
+      "replace": "    if (false) {",
       "target": "unit",
       "filter": "within the shown page"
     },
@@ -88,6 +88,22 @@
       "replace": "",
       "target": "unit",
       "filter": "site header"
+    },
+    {
+      "name": "a malformed fragment throws after the swap",
+      "file": "src/router.ts",
+      "find": "    return decodeURIComponent(raw);\n  } catch {\n    return raw;\n  }",
+      "replace": "    return decodeURIComponent(raw);\n  } finally {\n    // no recovery\n  }",
+      "target": "unit",
+      "filter": "malformed fragment"
+    },
+    {
+      "name": "history back to the shown page leaves the navigation running",
+      "file": "src/router.ts",
+      "find": "      inFlight?.abort();\n      return;",
+      "replace": "      return;",
+      "target": "unit",
+      "filter": "returns to the shown page"
     }
   ]
 }

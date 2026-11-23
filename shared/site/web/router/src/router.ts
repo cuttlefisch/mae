@@ -73,6 +73,20 @@ export function routableClick(click: ClickFacts, link: LinkFacts, here: URL): UR
   return url;
 }
 
+/**
+ * The element id a URL fragment names, decoded; the raw text when it is not
+ * valid percent-encoding (`#%E0`), which then simply names nothing. Never
+ * throws: it runs after the swap, when the URL has already changed.
+ */
+export function fragmentId(hash: string): string {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 /** What the response to a page fetch allows. */
 export type Outcome = "swap" | "full";
 
@@ -204,7 +218,7 @@ export function start(win: Window & typeof globalThis): Router {
   };
 
   const settle = (url: URL, scrollY: number | null): void => {
-    const target = url.hash ? doc.getElementById(decodeURIComponent(url.hash.slice(1))) : null;
+    const target = url.hash ? doc.getElementById(fragmentId(url.hash)) : null;
     if (scrollY !== null) win.scrollTo(0, scrollY);
     else if (target) target.scrollIntoView();
     else win.scrollTo(0, 0);
@@ -280,7 +294,11 @@ export function start(win: Window & typeof globalThis): Router {
 
   win.addEventListener("popstate", (ev) => {
     const url = new URL(win.location.href);
-    if (pageOf(url) === shown) return;
+    if (pageOf(url) === shown) {
+      // Back to the page on screen: whatever was loading is no longer wanted.
+      inFlight?.abort();
+      return;
+    }
     const state = (ev as PopStateEvent).state as { scrollY?: number | null } | null;
     void navigate(url, false, state?.scrollY ?? null);
   });

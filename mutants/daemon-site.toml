@@ -72,3 +72,13 @@ filter = "test(a_site_path_is_one_kb_and_one_decoded_id)"
 file = "daemon/src/oauth.rs"
 find = '''    path.starts_with("/kb/").then(|| site_path(path))'''
 replace = '''    site_path(path).map(Some)'''
+
+[[mutant]]
+id = "daemon-site/refusal-carries-site-title"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_refusal_never_carries_the_site_title)"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),'''
+replace = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, format!("not found {:?}", chrome.site)),'''

@@ -780,7 +780,7 @@ async fn site_route(
     kb_id: &str,
     view: &mae_daemon::site::View,
 ) -> Response<Full<Bytes>> {
-    use mae_daemon::site::{self, SitePage};
+    use mae_daemon::site;
     let config = &listener.config;
     if req.method() != hyper::Method::GET {
         return site_response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed".into());
@@ -814,7 +814,7 @@ async fn site_route(
             .get(kb_id)
             .map(|t| (t.as_str(), home.as_str())),
     };
-    match site::view(
+    let page = site::view(
         store,
         kb_id,
         &view,
@@ -827,8 +827,20 @@ async fn site_route(
             hidden_namespaces: config.site_hidden_namespaces.clone(),
         },
     )
-    .await
-    {
+    .await;
+    site_answer(page, chrome)
+}
+
+/// The response for a derived site answer. The chrome (the site's title)
+/// reaches only a page or listing the reader can read: every refusal is the
+/// same body whatever the configuration (A5), so it says nothing about which
+/// KBs exist (`a_refusal_never_carries_the_site_title`).
+pub(crate) fn site_answer(
+    page: mae_daemon::site::SitePage,
+    chrome: mae_daemon::site::Chrome<'_>,
+) -> Response<Full<Bytes>> {
+    use mae_daemon::site::{self, SitePage};
+    match page {
         SitePage::Found {
             title,
             html,
@@ -844,7 +856,7 @@ async fn site_route(
             StatusCode::OK,
             site::listing_document(chrome, &kind, &items),
         ),
-        SitePage::NotFound => not_found(),
+        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),
         SitePage::TooLarge => site_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "this KB is larger than the site derives per request".into(),

@@ -760,6 +760,42 @@ mod tests {
         assert!(!mae_daemon::site::CSP.contains("unsafe-inline"));
     }
 
+    /// A refusal is the same response whatever the site's configuration (A5):
+    /// a configured site title would otherwise tell a stranger which KBs exist.
+    /// A readable page does carry it (the positive control).
+    #[tokio::test]
+    async fn a_refusal_never_carries_the_site_title() {
+        use http_body_util::BodyExt;
+        use mae_daemon::site::{Chrome, SitePage};
+        let titled = Chrome {
+            lang: "en-US",
+            site: Some(("A secret KB name", "/kb/secret/")),
+        };
+        async fn parts(r: Response<Full<Bytes>>) -> (StatusCode, String, String) {
+            let status = r.status();
+            let headers = format!("{:?}", r.headers());
+            let body = r.into_body().collect().await.unwrap().to_bytes();
+            (status, headers, String::from_utf8(body.to_vec()).unwrap())
+        }
+        for page in [SitePage::NotFound, SitePage::TooLarge] {
+            let with = parts(site_answer(page.clone(), titled)).await;
+            let without = parts(site_answer(page, "en-US".into())).await;
+            assert_eq!(with, without);
+            assert!(!with.2.contains("secret"), "{}", with.2);
+        }
+        let found = SitePage::Found {
+            title: "T".into(),
+            html: "<p>x</p>".into(),
+            backlinks: vec![],
+            tags: vec![],
+            toc: vec![],
+        };
+        assert!(parts(site_answer(found, titled))
+            .await
+            .2
+            .contains("A secret KB name"));
+    }
+
     /// The CSP is a contract: the browser client's backend pins it exactly,
     /// per daemon version, and the router's Trusted Types policy must be the
     /// only one allowed (ADR-119 D16). A change here is deliberate and goes to
