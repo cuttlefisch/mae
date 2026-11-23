@@ -75,7 +75,7 @@ async fn kb() -> Arc<DocStore> {
 #[tokio::test]
 async fn a_reader_gets_the_page_with_its_links_resolved_to_live_addresses() {
     let store = kb().await;
-    let SitePage::Found { title, html } =
+    let SitePage::Found { title, html, .. } =
         site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await
     else {
         panic!("the reader must get the page");
@@ -151,12 +151,12 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
         )],
     )
     .await;
-    let SitePage::Found { title, html } =
+    let SitePage::Found { title, html, .. } =
         site::page(&store, "kb-hostile", "h", Some(READER), LIMITS).await
     else {
         panic!("the page publishes, inert");
     };
-    let doc = site::document("en-US", &title, &html).to_lowercase();
+    let doc = site::document("en-US", &title, &html, &[], &[], &[]).to_lowercase();
     for bad in ["<script", "onerror", "javascript:"] {
         assert!(!doc.contains(bad), "{bad}: {doc}");
     }
@@ -212,6 +212,226 @@ async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
     }
     assert_eq!(
         site::page(&store, "kb-claim", "beta", Some(READER), LIMITS).await,
+        SitePage::NotFound
+    );
+}
+
+#[test]
+fn a_page_links_the_palette_by_its_content_addressed_name() {
+    let html = site::document("en-US", "T", "<p>x</p>", &[], &[], &[]);
+    let href = mae_site::assets::href(mae_site::assets::PALETTE);
+    assert!(
+        html.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
+        "{html}"
+    );
+    assert_eq!(mae_site::assets::at(&href), Some(mae_site::assets::PALETTE));
+}
+
+#[tokio::test]
+async fn a_page_lists_its_backlinks_in_the_configured_locale_and_escapes_them() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-bl",
+        &[
+            ("target", "Target", "The page linked to.\n"),
+            (
+                "from",
+                "<b>From</b> & co",
+                "Links to [[id:target][the target]].\n",
+            ),
+        ],
+    )
+    .await;
+    let SitePage::Found {
+        title,
+        html,
+        backlinks,
+        ..
+    } = site::page(&store, "kb-bl", "target", Some(READER), LIMITS).await
+    else {
+        panic!("target publishes");
+    };
+    assert_eq!(backlinks.len(), 1);
+    let en = site::document("en-US", &title, &html, &backlinks, &[], &[]);
+    assert!(
+        en.contains(r#"<a href="/kb/kb-bl/from">&lt;b&gt;From&lt;/b&gt; &amp; co</a>"#),
+        "{en}"
+    );
+    assert!(en.contains(mae_site::strings::for_locale("en-US").backlinks));
+    let fr = site::document("fr-FR", &title, &html, &backlinks, &[], &[]);
+    assert!(fr.contains(mae_site::strings::for_locale("fr-FR").backlinks));
+    assert!(!fr.contains(mae_site::strings::for_locale("en-US").backlinks));
+}
+
+#[tokio::test]
+async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
+    // Tags come from each page's #+filetags, carried here in the body.
+    let store2 = fresh_doc_store().await;
+    seed(
+        &store2,
+        "kb-tags",
+        &[
+            ("a", "Alpha", "#+filetags: :shared:only_a:\nx\n"),
+            ("b", "Beta", "#+filetags: :shared:\ny\n"),
+        ],
+    )
+    .await;
+    let view = |v: site::View| {
+        let s = store2.clone();
+        async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS, &Default::default()).await }
+    };
+    let SitePage::Listing { kind, items } = view(site::View::Tags).await else {
+        panic!("the tag index");
+    };
+    assert_eq!(kind, site::Listing::Tags);
+    let names: Vec<&str> = items.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, vec!["only_a", "shared"]);
+    assert_eq!(items[1].1, "/kb/kb-tags/tags/shared");
+    let SitePage::Listing { items, .. } = view(site::View::Tag("shared".into())).await else {
+        panic!("a tag page");
+    };
+    let titles: Vec<&str> = items.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(titles, vec!["Alpha", "Beta"]);
+    assert_eq!(
+        view(site::View::Tag("nope".into())).await,
+        SitePage::NotFound
+    );
+    // A stranger sees no tags either: the same not-found.
+    let s = store2.clone();
+    assert_eq!(
+        site::view(
+            &s,
+            "kb-tags",
+            &site::View::Tags,
+            Some(STRANGER),
+            LIMITS,
+            &Default::default()
+        )
+        .await,
+        SitePage::NotFound
+    );
+    // The page itself links its tags.
+    let SitePage::Found {
+        title, html, tags, ..
+    } = view(site::View::Page("a".into())).await
+    else {
+        panic!("page a");
+    };
+    let doc = site::document("en-US", &title, &html, &[], &tags, &[]);
+    assert!(
+        doc.contains(r#"<a href="/kb/kb-tags/tags/only_a">only_a</a>"#),
+        "{doc}"
+    );
+    let listing = site::listing_document("fr-FR", &site::Listing::Tag("shared".into()), &items);
+    assert!(
+        listing.contains("lang=\"fr-FR\"") && listing.contains("shared"),
+        "{listing}"
+    );
+}
+
+#[tokio::test]
+async fn a_page_with_two_headings_has_a_toc_linking_to_their_anchors() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-toc",
+        &[
+            ("two", "Two", "* First & <one>\ntext\n* Second\nmore\n"),
+            ("one", "One", "* Only\ntext\n"),
+        ],
+    )
+    .await;
+    let page = |id: &'static str| {
+        let s = store.clone();
+        async move { site::page(&s, "kb-toc", id, Some(READER), LIMITS).await }
+    };
+    let SitePage::Found {
+        title, html, toc, ..
+    } = page("two").await
+    else {
+        panic!("two");
+    };
+    assert_eq!(toc.len(), 2);
+    let doc = site::document("en-US", &title, &html, &[], &[], &toc);
+    assert!(
+        doc.contains(r#"<nav id="mae-toc" aria-labelledby="mae-toc-h">"#),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(&format!(
+            r##"<a href="#{}">First &amp; &lt;one&gt;</a>"##,
+            toc[0].anchor
+        )),
+        "{doc}"
+    );
+    for e in &toc {
+        assert!(
+            doc.contains(&format!("id=\"{}\"", e.anchor)),
+            "{} has no target",
+            e.anchor
+        );
+    }
+    let SitePage::Found {
+        title, html, toc, ..
+    } = page("one").await
+    else {
+        panic!("one");
+    };
+    assert!(!site::document("en-US", &title, &html, &[], &[], &toc).contains("mae-toc"));
+}
+
+#[tokio::test]
+async fn the_content_index_lists_published_pages_without_hidden_references() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-idx",
+        &[
+            (
+                "a",
+                "Alpha",
+                "To [[id:b][Beta]] and internal:secret-7 and public:ok-1.\n",
+            ),
+            ("b", "Beta", "Beta's text.\n"),
+            ("c", "Gamma", "A note[fn:missing] to [[id:a][Alpha]].\n"),
+        ],
+    )
+    .await;
+    let opts = mae_site::SiteOptions {
+        hidden_namespaces: vec!["internal".into()],
+    };
+    let SitePage::Index(entries) = site::view(
+        &store,
+        "kb-idx",
+        &site::View::Index,
+        Some(READER),
+        LIMITS,
+        &opts,
+    )
+    .await
+    else {
+        panic!("the index");
+    };
+    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["a", "b"], "c is withheld (undefined footnote)");
+    assert_eq!(entries[0].links, vec!["b".to_string()]);
+    assert!(
+        !entries[0].text.contains("internal:secret-7"),
+        "{}",
+        entries[0].text
+    );
+    assert!(entries[0].text.contains("public:ok-1"));
+    assert_eq!(
+        site::view(
+            &store,
+            "kb-idx",
+            &site::View::Index,
+            Some(STRANGER),
+            LIMITS,
+            &opts
+        )
+        .await,
         SitePage::NotFound
     );
 }

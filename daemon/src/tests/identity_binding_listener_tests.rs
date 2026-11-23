@@ -43,6 +43,7 @@ fn config(allowed_groups: &[&str]) -> ResourceServerConfig {
         kb_query_enabled: true,
         site_enabled: false,
         site_locale: "en-US".to_string(),
+        site_hidden_namespaces: Vec::new(),
         max_request_body_bytes: 1_048_576,
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,

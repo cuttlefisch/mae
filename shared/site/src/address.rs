@@ -63,6 +63,23 @@ impl Addressing {
         matches!(self.0, Kind::Export { .. })
     }
 
+    /// The tag index (P-71): `/kb/<kb-id>/tags` live, `<base>/tags/` in the
+    /// export. [`RESERVED_IDS`] keeps a page from holding this address.
+    pub fn tags_href(&self) -> String {
+        match &self.0 {
+            Kind::Live { kb_id } => format!("/kb/{kb_id}/tags"),
+            Kind::Export { base } => format!("{base}/tags/"),
+        }
+    }
+
+    /// The page of one tag (P-70), below the tag index.
+    pub fn tag_href(&self, tag: &str) -> String {
+        match &self.0 {
+            Kind::Live { kb_id } => format!("/kb/{kb_id}/tags/{}", segment(tag)),
+            Kind::Export { base } => format!("{base}/tags/{}/", segment(tag)),
+        }
+    }
+
     /// The URL of the page whose file-level ID is `id`, if `id` can be an
     /// address ([`valid_id`]).
     pub fn page_href(&self, id: &str) -> Option<String> {
@@ -76,13 +93,45 @@ impl Addressing {
     }
 }
 
+/// IDs a page may not hold, because the engine generates that address: the
+/// tag index and the content index (P-166). Compared as the export compares directories, so `Tags`
+/// is reserved too.
+pub const RESERVED_IDS: &[&str] = &["tags", "index.json"];
+
+/// Whether `id` names an address the engine generates (P-166).
+pub fn is_reserved(id: &str) -> bool {
+    RESERVED_IDS.iter().any(|r| export_collision_key(id) == *r)
+}
+
+/// Whether `t` is an Org tag: letters, digits, `_`, `@`, `#`, `%` (P-73). A
+/// path or markup in a tag line is not a tag.
+pub fn valid_tag(t: &str) -> bool {
+    !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '@' | '#' | '%'))
+}
+
 /// Whether `id` can be an address. Not empty (that would give `//`), and not
 /// `.` or `..`: a browser collapses those as dot segments, and percent-
 /// encoding does not stop it (the URL standard reads `%2e` as `.`).
 pub fn valid_id(id: &str) -> bool {
     // All dots: `.` and `..` are dot segments, and no longer run of dots can
     // be an export directory (Windows drops trailing dots, leaving nothing).
-    !id.is_empty() && !id.bytes().all(|b| b == b'.')
+    !id.is_empty() && !id.bytes().all(|b| b == b'.') && !id.chars().any(refused_in_id)
+}
+
+/// Characters no address may hold: controls (Cc), Unicode White_Space, the
+/// bidirectional controls (an ID that reorders how it displays can pass for
+/// another), and U+FEFF. The joiners (U+200C, U+200D) are allowed: real
+/// scripts need them. The browser client's backend refuses exactly this set,
+/// so every page the daemon publishes is reachable through it.
+pub fn refused_in_id(c: char) -> bool {
+    c.is_control()
+        || c.is_whitespace()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+        )
 }
 
 /// A KB identifier: `^[a-z0-9][a-z0-9-]{0,62}$` (P-04).
@@ -156,6 +205,26 @@ mod tests {
             assert_eq!(live.page_href(bad), None, "{bad:?}");
         }
         assert_eq!(export.page_href("..."), None);
+        for bad in [
+            "a\u{0}b",
+            "a b",
+            "a\u{85}b",
+            "a\u{a0}b",
+            "a\u{2028}b",
+            "a\u{3000}b",
+            "a\u{61c}b",
+            "a\u{200e}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{feff}b",
+            "a\tb",
+        ] {
+            assert_eq!(export.page_href(bad), None, "{bad:?}");
+        }
+        // The joiners stay: real scripts need them.
+        assert!(
+            export.page_href("a\u{200c}b").is_some() && export.page_href("a\u{200d}b").is_some()
+        );
         // Dots inside an ID are ordinary characters.
         assert_eq!(export.page_href("a..b").unwrap(), "/a..b/");
     }
