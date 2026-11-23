@@ -212,6 +212,7 @@ Source: `crates/core/src/lib.rs`
 | `notifications` | mod |
 | `notifications_view` | mod |
 | `options` | mod |
+| `path_confine` | mod |
 | `project` | mod |
 | `render_common` | mod |
 | `scheme_async` | mod |
