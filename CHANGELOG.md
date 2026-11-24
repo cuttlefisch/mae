@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.193] - 2026-11-24
+
+
+
+
+### Features
+
+- *(sync)* Set a node's whole content through its field setters ([16ae7b7](https://github.com/cuttlefisch/mae/commit/16ae7b79465465f9673367830b289caddea95e08))
+- *(daemon)* Record what the seed wrote and an update's intent ([eda09e6](https://github.com/cuttlefisch/mae/commit/eda09e64e83ff8f38cbed1fe6b22c430f0768733))
+- *(daemon)* Kb seed --update moves a seeded KB to a new revision ([78a6116](https://github.com/cuttlefisch/mae/commit/78a6116962cb75f8fd70f3a8b393f2737d168c96))
+
+### Bug Fixes
+
+- *(daemon)* Bind kb seed --update's discard to the edits it showed ([8a28781](https://github.com/cuttlefisch/mae/commit/8a287815327b04d15d2b3ec97425c41cfa41a6bc))
+- *(daemon)* Kb seed --update judges a plan by its history, not its repository's path ([843bacd](https://github.com/cuttlefisch/mae/commit/843bacd759148a510e4d0ee999a96eab2498a413))
+
+### Documentation
+
+- *(daemon)* The refresh procedure for a seeded KB, and its mutants ([46ec8dd](https://github.com/cuttlefisch/mae/commit/46ec8dd410318d58280ee0649d72ebf9da205fe5))
+- *(daemon)* The edits hash in the seed refresh procedure, and its mutants ([1c3b932](https://github.com/cuttlefisch/mae/commit/1c3b9322bce3b12d8a6826e3c88459cadb036e05))
+
+### Testing
+
+- *(daemon)* Pin kb seed --update against a fresh seed ([146e5a7](https://github.com/cuttlefisch/mae/commit/146e5a7af8386f86a9cbd6a81ac26946a8de628a))
+- *(daemon)* Keep the seed update test under the function ceiling ([0fa2898](https://github.com/cuttlefisch/mae/commit/0fa28983861d1068581109a8a2418d2c20865ff5))
+
 ## [0.14.192] - 2026-11-24
 
 
@@ -10,6 +36,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(shell)* Copied terminal text is the text as written, not padded screen rows ([2bbff9c](https://github.com/cuttlefisch/mae/commit/2bbff9c2716c193cea52b782b1e7a0eb0f41b91f))
+
+### Miscellaneous
+
+- Bump version to 0.14.192 ([9be41d7](https://github.com/cuttlefisch/mae/commit/9be41d7dd17f423da765c4bf2de7e6ffeda0158f))
 
 ## [0.14.191] - 2026-11-24
 
