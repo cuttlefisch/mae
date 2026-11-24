@@ -293,6 +293,7 @@ fn fixture_page(lang: &str, fixture: &str) {
     let chrome = site::Chrome {
         lang,
         site: Some(("Parity fixture", "/kb/parity-fixture/")),
+        slots: None,
     };
     let mut html = site::document(
         chrome,
@@ -412,7 +413,18 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     .await;
     let view = |v: site::View| {
         let s = store2.clone();
-        async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS, &Default::default()).await }
+        async move {
+            site::view(
+                &s,
+                "kb-tags",
+                &v,
+                Some(READER),
+                LIMITS,
+                &Default::default(),
+                None,
+            )
+            .await
+        }
     };
     let SitePage::Listing { kind, items, .. } = view(site::View::Tags).await else {
         panic!("the tag index");
@@ -439,7 +451,8 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
             &site::View::Tags,
             Some(STRANGER),
             LIMITS,
-            &Default::default()
+            &Default::default(),
+            None,
         )
         .await,
         SitePage::NotFound
@@ -543,6 +556,7 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
         Some(READER),
         LIMITS,
         &opts,
+        None,
     )
     .await
     else {
@@ -564,7 +578,8 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
             &site::View::Index,
             Some(STRANGER),
             LIMITS,
-            &opts
+            &opts,
+            None,
         )
         .await,
         SitePage::NotFound
@@ -589,7 +604,18 @@ async fn the_home_page_is_the_declared_node_or_else_the_tag_index() {
     .await;
     let view = |v: site::View, who: &'static str| {
         let s = store.clone();
-        async move { site::view(&s, "kb-home", &v, Some(who), LIMITS, &Default::default()).await }
+        async move {
+            site::view(
+                &s,
+                "kb-home",
+                &v,
+                Some(who),
+                LIMITS,
+                &Default::default(),
+                None,
+            )
+            .await
+        }
     };
     let declared = view(site::View::Home(Some("home".into())), READER).await;
     let SitePage::Found { title, .. } = &declared else {
@@ -713,6 +739,7 @@ async fn a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages() {
                 Some(READER),
                 LIMITS,
                 &Default::default(),
+                None,
             )
             .await
         }
@@ -748,6 +775,7 @@ async fn a_node_whose_id_is_view_is_served_at_its_address() {
         Some(READER),
         LIMITS,
         &Default::default(),
+        None,
     )
     .await;
     let SitePage::Found { title, .. } = page else {
@@ -765,6 +793,7 @@ fn the_site_title_heads_every_page_outside_main() {
     let chrome = site::Chrome {
         lang: "en-US",
         site: Some(("Parity <fixture>", "/kb/parity-fixture/")),
+        slots: None,
     };
     for doc in [
         site::document(chrome, "Page & co", "<p>x</p>", &[], &[], &[], None),

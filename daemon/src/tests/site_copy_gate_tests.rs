@@ -118,7 +118,7 @@ async fn seed(store: &DocStore) -> Owner {
 }
 
 async fn view(store: &DocStore, v: View, who: &str) -> SitePage {
-    site::view(store, KB, &v, Some(who), LIMITS, &Default::default()).await
+    site::view(store, KB, &v, Some(who), LIMITS, &Default::default(), None).await
 }
 
 /// Every view any reader of the KB gets, query-only or not.

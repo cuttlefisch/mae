@@ -819,7 +819,15 @@ async fn site_route(
             .site_title
             .get(kb_id)
             .map(|t| (t.as_str(), home.as_str())),
+        slots: None,
     };
+    let components = config
+        .site_components
+        .for_kb(kb_id)
+        .map(|components| site::ComponentsFor {
+            components,
+            locale: config.site_locale.clone(),
+        });
     let page = site::view(
         store,
         kb_id,
@@ -830,6 +838,7 @@ async fn site_route(
             max_body_bytes: config.kb_query_max_body_bytes,
         },
         &site_options(config),
+        components,
     )
     .await;
     site_answer(page, chrome)
@@ -844,15 +853,16 @@ pub(crate) fn site_options(config: &ResourceServerConfig) -> mae_site::SiteOptio
     }
 }
 
-/// The response for a derived site answer. The chrome (the site's title)
-/// reaches only a page or listing the reader can read: every refusal is the
-/// same body whatever the configuration (A5), so it says nothing about which
-/// KBs exist (`a_refusal_never_carries_the_site_title`).
+/// The response for a derived site answer. The chrome (the site's title, the
+/// page's slots) reaches only a page or listing the reader can read: every
+/// refusal is the same body whatever the configuration (A5), so it says
+/// nothing about which KBs exist (`a_refusal_never_carries_the_site_title`).
 pub(crate) fn site_answer(
     page: mae_daemon::site::SitePage,
     chrome: mae_daemon::site::Chrome<'_>,
 ) -> Response<Full<Bytes>> {
-    use mae_daemon::site::{self, SitePage};
+    use mae_daemon::site::{self, Chrome, SitePage};
+    let with = |slots| Chrome { slots, ..chrome };
     match page {
         SitePage::Found {
             title,
@@ -861,10 +871,11 @@ pub(crate) fn site_answer(
             tags,
             toc,
             explorer,
+            slots,
         } => site_response(
             StatusCode::OK,
             site::document(
-                chrome,
+                with(slots.as_ref()),
                 &title,
                 &html,
                 &backlinks,
@@ -873,15 +884,25 @@ pub(crate) fn site_answer(
                 explorer.as_ref(),
             ),
         ),
+        SitePage::Component {
+            title,
+            html,
+            explorer,
+            slots,
+        } => site_response(
+            StatusCode::OK,
+            site::component_document(with(slots.as_ref()), &title, &html, explorer.as_ref()),
+        ),
         SitePage::Index(entries) => index_response(&entries),
         SitePage::Explorer(json) => site_json(json),
         SitePage::Listing {
             kind,
             items,
             explorer,
+            slots,
         } => site_response(
             StatusCode::OK,
-            site::listing_document(chrome, &kind, &items, explorer.as_ref()),
+            site::listing_document(with(slots.as_ref()), &kind, &items, explorer.as_ref()),
         ),
         SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),
         SitePage::TooLarge => site_response(

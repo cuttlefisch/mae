@@ -775,6 +775,7 @@ mod tests {
         let titled = Chrome {
             lang: "en-US",
             site: Some(("A secret KB name", "/kb/secret/")),
+            slots: None,
         };
         async fn parts(r: Response<Full<Bytes>>) -> (StatusCode, String, String) {
             let status = r.status();
@@ -795,6 +796,7 @@ mod tests {
             tags: vec![],
             toc: vec![],
             explorer: None,
+            slots: None,
         };
         assert!(parts(site_answer(found, titled))
             .await

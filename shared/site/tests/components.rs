@@ -1071,3 +1071,51 @@ fn a_loader_reads_exactly_the_files_the_manifest_names() {
     );
     assert!(Components::named_files("not toml [").is_empty());
 }
+
+/// P-154: a derived page carries its file-level properties, `ID` left out,
+/// under mae-org's canonical keys (`:state:` and `:State:` are `STATE`),
+/// with hidden references removed (P-13), and its dates from `CREATED` and
+/// `UPDATED`, as written. A headline's properties are not the page's.
+#[test]
+fn a_derived_page_carries_its_file_properties_and_dates() {
+    let text =
+        ":PROPERTIES:\n:ID: p\n:state: Draft\n:Updated: 2026-11-02\n:CREATED: <2026-01-05 Mon>\n\
+                :Owner: see internal:secret now\n:END:\n#+title: P\n\n* H\n:PROPERTIES:\n:ID: h\n\
+                :STATE: approved\n:END:\nBody.\n";
+    let opts = mae_site::SiteOptions {
+        hidden_namespaces: vec!["internal".into()],
+        ..Default::default()
+    };
+    let site = mae_site::derive_with(
+        &[mae_site::SourcePage {
+            origin: "p.org".into(),
+            text: text.into(),
+        }],
+        &Addressing::live("demo").unwrap(),
+        &opts,
+    );
+    let p = &site.pages["p"];
+    let props: Vec<(&str, &str)> = p
+        .properties
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        props,
+        [
+            ("CREATED", "<2026-01-05 Mon>"),
+            ("OWNER", "see  now"),
+            ("STATE", "Draft"),
+            ("UPDATED", "2026-11-02"),
+        ]
+    );
+    let dates: Vec<(&str, &str)> = p
+        .dates
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        dates,
+        [("created", "<2026-01-05 Mon>"), ("updated", "2026-11-02")]
+    );
+}

@@ -228,3 +228,314 @@ fn every_kbs_problems_are_reported_at_once() {
     assert!(!errs.iter().any(|e| e.contains("kb-good")), "{errs:?}");
 }
 
+// ---------------------------------------------------------------------------
+// The shell's slots (P-153, P-158).
+
+/// One component per slot, each writing a marker, so each slot's position in
+/// the served page can be checked.
+fn every_slot() -> (tempfile::TempDir, Arc<KbComponents>) {
+    let mut manifest = String::new();
+    let mut files = Vec::new();
+    for slot in mae_site::components::Slot::ALL {
+        let n = slot.name();
+        manifest.push_str(&format!(
+            "[[component]]\nname = \"{n}\"\nslot = \"{n}\"\ntemplate = \"{n}.html\"\n"
+        ));
+        let tmpl = if n == "document-head" {
+            "<meta name=\"description\" content=\"SLOT-document-head\">".to_string()
+        } else {
+            format!("<p class=\"site-m\">SLOT-{n}</p>")
+        };
+        files.push((format!("{n}.html"), tmpl));
+    }
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let d = dir_with(&manifest, &refs);
+    let c = load(&[(KB, d.path())]).unwrap().for_kb(KB).unwrap();
+    (d, c)
+}
+
+fn at(html: &str, needle: &str) -> usize {
+    html.find(needle)
+        .unwrap_or_else(|| panic!("no {needle:?} in {html}"))
+}
+
+#[tokio::test]
+async fn each_slot_is_written_at_its_position() {
+    let store = fixture_kb().await;
+    let (_d, c) = every_slot();
+    let page = view(&store, View::Page("guide".into()), READER, Some(c)).await;
+    let (status, html) = served(page).await;
+    assert_eq!(status, StatusCode::OK);
+    let m = |n: &str| at(&html, &format!("SLOT-{n}"));
+    // Head: after the router and before the title.
+    assert!(at(&html, "router-") < m("document-head"));
+    assert!(m("document-head") < at(&html, "<title>"));
+    // Header row: inside the header, after the built-in controls.
+    assert!(at(&html, "id=\"mae-palette-button\"") < m("header-row"));
+    assert!(m("header-row") < at(&html, "</header>"));
+    // Before the body: after the title, before the article's text; after the
+    // body: the article's end.
+    assert!(at(&html, "</h1>") < m("before-body"));
+    assert!(m("before-body") < at(&html, "Intro."));
+    assert!(at(&html, "Text.") < m("after-body"));
+    assert!(m("after-body") < at(&html, "</article>"));
+    // Left-panel footer: after the explorer, before main, in its own box.
+    assert!(at(&html, "id=\"mae-explorer\"") < at(&html, "<div id=\"mae-left-footer\">"));
+    assert!(m("left-panel-footer") < at(&html, "<main"));
+    // Right panel: inside the aside (which the page's TOC alone would not
+    // make: one heading). Page footer: last, in its own box.
+    assert!(at(&html, "<aside id=\"mae-panels\">") < m("right-panel"));
+    assert!(m("right-panel") < at(&html, "</aside>"));
+    assert!(at(&html, "</aside>") < at(&html, "<footer id=\"mae-footer\">"));
+    assert!(m("page-footer") < at(&html, "</body>"));
+    // The page data a behaviour's ctx reads, on main.
+    assert!(
+        html.contains(&format!(
+            "<main id=\"mae-main\" data-mae-kb=\"{KB}\" data-mae-base=\"/kb/{KB}\" \
+         data-mae-url=\"/kb/{KB}/guide\" data-mae-page=\"guide\">"
+        )),
+        "{html}"
+    );
+}
+
+/// P-158: empty slots add no element, and the page data marks only a site
+/// with components.
+#[tokio::test]
+async fn empty_slots_write_nothing() {
+    let store = fixture_kb().await;
+    let fixture = load(&[(KB, &fixture_dir())]).unwrap().for_kb(KB).unwrap();
+    let (_, html) =
+        served(view(&store, View::Page("plain".into()), READER, Some(fixture)).await).await;
+    // The fixture fills no page footer, right panel or head slot, and the
+    // plain page has neither a state nor a date.
+    for absent in [
+        "<footer",
+        "<aside",
+        "site-state-badge",
+        "site-last-updated",
+        "<meta name=\"description\"",
+    ] {
+        assert!(!html.contains(absent), "{absent}: {html}");
+    }
+    let (_, bare) = served(view(&store, View::Page("plain".into()), READER, None).await).await;
+    for absent in [
+        "data-mae-",
+        "mae-left-footer",
+        "mae-footer",
+        "class=\"site-",
+        "/site-assets/c-",
+    ] {
+        assert!(!bare.contains(absent), "{absent}: {bare}");
+    }
+}
+
+/// The examples in a served page, from a seeded node's own properties: the
+/// state badge and the last-updated line (P-161, P-163), the copy link as a
+/// plain link to the page (P-162, A2), the what's-new link to a published
+/// node and the version footer (P-163). Their assets are linked: stylesheets
+/// after the base stylesheet, behaviours after the router.
+#[tokio::test]
+async fn the_examples_render_in_a_served_page() {
+    let store = fixture_kb().await;
+    let set = load(&[(KB, &fixture_dir())]).unwrap();
+    let c = set.for_kb(KB).unwrap();
+    let (_, html) = served(view(&store, View::Page("guide".into()), READER, Some(c)).await).await;
+    for want in [
+        "<p class=\"site-state-badge site-state-draft\" data-site-state=\"draft\">Draft</p>",
+        "<time datetime=\"2026-11-02\">2026-11-02</time>",
+        &format!(
+            "<a class=\"site-copy-link-anchor\" href=\"/kb/{KB}/guide\">Link to this page</a>"
+        ),
+        &format!("<a class=\"site-whats-new\" href=\"/kb/{KB}/release-notes\">What's new</a>"),
+        &format!("<a href=\"/kb/{KB}/site/changes\">Version 2.0</a>"),
+    ] {
+        assert!(html.contains(want), "{want}: {html}");
+    }
+    // One stylesheet (three components share it) and one behaviour.
+    let css = html
+        .matches("<link rel=\"stylesheet\" href=\"/site-assets/c-")
+        .count();
+    let js = html
+        .matches("<script type=\"module\" src=\"/site-assets/c-")
+        .count();
+    assert_eq!((css, js), (1, 1), "{html}");
+    assert!(at(&html, "/site-assets/base-") < at(&html, "/site-assets/c-"));
+    let router = at(&html, "/site-assets/router-");
+    let script = at(&html, "<script type=\"module\" src=\"/site-assets/c-");
+    assert!(router < script, "the router runs before any behaviour");
+    assert!(script < at(&html, "<title>"));
+}
+
+/// D18: a component that fails while rendering leaves its slot without its
+/// output; the page and its neighbours still render.
+#[tokio::test]
+async fn a_failing_component_leaves_its_slot_empty_and_the_page_renders() {
+    let store = fixture_kb().await;
+    let d = dir_with(
+        "[[component]]\nname = \"boom\"\nslot = \"header-row\"\ntemplate = \"boom.html\"\n\
+         [[component]]\nname = \"ok\"\nslot = \"header-row\"\ntemplate = \"ok.html\"\n\
+         [[component]]\nname = \"alone\"\nslot = \"page-footer\"\ntemplate = \"alone.html\"\n",
+        &[
+            (
+                "boom.html",
+                "<p class=\"site-b\">PARTIAL</p>{{ fail(\"no\") }}",
+            ),
+            ("ok.html", "<p class=\"site-ok\">FINE</p>"),
+            (
+                "alone.html",
+                "<p class=\"site-a\">BEFORE</p>{{ page.missing }}",
+            ),
+        ],
+    );
+    let c = load(&[(KB, d.path())]).unwrap().for_kb(KB).unwrap();
+    let (status, html) =
+        served(view(&store, View::Page("guide".into()), READER, Some(c)).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("FINE"), "{html}");
+    assert!(html.contains("Intro."), "{html}");
+    assert!(
+        !html.contains("PARTIAL") && !html.contains("BEFORE"),
+        "{html}"
+    );
+    // Its slot alone, the footer, is absent rather than empty (P-158).
+    assert!(!html.contains("<footer"), "{html}");
+}
+
+/// P-155: a component's output is sanitised where it lands in the served
+/// page, not only in the engine's own tests.
+#[tokio::test]
+async fn hostile_component_output_is_inert_in_the_served_page() {
+    let store = fixture_kb().await;
+    let hostile = "<script>alert(1)</script><img src=x onerror=alert(2)>\
+         <a href=\"javascript:alert(3)\" class=\"mae-explorer site-ok\" id=\"mae-main\">x</a>\
+         <style>body{}</style><iframe src=\"/\"></iframe><p onclick=\"alert(4)\" style=\"x\">y</p>";
+    let mut manifest = String::new();
+    let mut files = Vec::new();
+    for slot in [
+        "header-row",
+        "before-body",
+        "left-panel-footer",
+        "page-footer",
+    ] {
+        manifest.push_str(&format!(
+            "[[component]]\nname = \"h-{slot}\"\nslot = \"{slot}\"\ntemplate = \"{slot}.html\"\n"
+        ));
+        files.push((
+            format!("{slot}.html"),
+            format!("{{{{ \"{0}\" | safe }}}}{0}", hostile.replace('"', "\\\"")),
+        ));
+    }
+    manifest.push_str(
+        "[[component]]\nname = \"head\"\nslot = \"document-head\"\ntemplate = \"head.html\"\n",
+    );
+    files.push(("head.html".into(), "<meta http-equiv=\"refresh\" content=\"0;url=//evil\"><script>alert(5)</script><meta name=\"robots\" content=\"noindex\">".into()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let d = dir_with(&manifest, &refs);
+    let c = load(&[(KB, d.path())]).unwrap().for_kb(KB).unwrap();
+    let (_, html) = served(view(&store, View::Page("guide".into()), READER, Some(c)).await).await;
+    for bad in [
+        "<script>",
+        "onerror",
+        "javascript:",
+        "onclick",
+        "<style",
+        "<iframe",
+        "http-equiv",
+        "alert(",
+        "style=\"x\"",
+    ] {
+        assert!(!html.contains(bad), "{bad} survived: {html}");
+    }
+    // One main landmark and one explorer: a component wears neither id nor class.
+    assert_eq!(html.matches("id=\"mae-main\"").count(), 1, "{html}");
+    assert_eq!(html.matches("class=\"mae-explorer").count(), 1, "{html}");
+    assert!(
+        html.contains("<meta name=\"robots\" content=\"noindex\">"),
+        "{html}"
+    );
+    assert!(
+        html.contains("class=\"site-ok\""),
+        "the allowed class is kept: {html}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P-158: without components, the shell is byte-identical to the one before
+// components existed. The goldens in daemon/tests/data/site-shell were
+// written by the daemon at d331e7dd, before slots were added, each asset's
+// content hash replaced by zeros (the router itself has changed since).
+
+/// Every part of the shell: the site title, the explorer, tags, a table of
+/// contents, backlinks, a listing, and a fallback locale's marks.
+fn shell_samples() -> Vec<(&'static str, String)> {
+    let e = site::ExplorerRef {
+        src: "/kb/k/explorer.json".into(),
+        version: "0123456789abcdef".into(),
+    };
+    let toc = vec![
+        mae_site::TocEntry {
+            level: 2,
+            text: "One".into(),
+            anchor: "one".into(),
+        },
+        mae_site::TocEntry {
+            level: 3,
+            text: "Two".into(),
+            anchor: "two".into(),
+        },
+    ];
+    let back = vec![mae_site::Backlink {
+        title: "Back <b>".into(),
+        id: "b".into(),
+        href: "/kb/k/b".into(),
+    }];
+    let tags = vec![("t".to_string(), "/kb/k/tags/t".to_string())];
+    let titled = site::Chrome {
+        lang: "en-US",
+        site: Some(("Site & co", "/kb/k/")),
+        slots: None,
+    };
+    let items = vec![("A".to_string(), "/kb/k/a".to_string())];
+    vec![
+        (
+            "page.html",
+            site::document(titled, "P", "<p>x</p>", &back, &tags, &toc, Some(&e)),
+        ),
+        (
+            "bare.html",
+            site::document("en-US", "P", "<p>x</p>", &[], &[], &[], None),
+        ),
+        (
+            "fallback.html",
+            site::document("de", "P", "<p>x</p>", &back, &tags, &toc, Some(&e)),
+        ),
+        (
+            "tags.html",
+            site::listing_document(titled, &site::Listing::Tags, &items, Some(&e)),
+        ),
+        (
+            "tag.html",
+            site::listing_document("fr-FR", &site::Listing::Tag("t".into()), &items, Some(&e)),
+        ),
+    ]
+}
+
+#[test]
+fn without_components_the_shell_is_byte_identical_to_before() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/site-shell");
+    for (name, mut html) in shell_samples() {
+        for asset in mae_site::assets::ALL {
+            let (stem, ext) = asset.name.rsplit_once('.').expect("name.ext");
+            let stem = stem.rsplit_once('-').expect("stem-hash").0;
+            html = html.replace(asset.name, &format!("{stem}-{}.{ext}", "0".repeat(16)));
+        }
+        let want = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert_eq!(html, want, "{name}");
+    }
+}

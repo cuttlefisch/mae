@@ -43,7 +43,21 @@ pub struct DerivedPage {
     pub tags: Vec<String>,
     /// Its headings in order, each with the anchor the page gives it (P-79).
     pub toc: Vec<TocEntry>,
+    /// Its file-level properties (P-154), `ID` left out, for its slot
+    /// components. Keys are mae-org's canonical form: Emacs's case folding,
+    /// then ASCII upper case, so `:state:`, `:State:` and `:STATE:` are all
+    /// `STATE`. Values are as Org reads them (`org-entry-get`), with hidden
+    /// references removed (P-13).
+    pub properties: BTreeMap<String, String>,
+    /// Its dates by name, lower case, each as its source wrote it (a
+    /// component reads one with `iso_date`): `created` and `updated`, from
+    /// the `CREATED` and `UPDATED` properties, when present.
+    pub dates: BTreeMap<String, String>,
 }
+
+/// The properties whose values are a page's dates, and the names
+/// [`DerivedPage::dates`] gives them.
+pub const DATE_PROPERTIES: &[(&str, &str)] = &[("CREATED", "created"), ("UPDATED", "updated")];
 
 /// One heading of a page's table of contents. `text` is raw text: the
 /// chrome escapes it.
@@ -230,6 +244,7 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
             links: Vec::new(),
             text: mae_org::text_of(&r.body),
         });
+        let properties = file_properties(&p.sem, &opts.hidden_namespaces);
         let page = DerivedPage {
             title: p.title.clone().unwrap_or_else(|| id.clone()),
             href,
@@ -237,15 +252,11 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
             backlinks: backlinks.get(&id).cloned().unwrap_or_default(),
             tags: page_tags(&p.sem),
             toc: toc(&r.body),
+            dates: dates_of(&properties),
+            properties,
             id: id.clone(),
         };
-        for t in &page.tags {
-            site.tags.entry(t.clone()).or_default().push(PageRef {
-                title: page.title.clone(),
-                id: page.id.clone(),
-                href: page.href.clone(),
-            });
-        }
+        list_under_tags(&mut site.tags, &page);
         site.pages.insert(id, page);
     }
     for pages in site.tags.values_mut() {
@@ -419,6 +430,37 @@ fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
         }
     }
     out
+}
+
+/// `page` under each of its tags, for the tag pages (P-70).
+fn list_under_tags(tags: &mut BTreeMap<String, Vec<PageRef>>, page: &DerivedPage) {
+    for t in &page.tags {
+        tags.entry(t.clone()).or_default().push(PageRef {
+            title: page.title.clone(),
+            id: page.id.clone(),
+            href: page.href.clone(),
+        });
+    }
+}
+
+/// The file node's properties but its `ID` (see [`DerivedPage::properties`]).
+fn file_properties(sem: &mae_org::Semantics, hidden: &[String]) -> BTreeMap<String, String> {
+    let Some(file) = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File) else {
+        return BTreeMap::new();
+    };
+    file.properties
+        .iter()
+        .filter(|(k, _)| k != "ID")
+        .map(|(k, v)| (k.clone(), scrub(v, hidden).unwrap_or_else(|| v.clone())))
+        .collect()
+}
+
+/// [`DATE_PROPERTIES`] read from `properties`.
+fn dates_of(properties: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    DATE_PROPERTIES
+        .iter()
+        .filter_map(|(key, name)| properties.get(*key).map(|v| (name.to_string(), v.clone())))
+        .collect()
 }
 
 fn parse_page<'a>(source: &'a SourcePage, opts: &SiteOptions) -> Parsed<'a> {
