@@ -852,7 +852,9 @@ components or what a "version" is without a build. Both are the owner's (H1, H2)
   - for a page-emitting component, its page name and its data file (H2).
 - **Loaded once, at startup.** Every template is compiled, every script and data file is read and
   validated, and every declared attribute is checked against the sanitiser's rules before the daemon
-  serves. Any failure stops the daemon with the component and the reason, as an invalid TLS path does.
+  serves. Any failure stops the daemon with the component and the reason, before any store opens, as an
+  invalid `[[tenant]]` entry does (an invalid TLS path only disables the HTTPS listener, which would
+  leave a site serving pages without the components the operator declared).
   It is the live counterpart of P-157's "the build fails". A change takes a restart; there is no hot
   reload.
 - **A failure while rendering** leaves that slot empty for that page, and is logged, rate-limited per
