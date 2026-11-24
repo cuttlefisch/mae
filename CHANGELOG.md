@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.190] - 2026-11-24
+
+
+
+
+### Features
+
+- *(site)* Highlight source blocks through a caller's Highlighter ([c428048](https://github.com/cuttlefisch/mae/commit/c42804849fa4a38fbef0e2fd8a231de835b40b7e))
+- *(daemon)* Highlight the live site's source blocks with tree-sitter ([84d1115](https://github.com/cuttlefisch/mae/commit/84d1115ddc6e489ae32562e091e86e3d9ffa6505))
+- *(site)* Colour source blocks from the palette and add a copy control ([5862258](https://github.com/cuttlefisch/mae/commit/58622585f599e094655d776e89f2cbe543b80e43))
+
+### Refactor
+
+- *(core)* Move the grammar registry into a shared mae-syntax crate ([48cbd22](https://github.com/cuttlefisch/mae/commit/48cbd2210349c3f52b8cf36b6506d2003622d090))
+- *(site)* Derive_with finishes its lists in its own function ([7ae16bd](https://github.com/cuttlefisch/mae/commit/7ae16bdccdabef9d505e4594f9c3dfc6809cb42d))
+
+### Documentation
+
+- *(adr-119)* D12 carries all 21 grammars, at the measured size ([37365dd](https://github.com/cuttlefisch/mae/commit/37365ddf0029aeac2ffc3512319c6f27c9c2eff5))
+
 ## [0.14.189] - 2026-11-24
 
 
@@ -18,6 +38,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(daemon)* A reply bound with no room pages one node at a time and ends ([070794e](https://github.com/cuttlefisch/mae/commit/070794ec49a76467f12eb66972847b4bef8dfd07))
+
+### Miscellaneous
+
+- Bump version to 0.14.189 ([0690f26](https://github.com/cuttlefisch/mae/commit/0690f265fbbbdff5c9cb70c34d61e6c4daabe66a))
 
 ## [0.14.188] - 2026-11-24
 
