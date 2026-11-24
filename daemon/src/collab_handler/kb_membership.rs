@@ -133,6 +133,7 @@ pub(super) async fn handle_kb_join(
     auth_pubkey: Option<&[u8; 32]>,
     session_docs: &mut HashSet<String>,
     transport: Transport,
+    reply_bound: usize,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
@@ -278,7 +279,7 @@ pub(super) async fn handle_kb_join(
         }
     };
 
-    let page = JoinPage::from_params(params, doc_store, collection_state.len());
+    let page = JoinPage::from_params(params, doc_store, reply_bound, collection_state.len());
     let joined = join_node_states(
         doc_store,
         broadcaster,
@@ -313,7 +314,9 @@ pub(super) async fn handle_kb_join(
 ///
 /// Without `paged` (an older client), every node, as before. With it, the
 /// nodes in sorted id order after `after`, until the reply would pass the
-/// message bound one document at the size limit fits; `next_after` then names
+/// message bound one document at the size limit fits, or the session's reply
+/// bound when that is lower (#1003: a WebSocket closes 1011 on any reply over
+/// its `max_outbound_bytes`); `next_after` then names
 /// the last node served. A page always carries at least one node, so a node
 /// stored above the limit before the limit existed still goes out alone.
 struct JoinPage {
@@ -330,9 +333,10 @@ impl JoinPage {
     fn from_params(
         params: &serde_json::Value,
         doc_store: &DocStore,
+        reply_bound: usize,
         collection_len: usize,
     ) -> Self {
-        let bound = doc_store.message_bound();
+        let bound = doc_store.message_bound().min(reply_bound);
         let collection_b64 = collection_len.div_ceil(3) * 4;
         JoinPage {
             paged: params["paged"].as_bool().unwrap_or(false),

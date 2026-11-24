@@ -99,6 +99,9 @@ pub(super) async fn run(
         .limits(limits)
         .serve(TokioIo::new(upgraded));
     let (gov, handle) = governor(settings.max_open_docs, auth.deadline);
+    // The pump below closes the socket on any reply over this, so the session
+    // must size the replies it pages (`kb/join`) to it, not to the store's bound.
+    let gov = gov.with_reply_bound(settings.max_outbound_bytes);
     let (client_end, session_end) = tokio::io::duplex(PIPE_BYTES);
     let (from_session, to_session) = tokio::io::split(client_end);
     let principal = auth.principal.clone();

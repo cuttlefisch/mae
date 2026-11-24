@@ -1,6 +1,7 @@
 //! What a transport imposes on a collab session beyond its identity
 //! (ADR-099 Amendment 1, B3/B4): an authentication deadline, a cap on open
-//! documents, and re-authorization of every open document on demand.
+//! documents, re-authorization of every open document on demand, and the
+//! largest reply the transport delivers (#1003).
 //!
 //! The WebSocket route on the HTTPS listener is the first transport that needs
 //! these, and it reaches the SAME session loop and dispatch every other
@@ -8,7 +9,8 @@
 //! method keeps its one authorization path, so per-frame authorization is
 //! inherited rather than re-implemented. This module adds only what the shared
 //! loop cannot know on its own — when the credential behind the session
-//! expires, and how many documents the transport lets one session hold. A
+//! expires, how many documents the transport lets one session hold, and how
+//! large a reply it delivers (so a paged `kb/join` is sized to fit). A
 //! session with no governor (mTLS, PSK, the P2P mesh) behaves exactly as before.
 //!
 //! @ai-caution: [authz] [`SessionGovernor::admit`] runs BEFORE dispatch and the
@@ -41,6 +43,9 @@ pub struct SessionGovernor {
     max_open_docs: usize,
     deadline: Arc<AtomicU64>,
     control: mpsc::Receiver<SessionControl>,
+    /// The largest reply the transport delivers, when it caps replies itself
+    /// (the WebSocket's `max_outbound_bytes`); `None` leaves the store's bound.
+    reply_bound: Option<usize>,
 }
 
 /// The transport-side half: moves the deadline and asks for re-authorization.
@@ -60,6 +65,7 @@ pub fn governor(max_open_docs: usize, deadline_unix: u64) -> (SessionGovernor, G
             max_open_docs,
             deadline: Arc::clone(&deadline),
             control: rx,
+            reply_bound: None,
         },
         GovernorHandle {
             deadline,
@@ -98,6 +104,19 @@ pub(crate) enum Admission {
 }
 
 impl SessionGovernor {
+    /// The transport delivers no reply over `max` bytes (#1003): a reply the
+    /// session sizes itself, such as a `kb/join` page, is filled to this, and
+    /// `initialize` announces it as `limits.max_outbound_bytes`.
+    pub fn with_reply_bound(mut self, max: usize) -> Self {
+        self.reply_bound = Some(max);
+        self
+    }
+
+    /// The transport's reply cap, if it has one.
+    pub(crate) fn reply_bound(&self) -> Option<usize> {
+        self.reply_bound
+    }
+
     fn expired(&self, now_unix: u64) -> bool {
         now_unix >= self.deadline.load(Ordering::SeqCst)
     }

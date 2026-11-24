@@ -185,6 +185,7 @@ async fn query_only_member_kb_join_never_subscribes_the_session() {
         None,
         &mut denied_docs,
         Transport::Hub,
+        store.message_bound(),
         serde_json::json!(1),
         &kb_join_msg("kbsub")["params"],
     )
@@ -202,6 +203,7 @@ async fn query_only_member_kb_join_never_subscribes_the_session() {
         None,
         &mut allowed_docs,
         Transport::Hub,
+        store.message_bound(),
         serde_json::json!(2),
         &kb_join_msg("kbsub")["params"],
     )
@@ -289,6 +291,7 @@ async fn mid_session_restriction_does_not_tear_down_an_already_live_session_but_
         None,
         &mut session_docs,
         Transport::Hub,
+        store.message_bound(),
         serde_json::json!(1),
         &kb_join_msg("kbmid")["params"],
     )
@@ -339,6 +342,7 @@ async fn mid_session_restriction_does_not_tear_down_an_already_live_session_but_
         None,
         &mut reconnect_docs,
         Transport::Hub,
+        store.message_bound(),
         serde_json::json!(2),
         &kb_join_msg("kbmid")["params"],
     )

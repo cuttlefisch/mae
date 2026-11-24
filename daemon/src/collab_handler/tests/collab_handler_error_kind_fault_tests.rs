@@ -272,6 +272,7 @@ async fn dispatch_with(
         None,
         docs,
         transport,
+        store.message_bound(),
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
         None,
