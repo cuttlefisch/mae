@@ -12,6 +12,9 @@ pub enum MediaType {
     Webp,
     Avif,
     Svg,
+    /// A PDF (a revision's rendering, ADR-113 D6, or any attached document):
+    /// stored exactly as it arrived, served only as a download.
+    Pdf,
     Other,
 }
 
@@ -25,6 +28,7 @@ impl MediaType {
             MediaType::Webp => "image/webp",
             MediaType::Avif => "image/avif",
             MediaType::Svg => "image/svg+xml",
+            MediaType::Pdf => "application/pdf",
             MediaType::Other => "application/octet-stream",
         }
     }
@@ -38,6 +42,7 @@ impl MediaType {
             MediaType::Webp,
             MediaType::Avif,
             MediaType::Svg,
+            MediaType::Pdf,
         ]
         .into_iter()
         .find(|t| t.as_str() == s)
@@ -64,6 +69,11 @@ pub fn sniff(bytes: &[u8]) -> MediaType {
         MediaType::Gif
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         MediaType::Webp
+    } else if bytes.starts_with(b"%PDF-") {
+        // The header at offset 0. PDF readers accept it anywhere in the first
+        // 1024 bytes; a file that puts it later is not typed a PDF here, so
+        // nothing else can be prefixed to one and still be served as one.
+        MediaType::Pdf
     } else if is_avif(bytes) {
         MediaType::Avif
     } else if super::svg::is_svg(bytes) {

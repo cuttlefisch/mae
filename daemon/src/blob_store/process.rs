@@ -10,6 +10,9 @@
 //! - an SVG is sanitised ([`super::svg`]).
 //! - AVIF is refused: its only decoders are C, and metadata cannot be stripped
 //!   from what is not read (see the module docs of [`super`]).
+//! - a PDF (`%PDF-` at offset 0) is stored exactly as it arrived, as
+//!   `application/pdf`: the image rules do not apply, and its hash is of the
+//!   bytes the client sent.
 //! - anything else is stored as it arrived, as `application/octet-stream`.
 //!
 //! Processing is idempotent: `process(process(x)) == process(x)`, for every
@@ -106,9 +109,9 @@ pub fn process(input: Vec<u8>, limits: &ProcessLimits) -> Result<Processed, Proc
                 height: None,
             })
             .ok_or_else(|| ProcessError::Undecodable("not a well-formed SVG".into())),
-        MediaType::Other => Ok(Processed {
+        t @ (MediaType::Pdf | MediaType::Other) => Ok(Processed {
             bytes: input,
-            media_type: MediaType::Other,
+            media_type: t,
             width: None,
             height: None,
         }),

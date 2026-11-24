@@ -956,3 +956,59 @@ fn default_storage_quota_fits_adr_109s_disk_budget() {
     );
     assert!(q > 0, "a configured tenant is bounded by default");
 }
+
+/// A PDF arrives as a download, byte for byte; the client's `Content-Type`
+/// is never what types a blob, in either direction.
+#[tokio::test]
+async fn a_pdf_is_stored_as_sent_and_a_claimed_type_is_ignored() {
+    let h = harness().await;
+    let pdf = one_page_pdf();
+    let as_pdf = "\r\nContent-Type: application/pdf";
+    let up = h
+        .upload(&h.people.editor, "kb-a", &pdf, as_pdf)
+        .await
+        .json();
+    assert_eq!(up["media_type"], "application/pdf");
+    assert_eq!(up["sha256"], sha(&pdf));
+    assert!(up.get("width").is_none());
+    let got = h
+        .fetch(
+            "GET",
+            &h.people.viewer,
+            "kb-a",
+            up["sha256"].as_str().unwrap(),
+            "",
+        )
+        .await;
+    assert_eq!(got.body, pdf, "byte-identical");
+    assert_eq!(got.header("content-type"), Some("application/pdf"));
+    assert_eq!(got.header("content-disposition"), Some("attachment"));
+    // Labelled a PDF, but HTML: never served as a PDF (or as HTML).
+    let html = b"<html><script>alert(1)</script></html>";
+    let fake = h
+        .upload(&h.people.editor, "kb-a", html, as_pdf)
+        .await
+        .json();
+    assert_eq!(fake["media_type"], "application/octet-stream");
+    // Labelled a PDF, but a PNG: an image, processed as one.
+    let img = h
+        .upload(&h.people.editor, "kb-a", &png(4, 4, 3), as_pdf)
+        .await
+        .json();
+    assert_eq!(img["media_type"], "image/png");
+    // A PDF labelled an image: still a PDF, still a download.
+    let swapped = h
+        .upload(
+            &h.people.editor,
+            "kb-a",
+            &pdf,
+            "\r\nContent-Type: image/png",
+        )
+        .await
+        .json();
+    assert_eq!(swapped["media_type"], "application/pdf");
+}
+
+fn one_page_pdf() -> Vec<u8> {
+    b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n".to_vec()
+}

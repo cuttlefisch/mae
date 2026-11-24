@@ -311,10 +311,12 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   The daemon picks the address: it sniffs the type from the bytes (never the client's header),
   strips image metadata (EXIF and its location, XMP, comments, text chunks), applies an EXIF
   orientation to the pixels, sanitises SVG, decodes the result under `max_attachment_pixels` and a
-  1000-frame limit, and hashes what it will store. AVIF is refused (`attachment_unsupported`). The
+  1000-frame limit, and hashes what it will store. AVIF is refused (`attachment_unsupported`). A PDF
+  (`%PDF-` at the first byte) and any other file are stored exactly as sent, and served only as
+  downloads. The
   same bytes in two KBs are two copies; nothing is shared across KBs. A download carries
-  `Content-Type` (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml`, else
-  `application/octet-stream`), `X-Content-Type-Options: nosniff`,
+  `Content-Type` (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml`,
+  `application/pdf`, else `application/octet-stream`), `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox; default-src 'none'`, `ETag: "<sha256>"` (a matching
   `If-None-Match` answers `304`) and `Cache-Control: private, max-age=31536000, immutable`; SVG and
   anything not a raster image also `Content-Disposition: attachment`. A caller who cannot read the

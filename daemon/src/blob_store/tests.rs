@@ -342,7 +342,8 @@ fn processing_a_processed_file_returns_identical_bytes_for_every_allowed_format(
         ("gif", hostile_gif()),
         ("webp", hostile_webp()),
         ("svg", hostile_svg().into_bytes()),
-        ("other", b"%PDF-1.7 not an image".to_vec()),
+        ("pdf", minimal_pdf()),
+        ("other", b"PK\x03\x04 an archive".to_vec()),
     ];
     for (what, input) in inputs {
         let once = process(input, &LIMITS).unwrap();
@@ -808,4 +809,88 @@ fn addresses_and_kb_ids_are_validated_before_any_path_is_built() {
     for bad in [".tmp", "blobs.db", "..", "KB-A", "kb/a", ""] {
         assert!(!valid_kb_id(bad), "{bad}");
     }
+}
+
+/// A real, minimal one-page PDF, with the binary marker line writers emit.
+pub(crate) fn minimal_pdf() -> Vec<u8> {
+    let mut pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>",
+    ];
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for off in offsets {
+        pdf.extend(format!("{off:010} 00000 n \n").bytes());
+    }
+    pdf.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .bytes(),
+    );
+    pdf
+}
+
+/// A PDF is stored byte for byte: none of the image rules touch it, and its
+/// address is the hash of exactly what was sent.
+#[test]
+fn a_pdf_is_stored_byte_identical_and_addressed_by_its_own_bytes() {
+    let pdf = minimal_pdf();
+    let out = process(pdf.clone(), &LIMITS).unwrap();
+    assert_eq!(out.media_type, MediaType::Pdf);
+    assert_eq!(out.media_type.as_str(), "application/pdf");
+    assert!(!out.media_type.inline(), "a PDF is only ever a download");
+    assert_eq!(out.bytes, pdf);
+    assert_eq!((out.width, out.height), (None, None));
+    let (_d, s) = store();
+    let staged = s.stage(&out.bytes).unwrap();
+    let meta = s
+        .commit("kb-a", staged, (out.media_type, None, None), None)
+        .unwrap();
+    assert_eq!(meta.sha256, sha(&pdf));
+    assert_eq!(
+        std::fs::read(s.blob_path("kb-a", &meta.sha256)).unwrap(),
+        pdf
+    );
+    assert_eq!(
+        s.get("kb-a", &meta.sha256).unwrap().unwrap().media_type,
+        MediaType::Pdf
+    );
+}
+
+/// Only the bytes say what a file is: an image is an image whatever follows
+/// it, a PDF header after anything else does not make a PDF, and an image
+/// header inside a PDF does not make an image.
+#[test]
+fn pdf_and_image_are_told_apart_by_their_bytes_alone() {
+    // An image with a PDF appended: an image, stripped of the tail.
+    let png = png_of(&DynamicImage::ImageRgb8(halves(8, 8)), false);
+    let disguised = [&png[..], &minimal_pdf()[..]].concat();
+    let out = process(disguised, &LIMITS).unwrap();
+    assert_eq!(out.media_type, MediaType::Png);
+    assert!(!contains(&out.bytes, b"%PDF-"));
+    // A PDF carrying a PNG inside: a PDF, untouched.
+    let pdf_with_image = [&minimal_pdf()[..], &png[..]].concat();
+    let out = process(pdf_with_image.clone(), &LIMITS).unwrap();
+    assert_eq!(
+        (out.media_type, out.bytes),
+        (MediaType::Pdf, pdf_with_image)
+    );
+    // Not a PDF, whatever it claims to be: HTML with a late PDF header is a
+    // download of unknown type, never `application/pdf`.
+    let fake = b"<html><script>alert(1)</script></html>\n%PDF-1.4\n".to_vec();
+    assert_eq!(process(fake, &LIMITS).unwrap().media_type, MediaType::Other);
+    assert_eq!(
+        super::sniff::sniff(b"%PDF"),
+        MediaType::Other,
+        "no version dash"
+    );
 }
