@@ -455,6 +455,20 @@ built:
   bound). The expansion bound, not a count of `<use>` elements, is what stops fan-out: sixty `<use>`s,
   ten per level over six levels, already expand to a million.
 
+### B7. Residuals, accepted and stated
+
+- **Principals in no tenant share one storage bucket.** One of them can fill it and refuse the others.
+  That is deliberate: a shared bucket bounds the disk, while a budget per principal would not (every new
+  principal would bring another gigabyte). Separating people is what `[tenant]` is for; the default
+  budget is a safety net, not a tenancy.
+- **Queue places are per principal**, so a person with several agent principals holds several places
+  against the worker pool. This holds until ADR-118 maps an agent to its person. Then key the queue,
+  and the storage charge, by the person.
+- **The request head has no read timeout.** The listener bounds the TLS handshake and caps connections
+  at accept, but a client that never finishes its headers holds a connection slot until the cap runs
+  out. That predates this store and applies to every route on the listener, so it is tracked as an
+  issue of its own, not fixed here.
+
 ## Rejected
 
 - **Base64 in node text**, for the measured reasons in Context.
