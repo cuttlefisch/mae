@@ -856,7 +856,9 @@ components or what a "version" is without a build. Both are the owner's (H1, H2)
   invalid `[[tenant]]` entry does (an invalid TLS path only disables the HTTPS listener, which would
   leave a site serving pages without the components the operator declared).
   It is the live counterpart of P-157's "the build fails". A change takes a restart; there is no hot
-  reload.
+  reload. One check cannot refuse: whether a configured KB ID names a KB the daemon has. KBs are
+  created at run time, so an operator may configure one first; a well-formed ID that names no KB is
+  warned about at startup instead (`site_components::unmatched_kb_ids`).
 - **A failure while rendering** leaves that slot empty for that page, and is logged, rate-limited per
   template (D18).
 - **What a template sees (P-154):**
