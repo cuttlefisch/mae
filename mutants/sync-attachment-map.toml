@@ -1,0 +1,66 @@
+# A node's attachments map (ADR-115 D4, P2a): its place in the version, the
+# NAME rule, the tolerant reader, last-writer-wins on one NAME, and the
+# projection's rows on remove. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "sync-attachment-map/version-omits-map"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(the_version_moves_on_replace_rename_and_remove_and_not_on_a_no_op)"
+ref = "a replaced image is a new version: the map is node content (D4)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node.rs"
+find = '''        if let Some(bytes) = attachments::digest_bytes(attachments) {
+            put(&bytes);
+        }'''
+replace = '''        let _ = attachments;'''
+
+[[mutant]]
+id = "sync-attachment-map/name-unchecked"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(an_accepted_name_is_one_file_in_its_directory)"
+ref = "an accepted NAME is one plain file directly in its attachment directory"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''    if name.is_empty() {
+        return Err(AttachmentError::Name("is empty"));
+    }'''
+replace = '''    if name.len() < usize::MAX {
+        return Ok(());
+    }'''
+
+[[mutant]]
+id = "sync-attachment-map/malformed-admitted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(a_malformed_entry_from_sync_is_reported_ignored_and_harms_no_valid_entry)"
+ref = "a hostile peer's malformed entry is reported and ignored by readers"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''    r.validate()?;
+    let mut unknown'''
+replace = '''    let _ = r.validate();
+    let mut unknown'''
+
+[[mutant]]
+id = "sync-attachment-map/first-writer-wins"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(concurrent_edits_to_one_name_converge_to_one_winner_everywhere)"
+ref = "concurrent writes to one NAME resolve last-writer-wins: an existing binding is replaced"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''        if self.attachment(name).as_ref() == Some(attachment) {'''
+replace = '''        if self.attachment(name).is_some() {'''
+
+[[mutant]]
+id = "sync-attachment-map/projection-kept-on-remove"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(the_relation_follows_the_node_through_insert_replace_and_delete)"
+ref = "the node_attachments rows are the node's map after a removal"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/links.rs"
+find = '''            Self::ATTACHMENTS_RM_SCRIPT,'''
+replace = '''            "?[x] <- [[1]]",'''
