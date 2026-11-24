@@ -53,6 +53,25 @@ async fn edit(store: &DocStore, kb: &str, id: &str, f: impl FnOnce(&mut KbNodeDo
         .unwrap();
 }
 
+/// A hostile peer's entry under a bad name, carrying hash `seed`.
+async fn put_malformed(store: &DocStore, kb: &str, id: &str, seed: u8) {
+    edit(store, kb, id, |d| {
+        let sv = d.state_vector();
+        let map = d.doc().get_or_insert_map(ATTACHMENTS_ROOT);
+        let entry = [(
+            "sha256".to_string(),
+            mae_sync::yrs::Any::from(h(seed).as_str()),
+        )];
+        map.insert(
+            &mut d.doc().transact_mut(),
+            "bad/name.png",
+            mae_sync::yrs::Any::Map(std::sync::Arc::new(entry.into_iter().collect())),
+        );
+        d.encode_diff(&sv).unwrap()
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn the_live_set_is_every_node_and_every_history_version_of_the_kb() {
     let store = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
@@ -96,24 +115,7 @@ async fn the_live_set_is_every_node_and_every_history_version_of_the_kb() {
 
     // Removing an entry releases its hash; a malformed entry adds none.
     edit(&store, "kb", "n2", |d| d.remove_attachment("f.png")).await;
-    edit(&store, "kb", "n2", |d| {
-        let sv = d.state_vector();
-        let map = d.doc().get_or_insert_map(ATTACHMENTS_ROOT);
-        map.insert(
-            &mut d.doc().transact_mut(),
-            "bad/name.png",
-            mae_sync::yrs::Any::Map(std::sync::Arc::new(
-                [(
-                    "sha256".to_string(),
-                    mae_sync::yrs::Any::from(h(7).as_str()),
-                )]
-                .into_iter()
-                .collect(),
-            )),
-        );
-        d.encode_diff(&sv).unwrap()
-    })
-    .await;
+    put_malformed(&store, "kb", "n2", 7).await;
     assert_eq!(
         store.referenced_blobs("kb").await.unwrap().hashes,
         set(&[1, 2, 3])
