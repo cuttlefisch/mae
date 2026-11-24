@@ -122,9 +122,9 @@ pub use options::{
 pub use render::{
     encode_id, heading_anchor, is_valid_id, is_valid_language, node_source, node_text, normalise,
     render, render_hast, render_html, render_inline, replace_body, safe_external_url,
-    safe_resolver_href, slug, text, text_of, to_hast, to_html, with_line_ending, Attr,
-    BodyEditError, Element, HeadlineIds, HeadlineLevels, ImageState, MacroFailure, Node, NodeMeta,
-    RenderDiagnostic, RenderOptions, Rendered, Resolved, ResolvedImage, Resolver, Tag,
+    safe_resolver_href, slug, text, text_of, to_hast, to_html, with_line_ending, AttachmentState,
+    Attr, BodyEditError, Element, HeadlineIds, HeadlineLevels, MacroFailure, Node, NodeMeta,
+    RenderDiagnostic, RenderOptions, Rendered, Resolved, ResolvedAttachment, Resolver, Tag,
     ToplevelHlevel, TreeFormat, ATTRIBUTES, CLASSES, DATA_STATES, DECLARATION_KEYWORDS,
     DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
 };

@@ -413,23 +413,24 @@ fn only_attachment_links_written_so_carry_a_directory() {
     // Org's link type is case-sensitive: `ATTACHMENT:` is not org-attach's.
     let text = "* H\n:PROPERTIES:\n:ID: abcd\n:END:\n[[ATTACHMENT:a.png]] [[file:b.png]] [[attachment:c.png][described]] https://x.org/d.png\n";
     let doc = parse(text, &ParseOptions::default());
-    let got: Vec<(String, Option<String>)> = semantics(&doc)
+    let got: Vec<(String, Option<String>, Option<String>)> = semantics(&doc)
         .links
         .into_iter()
-        .map(|l| (l.target, l.attach_dir))
+        .map(|l| (l.target, l.attach_dir, l.attach_id))
         .collect();
     assert_eq!(
         got,
         vec![
-            ("ATTACHMENT:a.png".to_string(), None),
-            ("file:b.png".to_string(), None),
+            ("ATTACHMENT:a.png".to_string(), None, None),
+            ("file:b.png".to_string(), None, None),
             // A described attachment link is a link to the file: it still
             // lives in the directory.
             (
                 "attachment:c.png".to_string(),
-                Some("data/ab/cd/".to_string())
+                Some("data/ab/cd/".to_string()),
+                Some("abcd".to_string())
             ),
-            ("https://x.org/d.png".to_string(), None),
+            ("https://x.org/d.png".to_string(), None, None),
         ]
     );
 }

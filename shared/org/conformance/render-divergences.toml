@@ -111,7 +111,7 @@ test = "a_paragraph_caption_is_a_figure"
 id = "file-links-images"
 what = "file: links and local images"
 org = "links file:x.org to x.html, inlines ./img.png"
-mae = "a file: or attachment: link renders as its description (or the placeholder); a description-less local image is an image only through Resolver::images (see image-url-from-resolver); <img> for an http(s) image only with RenderOptions::images"
+mae = "a file: or attachment: link renders as its description (or the placeholder); it is a link or a local image only through Resolver::attachments (see image-url-from-resolver and file-link-url-from-resolver); <img> for an http(s) image only with RenderOptions::images"
 reason = "Closure (D3): every href is a resolver target, an allowlisted URL or an anchor of the page; a path on the author's disk is none of them."
 test = "file_links_and_local_images_are_not_links"
 
@@ -119,7 +119,7 @@ test = "file_links_and_local_images_are_not_links"
 id = "image-url-from-resolver"
 what = "a description-less attachment: or file-type image link ([[attachment:x.png]], [[file:x.png]], [[./x.png]])"
 org = "<img src> of the file's path on disk: org-attach-expand-links rewrites [[attachment:x.png]] to [[file:/abs/data/ab/cdef/x.png]] before parsing, so the src is file:///abs/data/ab/cdef/x.png (measured, Emacs 30.2, Org 9.7.11)"
-mae = "src is the URL the host gives in Resolver::images for the link's target as written (validated as a resolver href; a refused one, or a target not in the map, leaves the link unresolved, as before); alt is the name's last segment, as ox-html's file-name-nondirectory"
+mae = "src is the URL the host gives in Resolver::attachments for the link's target as written (validated as a resolver href; a refused one, or a target not in the map, leaves the link unresolved, as before); alt is the name's last segment, as ox-html's file-name-nondirectory"
 reason = "ADR-115 E3 and D3's closure: a reader fetches the bytes by KB and hash from the host (/kb/<kb-id>/blobs/<sha256>), never a path on the author's disk, so the host resolves the target and mae-org renders what it says."
 test = "a_resolved_image_is_an_img_with_its_size_when_known"
 
@@ -132,12 +132,44 @@ reason = "ADR-115 D6 and E3: the reader is told what happened; a broken image te
 test = "every_other_state_is_a_labelled_placeholder_never_an_img"
 
 [[divergence]]
+id = "file-link-url-from-resolver"
+what = "an attachment: or file-type link that is no image: one with a description ([[attachment:r.pdf][The report]], even to an image name), or a description-less one to a non-image name ([[file:r.pdf]])"
+org = "<a href=PATH>, showing the description as exported: PATH is the file's path, file:///abs/data/ab/cdef/r.pdf for an attachment (org-attach-expand-links), the name as written for a relative file: link, .org turned into .html (measured, Emacs 30.2, Org 9.7.11), and a ::search option resolved to a #fragment (ox-html.el)"
+mae = "<a class=org-link href=URL>, showing the description as rendered, with the URL the host gives in Resolver::attachments for the target as written (validated as a resolver href); a ::search link, a target not in the map and a refused URL stay unresolved, as before"
+reason = "ADR-115 E3 and D3's closure, as for images: a reader downloads the bytes from the host by KB and hash, never from a path on the author's disk, so the host resolves the target and decides what it offers (a PDF, say)."
+test = "a_described_resolved_link_links_its_rendered_description"
+
+[[divergence]]
+id = "file-link-text"
+what = "the text of a description-less link to a non-image file"
+org = "the exported PATH, as the href: file:///abs/data/ab/cdef/r.pdf for [[attachment:r.pdf]], file:///abs/r.pdf for [[file:/abs/r.pdf]], r.pdf for [[file:r.pdf]] and [[file+sys:r.pdf]], ./r.pdf for [[./r.pdf]] (measured)"
+mae = "the NAME as written, resolved or not: r.pdf for [[attachment:r.pdf]], /abs/r.pdf for [[file:/abs/r.pdf]]; the same for a file-type link as Org"
+reason = "A path on the author's disk is never shown (D3): it says nothing to a reader and leaks the author's layout. The NAME is what the author wrote and what the placeholder shows."
+test = "a_link_without_a_description_to_a_non_image_shows_its_name"
+
+[[divergence]]
+id = "file-link-placeholder-states"
+what = "a described or non-image attachment: or file-type link the host cannot offer (missing, forbidden, too large, unsupported type)"
+org = "a link to the path whether or not the file is there or readable: a broken link"
+mae = "<span class=\"org-attachment\" data-state=\"missing|forbidden|too_large|unsupported\">, showing the description as rendered, or the NAME without one; never an <a>"
+reason = "ADR-115 D6 and E3, as for images: the reader is told what happened, and a file a reader may not see is not linked."
+test = "a_described_link_in_any_other_state_shows_its_description"
+
+[[divergence]]
+id = "image-in-description"
+what = "a link whose description is only a plain link to an image ([[file:r.pdf][file:thumb.png]])"
+org = "ox-html's parse-tree filter org-export-insert-image-links nests the image in the link: <a href=\"r.pdf\"><img src=\"thumb.png\" alt=\"thumb.png\"></a> (measured)"
+mae = "the description as text: <a class=org-link href=URL>file:thumb.png</a>; a link in a description is never looked up in Resolver::attachments"
+reason = "Org's syntax has no nested links (the filter's own docstring); one link is one target, and E1 makes [[attachment:NAME]] the only form a KB uses for a file, with no thumbnail form."
+test = "a_search_option_or_a_nested_link_is_never_looked_up"
+
+[[divergence]]
 id = "image-extension"
 what = "which link names are images"
 org = "org-html-inline-image-rules' extensions as an unanchored, case-folded regexp over the whole path: [[file:a.png/b]] and [[attachment:x.png.txt]] export as <img> (measured, Emacs 30.2)"
-mae = "the extension (jpeg jpg png gif svg webp avif, any case) must end the name's last segment (for an http(s) URL, of its path before ? and #)"
+mae = "the extension (jpeg jpg png gif svg webp avif, any case) must end the name's last segment (for an http(s) URL, of its path before ? and #); any other name is a link to the file (file-link-url-from-resolver)"
 reason = "A name that only contains an extension is not an image file: the host could only answer unsupported. The anchored rule predates ADR-115 for http images, and one rule serves both."
-test = "a_non_image_name_is_never_looked_up"
+test = "a_non_image_name_is_a_link_never_an_image"
 
 [[divergence]]
 id = "attachment-dir-inheritance"

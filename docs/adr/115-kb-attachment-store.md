@@ -363,14 +363,25 @@ every one.
 
 ### E3. mae-org's resolver contract (D6, made concrete)
 
-The resolver is data, like `targets`, because it crosses the WASM boundary as JSON: `images` maps a
-link target exactly as written (`"attachment:diagram.png"`, as the semantics expose it) to a state:
-`resolved` (`url`, `media_type`, optional `width` and `height`) renders `<img>`; `missing`,
-`forbidden`, `too_large` and `unsupported` render the labelled placeholder
-`<span class="org-attachment" data-state="…">NAME</span>`. A target that is not in the map renders as
-today (`org-unresolved`). Only description-less `attachment:` and `file:` links to an image extension
-are looked up; the `http` images option is unchanged. The host reads a page's link targets from the
-semantics, resolves them, then renders, and owns its policy (types, size caps).
+The resolver is data, like `targets`, because it crosses the WASM boundary as JSON: `attachments`
+maps a link target exactly as written (`"attachment:diagram.png"`, as the semantics expose it) to a
+state: `resolved` (`url`, `media_type`, optional `width` and `height`), or `missing`, `forbidden`,
+`too_large` and `unsupported`. Only `attachment:` and `file`-type links without a `::search` part are
+looked up, and never a link inside another link's description. The rule is Org's:
+
+- A resolved link **without a description** to an image extension renders `<img>`.
+- Any other resolved link (one with a description, even to an image, or a description-less one to
+  a non-image such as a PDF) renders `<a class="org-link" href="URL">`, showing the description as
+  rendered, or the NAME when there is none, as ox-html links a file.
+- Any other state renders the labelled placeholder
+  `<span class="org-attachment" data-state="…">`, showing the same text.
+- A target that is not in the map renders as today (`org-unresolved`).
+
+The `http` images option is unchanged. The host reads a page's link targets from the semantics,
+resolves them, then renders, and owns its policy (which types it shows or offers for download, size
+caps). Built in mae-org 0.11.0; the differences from ox-html (the URL, the NAME where Org shows a disk
+path, the placeholder, no image inside a link's description) are registered in
+`render-divergences.toml`.
 
 ### E4. Build order
 

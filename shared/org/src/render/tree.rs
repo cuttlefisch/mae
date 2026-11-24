@@ -205,7 +205,7 @@ pub enum Attr {
     /// `mailto:` URL, or `#ID` of an id in the same output.
     Href,
     /// An image URL: an `http:`/`https:` URL (only with images enabled),
-    /// or a [`super::ResolvedImage::url`] validated as a resolver href.
+    /// or a [`super::ResolvedAttachment::url`] validated as a resolver href.
     Src,
     /// An image's alternative text (any text).
     Alt,
@@ -233,8 +233,9 @@ pub enum Attr {
     DataState,
 }
 
-/// The values [`Attr::DataState`] takes: what the host found for an image
-/// that does not render (every [`super::ImageState`] but `resolved`).
+/// The values [`Attr::DataState`] takes: what the host found for an
+/// attachment or file link it cannot show or offer (every
+/// [`super::AttachmentState`] but `resolved`).
 pub const DATA_STATES: &[&str] = &["missing", "forbidden", "too_large", "unsupported"];
 
 impl Attr {

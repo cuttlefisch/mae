@@ -142,16 +142,15 @@ fn is_image(url: &str) -> bool {
     has_image_extension(url.split(['?', '#']).next().unwrap_or(""))
 }
 
-/// The NAME of a link a resolver's [`super::Resolver::images`] may hold,
-/// when it is an image link by Org's rule: a link of Org's `attachment`
-/// type (written exactly so: Org's type is case-sensitive, and
-/// `org-attach-expand-links` expands no other spelling) or `file` type
-/// (`file:`, `file+APP:` in any case, as `org-element-link-parser` folds
-/// them, or a file name), whose name ends in an image extension and that
-/// has no `::search` option (Org's export of `[[file:x.png::3]]` fails to
-/// resolve it, or drops it with broken links allowed: it is no image). The
-/// caller checks that it has no description.
-fn image_name(class: &crate::SemanticLink) -> Option<&str> {
+/// The NAME of a link a resolver's [`super::Resolver::attachments`] may
+/// hold: a link of Org's `attachment` type (written exactly so: Org's type
+/// is case-sensitive, and `org-attach-expand-links` expands no other
+/// spelling) or `file` type (`file:`, `file+APP:` in any case, as
+/// `org-element-link-parser` folds them, or a file name) that has no
+/// `::search` option (Org's export of `[[file:x.png::3]]` fails to resolve
+/// it, or drops it with broken links allowed, and the host has no anchor in
+/// a file to offer).
+fn file_name(class: &crate::SemanticLink) -> Option<&str> {
     if class.kind != LinkKind::Other || class.search.is_some() {
         return None;
     }
@@ -168,7 +167,7 @@ fn image_name(class: &crate::SemanticLink) -> Option<&str> {
         }
         rest
     };
-    has_image_extension(name).then_some(name)
+    Some(name)
 }
 
 /// An `<img>`.
@@ -184,7 +183,9 @@ enum Target {
     /// `<a href>`, with KB metadata for a KB link.
     Href(String, Option<Box<crate::SemanticLink>>),
     Image(Image),
-    /// An image link the resolver did not resolve: its state and NAME.
+    /// A file link the resolver resolved: its URL and NAME.
+    File(String, String),
+    /// A file link the resolver did not resolve: its state and NAME.
     Attachment(&'static str, String),
     /// No target: the description, or the placeholder.
     None,
@@ -252,7 +253,10 @@ impl Builder<'_> {
                 desc = vec![text(&d)];
             }
         }
-        let target = self.link_target(class, desc.is_empty() && !self.in_link);
+        // Org's image rule reads the link's contents, not what they render
+        // to: a description that renders empty still makes it a link.
+        let no_desc = desc.is_empty() && link.description().is_none() && !self.in_link;
+        let target = self.link_target(class, no_desc);
         let shown = match &target {
             _ if !desc.is_empty() || self.mode == Mode::Text => desc,
             Target::Href(h, Some(l)) => self.resolved_text(h, l),
@@ -260,7 +264,7 @@ impl Builder<'_> {
             // rendered (Org shows its number or title), never its own path.
             Target::Href(h, None) if h.starts_with('#') => self.local_text(h),
             Target::Href(h, None) => vec![text(h.strip_prefix("mailto:").unwrap_or(h))],
-            Target::Attachment(_, name) => vec![text(name)],
+            Target::File(_, name) | Target::Attachment(_, name) => vec![text(name)],
             _ => self.placeholder(),
         };
         let target = match target {
@@ -324,29 +328,31 @@ impl Builder<'_> {
             LinkKind::Kb => self.kb_target(class),
             LinkKind::Heading => self.local_target(|t| t.titles.get(&class.target).cloned()),
             LinkKind::CustomId => self.local_target(|t| t.custom_ids.get(&class.target).cloned()),
-            LinkKind::Other if no_desc => self.image_target(&class),
+            LinkKind::Other if !self.in_link => self.file_target(&class, no_desc),
             _ => Target::None,
         }
     }
 
-    /// An image link without a description, as the resolver's
-    /// [`super::Resolver::images`] says (ADR-115 E3): `<img>` for a resolved
-    /// one (its `alt` the NAME's last segment, as ox-html's
-    /// `file-name-nondirectory`), the labelled placeholder for any other
-    /// state, and an unresolved link when the target is not there, is no
-    /// image link, or its URL is refused.
-    fn image_target(&self, class: &crate::SemanticLink) -> Target {
-        let Some(name) = image_name(class) else {
+    /// An attachment or file link, as the resolver's
+    /// [`super::Resolver::attachments`] says (ADR-115 E3). Resolved: `<img>`
+    /// for an image link (no description, an image extension; its `alt` the
+    /// NAME's last segment, as ox-html's `file-name-nondirectory`), else a
+    /// link to the URL, as ox-html links a file. The labelled placeholder
+    /// for any other state; an unresolved link when the target is not
+    /// there, is no file link, or its URL is refused.
+    fn file_target(&self, class: &crate::SemanticLink, no_desc: bool) -> Target {
+        let Some(name) = file_name(class) else {
             return Target::None;
         };
-        match self.resolver.images.get(&class.target) {
-            Some(super::ImageState::Resolved(img)) => match safe_resolver_href(&img.url) {
-                Some(src) => Target::Image(Image {
+        match self.resolver.attachments.get(&class.target) {
+            Some(super::AttachmentState::Resolved(file)) => match safe_resolver_href(&file.url) {
+                Some(src) if no_desc && has_image_extension(name) => Target::Image(Image {
                     src,
                     alt: name.rsplit('/').next().unwrap_or("").to_string(),
-                    width: img.width,
-                    height: img.height,
+                    width: file.width,
+                    height: file.height,
                 }),
+                Some(href) => Target::File(href, name.to_string()),
                 None => Target::None,
             },
             Some(state) => Target::Attachment(state.as_str(), name.to_string()),
@@ -508,6 +514,11 @@ fn link_element(target: Target, shown: Vec<Node>) -> Node {
             }
             a.with(shown).into()
         }
+        Target::File(href, _) => Element::new(Tag::A)
+            .class("org-link")
+            .attr(Attr::Href, href)
+            .with(shown)
+            .into(),
         Target::Image(img) => {
             let mut e = Element::new(Tag::Img)
                 .attr(Attr::Src, img.src)

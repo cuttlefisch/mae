@@ -224,8 +224,10 @@ fn is_unit(v: &str) -> bool {
 pub struct Contract {
     /// Hrefs the resolver supplied that the contract accepts.
     pub resolver_hrefs: HashSet<String>,
-    /// Image URLs the resolver supplied that the contract accepts.
-    pub resolver_srcs: HashSet<String>,
+    /// Attachment URLs the resolver supplied that the contract accepts: an
+    /// image's `src`, or a file link's `href` (exactly: no fragment is
+    /// appended to one).
+    pub resolver_files: HashSet<String>,
     pub images: bool,
 }
 
@@ -251,18 +253,18 @@ impl Contract {
             .map(|r| r.href.clone())
             .filter(|h| plainly_safe(h))
             .collect();
-        let resolver_srcs = resolver
-            .images
+        let resolver_files = resolver
+            .attachments
             .values()
             .filter_map(|s| match s {
-                mae_org::ImageState::Resolved(i) => Some(i.url.clone()),
+                mae_org::AttachmentState::Resolved(i) => Some(i.url.clone()),
                 _ => None,
             })
             .filter(|h| plainly_safe(h))
             .collect();
         Contract {
             resolver_hrefs,
-            resolver_srcs,
+            resolver_files,
             images,
         }
     }
@@ -339,6 +341,7 @@ fn href_ok(v: &str, c: &Contract, ids: &HashSet<String>) -> bool {
         None => (v, None),
     };
     c.resolver_hrefs.contains(v)
+        || c.resolver_files.contains(v)
         || (c.resolver_hrefs.contains(base) && frag.is_some_and(is_anchor_like))
 }
 
@@ -370,7 +373,7 @@ fn value(tag: &str, a: &str, v: &str, c: &Contract, ids: &HashSet<String>) -> Re
         "href" => href_ok(v, c, ids),
         "src" => {
             (c.images && (v.starts_with("http:") || v.starts_with("https:")) && is_safe_external(v))
-                || c.resolver_srcs.contains(v)
+                || c.resolver_files.contains(v)
         }
         "width" | "height" => !v.is_empty() && v.len() <= 10 && v.parse::<u32>().is_ok(),
         "data-state" => ["missing", "forbidden", "too_large", "unsupported"].contains(&v),
@@ -432,25 +435,26 @@ pub fn adversarial_resolver(targets: &[String]) -> Resolver {
         let title = (i % 3 == 0).then(|| format!("T{i}"));
         r.targets.insert((*t).clone(), resolved(href, title));
     }
-    // Every target also gets an image state (the renderer looks up only an
-    // image link's): resolved to a page URL, with a size or without,
-    // resolved to a URL it must refuse, and each placeholder state.
+    // Every target also gets an attachment state (the renderer looks up
+    // only an attachment or file link's): resolved to a page URL, with a
+    // size or without, resolved to a URL it must refuse, and each
+    // placeholder state.
     for (i, t) in sorted.iter().enumerate() {
-        let image = |url: String| mae_org::ResolvedImage::new(url, "image/png");
+        let image = |url: String| mae_org::ResolvedAttachment::new(url, "image/png");
         let state = match i % 7 {
-            0 => mae_org::ImageState::Resolved(image(format!("/b/{i}"))),
-            1 => mae_org::ImageState::Resolved(
+            0 => mae_org::AttachmentState::Resolved(image(format!("/b/{i}"))),
+            1 => mae_org::AttachmentState::Resolved(
                 image(format!("/b/{i}?v=1"))
                     .with_width(i as u32)
                     .with_height(7),
             ),
-            2 => mae_org::ImageState::Resolved(image(hostile[i % hostile.len()].to_string())),
-            3 => mae_org::ImageState::Missing,
-            4 => mae_org::ImageState::Forbidden,
-            5 => mae_org::ImageState::TooLarge,
-            _ => mae_org::ImageState::Unsupported,
+            2 => mae_org::AttachmentState::Resolved(image(hostile[i % hostile.len()].to_string())),
+            3 => mae_org::AttachmentState::Missing,
+            4 => mae_org::AttachmentState::Forbidden,
+            5 => mae_org::AttachmentState::TooLarge,
+            _ => mae_org::AttachmentState::Unsupported,
         };
-        r.images.insert((*t).clone(), state);
+        r.attachments.insert((*t).clone(), state);
     }
     r
 }

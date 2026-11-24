@@ -34,15 +34,18 @@ export interface Request {
    */
   /** `custom_ids`: the target page's CUSTOM_ID -> anchor (its `Rendered.custom_ids`); `[[id:X::#C]]` goes to `href#anchor` when C is there, else to `href` alone. */
   /**
-   * `images`: an image link's target exactly as `links[].target` gives it (`attachment:x.png`,
-   * `file:y.png`) -> what the host found (ADR-115 E3). `resolved` renders `<img>` (its `url`
-   * validated as an `href` is; a refused one leaves the link unresolved); any other state renders
-   * `<span class="org-attachment" data-state="…">NAME</span>`; a target not here renders as before.
-   * Only a description-less `attachment:` or `file`-type link to an image extension is looked up.
+   * `attachments`: an `attachment:` or `file`-type link's target exactly as `links[].target` gives
+   * it (`attachment:x.png`, `file:y.pdf`) -> what the host found (ADR-115 E3). Its `url` is
+   * validated as an `href` is; a refused one leaves the link unresolved. `resolved` renders
+   * `<img>` for a description-less link to an image extension, else
+   * `<a class="org-link" href>` showing the description, or the NAME without one; any other state
+   * renders `<span class="org-attachment" data-state="…">` showing the same; a target not here
+   * renders as before. A link with a `::search` part, or inside another link's description, is
+   * never looked up.
    */
   resolver?: {
     targets?: Record<string, { href: string; title?: string | null; custom_ids?: Record<string, string> }>;
-    images?: Record<string, ImageState>;
+    attachments?: Record<string, AttachmentState>;
     placeholder?: string;
   };
   /** For `text`: the KB node whose title and body to read. */
@@ -251,8 +254,8 @@ export interface SemanticsResult {
   line_ending: 'lf' | 'crlf' | 'cr';
 }
 
-/** What the host found for an image link (`resolver.images`). */
-export type ImageState =
+/** What the host found for an attachment or file link (`resolver.attachments`). */
+export type AttachmentState =
   | { state: 'resolved'; url: string; media_type: string; width?: number | null; height?: number | null }
   | { state: 'missing' | 'forbidden' | 'too_large' | 'unsupported' };
 

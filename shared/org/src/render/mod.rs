@@ -11,10 +11,10 @@
 //!   `http:`/`https:`/`mailto:` URL, or `#ID` of an id in the same output.
 //!   Any other link renders as its description, or as
 //!   [`Resolver::placeholder`] when it has none — never as its target, but
-//!   for an image link the host has a state for ([`Resolver::images`]),
-//!   whose labelled placeholder shows its NAME (ADR-115 D6). An `src` is an
+//!   for an attachment or file link the host has a state for
+//!   ([`Resolver::attachments`]), which shows its NAME (ADR-115 D6). An `src` is an
 //!   `http:`/`https:` URL, only with [`RenderOptions::images`], or a
-//!   [`ResolvedImage::url`] validated as a resolver href.
+//!   [`ResolvedAttachment::url`] validated as a resolver href.
 //! - **Allowlist by construction.** Tags and attributes are the enums
 //!   [`Tag`] and [`Attr`] ([`ATTRIBUTES`] says which tag carries which), and
 //!   every attribute value is validated or built by this module. No raw
@@ -66,7 +66,7 @@
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |
 //! | code, verbatim | `<code>`, `<code class="org-verbatim">` (contents verbatim) |
 //! | link | see Closure; a KB link carries `data-org-rel`/`-w`/`-c` |
-//! | image link (no description; `attachment:`, or Org's `file` type: `file:`, `file+APP:`, a file name, without `::search`; the name ending in `jpeg jpg png gif svg webp avif`, any case) | as [`Resolver::images`] says: `<img src alt>` (`alt` the name's last segment; `width`/`height` when known) for a resolved one, `<span class="org-attachment" data-state="missing\|forbidden\|too_large\|unsupported">NAME</span>` otherwise, an unresolved link when it is not in the map |
+//! | attachment or file link (`attachment:`, or Org's `file` type: `file:`, `file+APP:`, a file name, without `::search`) | as [`Resolver::attachments`] says. Resolved: `<img src alt>` (`alt` the name's last segment; `width`/`height` when known) for one without a description whose name ends in `jpeg jpg png gif svg webp avif` (any case), else `<a class="org-link" href>` showing its description, or its NAME without one. Any other state: `<span class="org-attachment" data-state="missing\|forbidden\|too_large\|unsupported">` showing the same. Not in the map: an unresolved link |
 //! | plain list | `<ul>`/`<ol>` of `<li>` (`value` from `[@N]`), `<dl>` of `<dt>`/`<dd>` when the first item has a tag; checkbox `<code class="org-checkbox">[X]</code>` |
 //! | table | `<table>`; the first row group is `<thead>` (`<th scope="col">`) when a rule separates it from another group (Org's rule); each later group a `<tbody>`; `#+TBLFM` omitted; a table.el table `<pre class="org-table-el">`. Org's special rows (a `/` column-group row, a row of only `<l>`/`<r>`/`<c>`/`<N>` cookies and empty cells, a `^ _ $ !` row in a table with a special column) and its special column (every first cell empty or one of `/ # ! $ * _ ^`) are dropped before the header is found, as ox drops them; column groups are not rendered as `<colgroup>` |
 //! | quote, center, special, dynamic block | `<blockquote>`, `<div class="org-center">`, `<div class="org-special-block" data-org-block data-org-params>` (the parameters as plain text, only when the name is valid), `<div class="org-dynamic-block">` |
@@ -269,76 +269,80 @@ pub struct Resolved {
     pub custom_ids: std::collections::BTreeMap<String, String>,
 }
 
-/// What the host found for an image link (ADR-115 D6, Amendment 1 E3).
-/// Caller-supplied data, like [`Resolved`]: the host owns its policy
-/// (which types it shows, its size caps) and says what came of it.
+/// What the host found for an attachment or file link (ADR-115 D6,
+/// Amendment 1 E3). Caller-supplied data, like [`Resolved`]: the host owns
+/// its policy (which types it shows or offers, its size caps) and says what
+/// came of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ImageState {
-    /// The image can be shown: `<img src alt>`, with `width` and `height`
-    /// when known.
-    Resolved(ResolvedImage),
+pub enum AttachmentState {
+    /// The file can be shown or fetched: `<img src alt>` for an image link
+    /// (`width` and `height` when known), `<a href>` for any other.
+    Resolved(ResolvedAttachment),
     /// The name is not in the node's attachments, or its bytes are gone.
     Missing,
     /// The reader may not see it.
     Forbidden,
     /// Over the host's cap.
     TooLarge,
-    /// Not an image type the page displays.
+    /// Not a type the page displays or offers.
     Unsupported,
 }
 
-impl ImageState {
+impl AttachmentState {
     /// The state's name, as `data-state` and the WASM JSON spell it:
     /// `resolved`, `missing`, `forbidden`, `too_large`, `unsupported`.
     pub fn as_str(&self) -> &'static str {
         match self {
-            ImageState::Resolved(_) => "resolved",
-            ImageState::Missing => "missing",
-            ImageState::Forbidden => "forbidden",
-            ImageState::TooLarge => "too_large",
-            ImageState::Unsupported => "unsupported",
+            AttachmentState::Resolved(_) => "resolved",
+            AttachmentState::Missing => "missing",
+            AttachmentState::Forbidden => "forbidden",
+            AttachmentState::TooLarge => "too_large",
+            AttachmentState::Unsupported => "unsupported",
         }
     }
 }
 
-/// An image the page can show ([`ImageState::Resolved`]).
+/// A file the page can show or link to ([`AttachmentState::Resolved`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ResolvedImage {
-    /// The `src`. Validated as [`Resolved::href`] is, with
-    /// [`safe_resolver_href`]: a URL it refuses leaves the link as if it
-    /// were not in [`Resolver::images`].
+pub struct ResolvedAttachment {
+    /// The image's `src`, or the link's `href`. Validated as
+    /// [`Resolved::href`] is, with [`safe_resolver_href`]: a URL it refuses
+    /// leaves the link as if it were not in [`Resolver::attachments`].
     pub url: String,
-    /// The image's media type (`image/png`), as the host determined it.
-    /// Carried for the host; nothing is rendered from it.
+    /// The file's media type (`image/png`, `application/pdf`), as the host
+    /// determined it. Carried for the host; nothing is rendered from it.
     pub media_type: String,
-    /// Intrinsic size in CSS pixels, so the page does not jump while the
-    /// image loads (D6).
+    /// An image's intrinsic size in CSS pixels, so the page does not jump
+    /// while it loads (D6). Rendered only on an `<img>`.
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
 
-/// KB node id → [`Resolved`], an image link's target → [`ImageState`], and
-/// the text of an unresolved link.
+/// KB node id → [`Resolved`], an attachment or file link's target →
+/// [`AttachmentState`], and the text of an unresolved link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Resolver {
     pub targets: HashMap<String, Resolved>,
-    /// An image link's target exactly as the semantics expose it
-    /// ([`crate::SemanticLink::target`]: `attachment:diagram.png`,
-    /// `file:x.png`) → what the host found (ADR-115 E3). Only a link
-    /// without a description, of Org's `attachment` type or `file` type
-    /// (`file:`, `file+APP:`, or a file name such as `./x.png`) with no
-    /// `::search` option, whose name ends in an image extension of ox-html's
+    /// An attachment or file link's target exactly as the semantics expose
+    /// it ([`crate::SemanticLink::target`]: `attachment:diagram.png`,
+    /// `file:x.pdf`) → what the host found (ADR-115 E3). Only a link of
+    /// Org's `attachment` type or `file` type (`file:`, `file+APP:`, or a
+    /// file name such as `./x.png`) with no `::search` option, outside
+    /// another link's description, is looked up. A
+    /// [`AttachmentState::Resolved`] one renders `<img>` when it has no
+    /// description and its name ends in an image extension of ox-html's
     /// `org-html-inline-image-rules` (`jpeg jpg png gif svg webp avif`, any
-    /// case), is looked up. A
-    /// [`ImageState::Resolved`] one renders `<img>`; any other state the
-    /// labelled placeholder `<span class="org-attachment"
-    /// data-state="…">NAME</span>`; a target not here renders as any
-    /// unresolved link. Independent of [`RenderOptions::images`], which is
-    /// about `http(s)` images only: an entry here is the host's choice.
-    pub images: HashMap<String, ImageState>,
+    /// case), and otherwise `<a class="org-link" href>` showing its
+    /// description, or its NAME when it has none (Org's link to a file).
+    /// Any other state renders the labelled placeholder
+    /// `<span class="org-attachment" data-state="…">` showing the same. A
+    /// target not here renders as any unresolved link. Independent of
+    /// [`RenderOptions::images`], which is about `http(s)` images only: an
+    /// entry here is the host's choice.
+    pub attachments: HashMap<String, AttachmentState>,
     /// The text of a link that resolves nowhere and has no description.
     pub placeholder: String,
 }
@@ -350,7 +354,7 @@ impl Default for Resolver {
     fn default() -> Self {
         Resolver {
             targets: HashMap::default(),
-            images: HashMap::default(),
+            attachments: HashMap::default(),
             placeholder: DEFAULT_PLACEHOLDER.to_string(),
         }
     }

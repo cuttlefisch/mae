@@ -290,19 +290,23 @@ fn a_resolver_target_carries_the_target_page_s_custom_ids() {
     .contains("anchor"));
 }
 
-/// `resolver.images` (ADR-115 E3): each state reaches the renderer, and the
-/// render is mae-org's own for the same resolver built natively.
+/// `resolver.attachments` (ADR-115 E3): each state reaches the renderer, for
+/// images and for described and non-image links, and the render is
+/// mae-org's own for the same resolver built natively.
 #[test]
-fn resolver_images_reach_the_renderer() {
-    let text = "[[attachment:a.png]] [[attachment:b.png]] [[file:c.png]] [[attachment:d.png]] [[attachment:e.png]] [[attachment:f.png]]\n";
+fn resolver_attachments_reach_the_renderer() {
+    let text = "[[attachment:a.png]] [[attachment:b.png]] [[file:c.png]] [[attachment:d.png]] [[attachment:e.png]] [[attachment:f.png]] [[attachment:r.pdf][The *report*]] [[file:s.pdf]] [[attachment:t.pdf][gone]]\n";
     let req = format!(
-        r##"{{"text": {text:?}, "resolver": {{"images": {{
+        r##"{{"text": {text:?}, "resolver": {{"attachments": {{
             "attachment:a.png": {{"state": "resolved", "url": "/b/a", "media_type": "image/png", "width": 10, "height": 20}},
             "attachment:b.png": {{"state": "resolved", "url": "/b/b", "media_type": "image/png", "width": null}},
             "file:c.png": {{"state": "missing"}},
             "attachment:d.png": {{"state": "forbidden"}},
             "attachment:e.png": {{"state": "too_large"}},
-            "attachment:f.png": {{"state": "unsupported"}}}}}}}}"##
+            "attachment:f.png": {{"state": "unsupported"}},
+            "attachment:r.pdf": {{"state": "resolved", "url": "/b/r", "media_type": "application/pdf"}},
+            "file:s.pdf": {{"state": "resolved", "url": "/b/s", "media_type": "application/pdf"}},
+            "attachment:t.pdf": {{"state": "forbidden"}}}}}}}}"##
     );
     let html = ok(3, &req);
     let html = html["body"].as_str().unwrap();
@@ -320,34 +324,78 @@ fn resolver_images_reach_the_renderer() {
         let span = format!(r#"<span class="org-attachment" data-state="{state}">{name}</span>"#);
         assert!(html.contains(&span), "{span}: {html}");
     }
+    assert!(
+        html.contains(r#"<a class="org-link" href="/b/r">The <strong>report</strong></a>"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a class="org-link" href="/b/s">s.pdf</a>"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<span class="org-attachment" data-state="forbidden">gone</span>"#),
+        "{html}"
+    );
     // The same resolver built natively renders the same body.
     let doc = mae_org::parse(text, &mae_org::ParseOptions::default());
     let sem = mae_org::semantics(&doc);
-    let png = |u: &str| mae_org::ResolvedImage::new(u, "image/png");
+    let png = |u: &str| mae_org::ResolvedAttachment::new(u, "image/png");
     let r = mae_org::Resolver::default()
-        .with_image(
+        .with_attachment(
             "attachment:a.png",
-            mae_org::ImageState::Resolved(png("/b/a").with_width(10).with_height(20)),
+            mae_org::AttachmentState::Resolved(png("/b/a").with_width(10).with_height(20)),
         )
-        .with_image(
+        .with_attachment(
             "attachment:b.png",
-            mae_org::ImageState::Resolved(png("/b/b")),
+            mae_org::AttachmentState::Resolved(png("/b/b")),
         )
-        .with_image("file:c.png", mae_org::ImageState::Missing)
-        .with_image("attachment:d.png", mae_org::ImageState::Forbidden)
-        .with_image("attachment:e.png", mae_org::ImageState::TooLarge)
-        .with_image("attachment:f.png", mae_org::ImageState::Unsupported);
+        .with_attachment("file:c.png", mae_org::AttachmentState::Missing)
+        .with_attachment("attachment:d.png", mae_org::AttachmentState::Forbidden)
+        .with_attachment("attachment:e.png", mae_org::AttachmentState::TooLarge)
+        .with_attachment("attachment:f.png", mae_org::AttachmentState::Unsupported)
+        .with_attachment(
+            "attachment:r.pdf",
+            mae_org::AttachmentState::Resolved(mae_org::ResolvedAttachment::new(
+                "/b/r",
+                "application/pdf",
+            )),
+        )
+        .with_attachment(
+            "file:s.pdf",
+            mae_org::AttachmentState::Resolved(mae_org::ResolvedAttachment::new(
+                "/b/s",
+                "application/pdf",
+            )),
+        )
+        .with_attachment("attachment:t.pdf", mae_org::AttachmentState::Forbidden);
     let native = mae_org::render_html(&doc, &sem, &mae_org::RenderOptions::default(), &r);
     assert_eq!(html, native);
 }
 
 #[test]
-fn a_malformed_image_state_is_an_error() {
-    let bad = |images: &str, needle: &str| {
-        let e = err(2, &format!(r##"{{"resolver": {{"images": {images}}}}}"##));
-        assert!(e.contains(needle), "{images}: {e}");
+fn the_old_images_key_is_refused_as_unknown() {
+    // Renamed before 0.11.0 shipped, with no alias: a host still sending
+    // `images` hears about it instead of losing its states silently.
+    let e = err(
+        2,
+        r##"{"resolver": {"images": {"attachment:x.png": {"state": "missing"}}}}"##,
+    );
+    assert!(e.contains("unknown key \"images\" in resolver"), "{e}");
+    let e = err(2, r##"{"resolver": {"images": {}}}"##);
+    assert!(e.contains("unknown key \"images\" in resolver"), "{e}");
+}
+
+#[test]
+fn a_malformed_attachment_state_is_an_error() {
+    let bad = |states: &str, needle: &str| {
+        let e = err(
+            2,
+            &format!(r##"{{"resolver": {{"attachments": {states}}}}}"##),
+        );
+        assert!(e.contains(needle), "{states}: {e}");
     };
-    bad(r#"[]"#, "resolver.images");
+    bad(r#"[]"#, "resolver.attachments");
+    bad(r#""x""#, "resolver.attachments");
     bad(r#"{"attachment:x.png": "missing"}"#, "must be an object");
     bad(r#"{"attachment:x.png": {}}"#, "no state");
     bad(r#"{"attachment:x.png": {"state": "gone"}}"#, "\"gone\"");
@@ -393,7 +441,7 @@ fn a_malformed_image_state_is_an_error() {
         );
     }
     // The largest size is accepted.
-    let max = r##"{"resolver": {"images": {"attachment:x.png": {"state": "resolved", "url": "/x", "media_type": "image/png", "width": 4294967295}}}, "text": "[[attachment:x.png]]\n"}"##;
+    let max = r##"{"resolver": {"attachments": {"attachment:x.png": {"state": "resolved", "url": "/x", "media_type": "image/png", "width": 4294967295}}}, "text": "[[attachment:x.png]]\n"}"##;
     assert!(ok(3, max)["body"]
         .as_str()
         .unwrap()
