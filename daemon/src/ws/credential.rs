@@ -100,14 +100,25 @@ pub(super) async fn socket_principal(
 /// is what bounds how long an unbind or a rebind takes to reach an open
 /// socket. Self-issued sessions keep their token's expiry.
 pub(super) fn session_deadline(vp: &ValidatedPrincipal, listener: &Listener) -> u64 {
+    capped_deadline(
+        vp.expires_at,
+        vp.credential == Credential::IdpBound,
+        listener,
+    )
+}
+
+/// [`session_deadline`] for a credential expiring at `expires_at` (unix
+/// seconds). The one place the E2 cap is applied: to a bearer token, and to a
+/// spent ticket, which carries its minting token's `exp` uncapped.
+pub(super) fn capped_deadline(expires_at: u64, bound_idp: bool, listener: &Listener) -> u64 {
     let cap = listener
         .ws
         .as_ref()
         .map_or(0, |ws| ws.settings.max_idp_session_secs);
-    if vp.credential != Credential::IdpBound || cap == 0 {
-        return vp.expires_at;
+    if !bound_idp || cap == 0 {
+        return expires_at;
     }
-    vp.expires_at.min(now_unix().saturating_add(cap))
+    expires_at.min(now_unix().saturating_add(cap))
 }
 
 /// At a ticket's redemption (Amendment 2, E1): does `(issuer, subject)` still

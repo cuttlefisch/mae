@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.186] - 2026-11-23
+
+
+
+
+### Features
+
+- *(daemon)* Renew a sync WebSocket with a connect ticket ([16063f7](https://github.com/cuttlefisch/mae/commit/16063f75058b548217649bb764c8d962be95c3a5))
+
+### Testing
+
+- *(daemon)* A 4403 renewal test fails on the first wrong frame, not a timeout ([1e95f11](https://github.com/cuttlefisch/mae/commit/1e95f11fbfd85aa8b04b7e9108fa7392cd6eb5a7))
+- *(daemon)* Pin each clause of the renewal identity rule, and the no-origin socket ([e0cc662](https://github.com/cuttlefisch/mae/commit/e0cc662ff7a4f9147a34c15c2fc11efd10344cd4))
+
+### Miscellaneous
+
+- *(adr)* Regenerate the ADR KB checksum for ADR-099 Amendment 3 ([2fb85bd](https://github.com/cuttlefisch/mae/commit/2fb85bd305f37bb159475713747f16de1d43457f))
+
 ## [0.14.185] - 2026-11-23
 
 
@@ -20,6 +38,10 @@ All notable changes to this project will be documented in this file.
 
 - *(adr-119)* A4 owner line on the four catalogues and the marked fallback ([cba9ca2](https://github.com/cuttlefisch/mae/commit/cba9ca26a08731c07981ed753a2519662059e005))
 
+### Miscellaneous
+
+- Bump version to 0.14.185 ([27a406a](https://github.com/cuttlefisch/mae/commit/27a406ad876a81b803179f322f30582f17d05b1e))
+
 ## [0.14.184] - 2026-11-23
 
 
@@ -27,41 +49,41 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(org)* Honour #+OPTIONS: H:N in mae-org rendering and org export (#951) ([1909a41](https://github.com/cuttlefisch/mae/commit/1909a41034280d8ed438a431382e0619b39e35ab))
 - *(site)* The KB home page, one h1 per page, panels outside main, base colours ([c367c6c](https://github.com/cuttlefisch/mae/commit/c367c6c7ac6c8d279d57fe877f7451d2ebe406db))
 - *(daemon)* Retire ADR-073's live view (ADR-119 Amendment 2 B4) ([888e755](https://github.com/cuttlefisch/mae/commit/888e7559369c986a0e54586bfed14f79afb89c99))
 - *(site)* The in-page router (ADR-119 D16) and the site title (P-16) ([8cabfff](https://github.com/cuttlefisch/mae/commit/8cabfffdd088c3c4426b0b324e1184ba58a2fc3c))
 - *(site)* The mode toggle and palette menu (ADR-119 D17, P-91 to P-99) ([b257fd9](https://github.com/cuttlefisch/mae/commit/b257fd95852e5e9a21a7de378cd3edbc0f6b256a))
-- *(org)* Honour #+OPTIONS: H:N in mae-org rendering and org export (#951) ([1909a41](https://github.com/cuttlefisch/mae/commit/1909a41034280d8ed438a431382e0619b39e35ab))
 
 ### Bug Fixes
 
+- *(shell)* Keep a fast child's last output when the terminal lock is held (#965) ([35ae2ad](https://github.com/cuttlefisch/mae/commit/35ae2ad0a91c25dfbb0dbfd5c6eb918d2ca43068))
 - *(site)* A seeded page's file tags reach its page and the tag pages ([31bec78](https://github.com/cuttlefisch/mae/commit/31bec78d2c319a969574aa646fab47154504bf61))
 - *(daemon)* Every /kb/ path is the site's; pin the group refusal's body ([e259897](https://github.com/cuttlefisch/mae/commit/e25989739febea209cc42fb58be98c692cfbc635))
 - *(site)* Router review fixes; a refusal never carries the site title ([8b2efe8](https://github.com/cuttlefisch/mae/commit/8b2efe81d70accc00d58a7158683842409612957))
 - *(palette)* Name the teal swatch in English ([ea4ca2b](https://github.com/cuttlefisch/mae/commit/ea4ca2b7a41668a2b057343e5e18ed819afe9df6))
 - *(graph)* Ports face their subfolders in the balloon layout ([6e7258c](https://github.com/cuttlefisch/mae/commit/6e7258c6baf34dadef10a701c212c41f4b28aacb))
-- *(shell)* Keep a fast child's last output when the terminal lock is held (#965) ([35ae2ad](https://github.com/cuttlefisch/mae/commit/35ae2ad0a91c25dfbb0dbfd5c6eb918d2ca43068))
 
 ### Refactor
 
-- *(daemon)* Split the home lookup and content index out of site_route ([8f1f977](https://github.com/cuttlefisch/mae/commit/8f1f9774bfed362a1149923e0748767ab3d8063c))
 - *(core)* One agenda line per TODO node, in its own function ([635a032](https://github.com/cuttlefisch/mae/commit/635a0329021f9e48d00ac776de8313b5677086f2))
+- *(daemon)* Split the home lookup and content index out of site_route ([8f1f977](https://github.com/cuttlefisch/mae/commit/8f1f9774bfed362a1149923e0748767ab3d8063c))
 
 ### Documentation
 
+- *(shell)* Say the macOS half of #965's reasoning is read, not tested ([0de99ac](https://github.com/cuttlefisch/mae/commit/0de99ac7563a9f2e393f7acbd943502374de72c5))
 - *(site)* Name the browser client generically in the router's header ([3bcbb38](https://github.com/cuttlefisch/mae/commit/3bcbb38f8b825dfdd04c3a42c1ae7c44b3ce73cc))
 - Name the browser client generically in ADR-099 and a test comment ([ab20d1d](https://github.com/cuttlefisch/mae/commit/ab20d1d32b877e1d513d842a74e5dfbef724ecbd))
 - *(adr-119)* Amendment 2, what the live app does not serve and its home page ([673d93f](https://github.com/cuttlefisch/mae/commit/673d93f168ee26a1a63545d0200217b1e9dd5b79))
 - *(adr-119)* Amendment 2 B2 names P-01 to P-08's live and export halves ([c29fa74](https://github.com/cuttlefisch/mae/commit/c29fa7452b1973726f6f260a43b1402b56a32216))
 - *(adr-119)* Amendment 2 B4 retires ADR-073's live view ([13c58d1](https://github.com/cuttlefisch/mae/commit/13c58d1c00ebad6e7885f5b97602ffe61cad8b92))
-- *(shell)* Say the macOS half of #965's reasoning is read, not tested ([0de99ac](https://github.com/cuttlefisch/mae/commit/0de99ac7563a9f2e393f7acbd943502374de72c5))
 
 ### Testing
 
-- *(ws)* Vendor the browser client's neutral English script (c-script-v3) ([2c51172](https://github.com/cuttlefisch/mae/commit/2c511724fc11270abf0e5747fdd421fbb3a1b261))
-- *(daemon)* The retired view's integration tests assert what holds now ([eb7e6e8](https://github.com/cuttlefisch/mae/commit/eb7e6e891c51c6167729cdd0051f090371d3cc83))
 - *(mutants)* Two jsonwebtoken mutants had stopped testing anything ([ec501b4](https://github.com/cuttlefisch/mae/commit/ec501b4e44717db8401b2b56019b7735ed1af279))
 - Replace cache-sensitive growth-ratio timing with work counters and large sizes (#961) ([b015aea](https://github.com/cuttlefisch/mae/commit/b015aeacc0b4e4699076d21c2245779665585864))
+- *(ws)* Vendor the browser client's neutral English script (c-script-v3) ([2c51172](https://github.com/cuttlefisch/mae/commit/2c511724fc11270abf0e5747fdd421fbb3a1b261))
+- *(daemon)* The retired view's integration tests assert what holds now ([eb7e6e8](https://github.com/cuttlefisch/mae/commit/eb7e6e891c51c6167729cdd0051f090371d3cc83))
 
 ### CI
 
