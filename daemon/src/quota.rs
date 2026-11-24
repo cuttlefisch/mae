@@ -56,8 +56,11 @@ pub trait QuotaCharger: Send + Sync {
 
     /// The storage quota (ADR-115) an upload by `principal` is charged to: its
     /// tenant and that tenant's byte limit. `None`, the default, for a
-    /// principal in no configured tenant: admitted and charged to nobody, the
-    /// same zero-config contract as [`QuotaCharger::charge`].
+    /// principal in no configured tenant. Unlike [`QuotaCharger::charge`],
+    /// `None` is not "unmetered": the blob routes charge such a principal to
+    /// the shared `oauth.default_storage_bytes` bucket
+    /// ([`crate::blob_store::StorageQuota::unassigned`]), so storage fails
+    /// closed.
     fn storage_quota(&self, _principal: &str) -> Option<crate::blob_store::StorageQuota> {
         None
     }

@@ -108,7 +108,7 @@ pub fn process(input: Vec<u8>, limits: &ProcessLimits) -> Result<Processed, Proc
                 width: None,
                 height: None,
             })
-            .ok_or_else(|| ProcessError::Undecodable("not a well-formed SVG".into())),
+            .map_err(ProcessError::Undecodable),
         t @ (MediaType::Pdf | MediaType::Other) => Ok(Processed {
             bytes: input,
             media_type: t,

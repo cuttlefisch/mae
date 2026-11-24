@@ -19,8 +19,8 @@ targets = ["--bin", "mae-daemon"]
 filter = "test(an_upload_declared_over_the_cap_is_refused_before_its_body_is_read)"
 [[mutant.edit]]
 file = "daemon/src/oauth_blobs.rs"
-find = '''    if declared > routes.max_bytes {'''
-replace = '''    if false && declared > routes.max_bytes {'''
+find = '''    if declared > routes.limits.max_bytes {'''
+replace = '''    if false && declared > routes.limits.max_bytes {'''
 
 [[mutant]]
 id = "daemon-blob-store/sniff-trusts-a-leading-angle-bracket"
@@ -78,3 +78,43 @@ replace = '''        insert(
 file = "daemon/src/blob_store/mod.rs"
 find = '''        insert(&conn, kb_id, &meta, quota.map(|q| q.tenant.as_str()))?;'''
 replace = ''''''
+
+[[mutant]]
+id = "daemon-blob-store/commit-after-processing-timeout"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_job_that_times_out_stores_and_charges_nothing_and_the_next_proceeds)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/upload.rs"
+find = '''    if !job.claim_commit() {'''
+replace = '''    if false && !job.claim_commit() {'''
+
+[[mutant]]
+id = "daemon-blob-store/idle-timeout-dropped"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_upload_that_stalls_is_refused_at_the_idle_timeout_and_leaves_nothing)"
+[[mutant.edit]]
+file = "daemon/src/oauth_blobs.rs"
+find = '''        let next = tokio::time::timeout(limits.idle_timeout, body.frame());'''
+replace = '''        let next = async { Ok::<_, tokio::time::error::Elapsed>(body.frame().await) };'''
+
+[[mutant]]
+id = "daemon-blob-store/svg-backslash-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_css_escape_cannot_hide_a_remote_url)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/svg.rs"
+find = '''    if value.contains('\\') {'''
+replace = '''    if false && value.contains('\\') {'''
+
+[[mutant]]
+id = "daemon-blob-store/default-budget-skipped"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(principals_in_no_tenant_share_the_default_budget_and_an_agent_is_counted)"
+[[mutant.edit]]
+file = "daemon/src/oauth_blobs.rs"
+find = '''            quota: StorageQuota::unassigned(default_bytes),'''
+replace = '''            quota: StorageQuota::unassigned(0),'''

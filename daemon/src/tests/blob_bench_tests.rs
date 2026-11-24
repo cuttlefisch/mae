@@ -55,15 +55,7 @@ fn pct(sorted: &[f64], p: f64) -> f64 {
 #[ignore = "blob_bench: uploads and downloads up to 100 MB"]
 async fn blob_bench_upload_and_download() {
     let cap = crate::oauth_config::DEFAULT_MAX_ATTACHMENT_BYTES as usize;
-    let h = harness_cap(
-        TestQuota {
-            storage: None,
-            refuse_requests: false,
-        },
-        40_000_000,
-        cap as u64,
-    )
-    .await;
+    let h = harness_cap(TestQuota::none(), 40_000_000, cap as u64).await;
     let sizes = [10 * 1024, 100 * 1024, MIB, 5 * MIB, cap];
     let mut stored = Vec::new();
     for (i, &size) in sizes.iter().enumerate() {

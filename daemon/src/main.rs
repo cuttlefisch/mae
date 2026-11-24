@@ -632,14 +632,20 @@ fn oauth_blob_routes(
         error!("oauth.attachments_enabled needs collab.enabled (a KB's access decides who may read its attachments); attachments are off");
         return None;
     }
+    let limits = match oauth_blobs::BlobLimits::from_config(&config.oauth) {
+        Ok(l) => l,
+        Err(e) => {
+            error!(error = %e, "attachments are off");
+            return None;
+        }
+    };
     let root = config
         .resolve_collab_data_dir()
         .join(mae_daemon::blob_store::DIR);
     match mae_daemon::blob_store::BlobStore::open(&root) {
         Ok(store) => Some(Arc::new(oauth_blobs::BlobRoutes::new(
             Arc::new(store),
-            config.oauth.max_attachment_bytes,
-            config.oauth.max_attachment_pixels,
+            limits,
         ))),
         Err(e) => {
             error!(error = %e, path = %root.display(), "cannot open the attachment store; attachments are off");

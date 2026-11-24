@@ -638,6 +638,24 @@ impl McpError {
         )
     }
 
+    /// ADR-115 D3: an upload's body stalled past the idle timeout, or did not
+    /// finish inside the upload deadline. Nothing was stored or charged.
+    pub fn upload_timeout(message: String) -> Self {
+        Self::kinded(-32600, message, "upload_timeout", serde_json::json!({}))
+    }
+
+    /// ADR-115 D3a: no image worker was free in time, or the caller's tenant
+    /// already has its share of uploads waiting or processing. Nothing was
+    /// stored or charged; retry after `retry_after_secs`.
+    pub fn attachment_busy(message: String, retry_after_secs: u64) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "attachment_busy",
+            serde_json::json!({ "retry_after_secs": retry_after_secs }),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -702,6 +720,8 @@ pub const ERROR_KINDS: &[&str] = &[
     "attachment_too_many_pixels",
     "attachment_undecodable",
     "attachment_unsupported",
+    "upload_timeout",
+    "attachment_busy",
     "internal",
 ];
 
@@ -898,6 +918,8 @@ mod tests {
             McpError::attachment_too_many_pixels(m(), 1),
             McpError::attachment_undecodable(m()),
             McpError::attachment_unsupported(m()),
+            McpError::upload_timeout(m()),
+            McpError::attachment_busy(m(), 10),
             McpError::internal_fault(m()),
         ]
     }

@@ -18,7 +18,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::kb_query_tests::{fresh_doc_store, seed_e2e_kb};
 use crate::oauth::{Listener, ResourceServerConfig};
-use crate::oauth_blobs::BlobRoutes;
+use crate::oauth_blobs::{BlobLimits, BlobRoutes};
+use mae_daemon::blob_store::upload::Processor;
 
 const AUD: &str = "https://mae.test";
 const BY: mae_daemon::doc_editors::Attribution<'static> =
@@ -26,11 +27,29 @@ const BY: mae_daemon::doc_editors::Attribution<'static> =
 /// The test cap: small, so "ten times the cap" is cheap to send.
 const CAP: u64 = 4096;
 
-/// A storage quota for every principal (or none), and request charging that
-/// admits or refuses everything.
+/// Request charging that admits or refuses everything, and storage quotas:
+/// `everyone` puts every principal in tenant `team` with that quota;
+/// `tenants` puts named principals in their own tenants first (shared, so a
+/// test can fill it once the harness has made its people). A principal in
+/// neither is in no tenant, and the routes charge it to the default budget.
+#[derive(Default)]
 pub(super) struct TestQuota {
-    pub(super) storage: Option<u64>,
+    pub(super) everyone: Option<u64>,
+    pub(super) tenants: Arc<std::sync::Mutex<std::collections::HashMap<String, (String, u64)>>>,
     pub(super) refuse_requests: bool,
+}
+
+impl TestQuota {
+    pub(super) fn none() -> Self {
+        TestQuota::default()
+    }
+
+    fn everyone(max_bytes: u64) -> Self {
+        TestQuota {
+            everyone: Some(max_bytes),
+            ..TestQuota::default()
+        }
+    }
 }
 
 impl QuotaCharger for TestQuota {
@@ -41,29 +60,33 @@ impl QuotaCharger for TestQuota {
         Ok(QuotaLease::none())
     }
 
-    fn storage_quota(&self, _principal: &str) -> Option<StorageQuota> {
-        self.storage.map(|max_bytes| StorageQuota {
-            tenant: "team".into(),
-            max_bytes,
-        })
+    fn storage_quota(&self, principal: &str) -> Option<StorageQuota> {
+        if let Some((tenant, max)) = self.tenants.lock().unwrap().get(principal) {
+            return Some(StorageQuota::tenant(tenant, *max));
+        }
+        self.everyone.map(|max| StorageQuota::tenant("team", max))
     }
 }
+
+/// An agent principal in ADR-118's form, an editor of `kb-a`: a member of the
+/// KB like any other, and in no tenant.
+pub(super) const AGENT: &str = "agent:robot";
 
 pub(super) struct People {
     pub(super) editor: Identity,
     pub(super) viewer: Identity,
     /// An editor of `kb-b` only.
-    other_editor: Identity,
+    pub(super) other_editor: Identity,
     stranger: Identity,
     e2e_member: Identity,
 }
 
 pub(super) struct Harness {
-    addr: SocketAddr,
+    pub(super) addr: SocketAddr,
     /// Connections the server has finished with, everything they held dropped.
-    closed: tokio::sync::watch::Receiver<usize>,
+    pub(super) closed: tokio::sync::watch::Receiver<usize>,
     daemon: Arc<Identity>,
-    routes: Arc<BlobRoutes>,
+    pub(super) routes: Arc<BlobRoutes>,
     pub(super) people: People,
     _dir: tempfile::TempDir,
 }
@@ -108,6 +131,27 @@ async fn harness_with(quota: TestQuota, max_pixels: u64) -> Harness {
 }
 
 pub(super) async fn harness_cap(quota: TestQuota, max_pixels: u64, cap: u64) -> Harness {
+    let limits = BlobLimits {
+        max_bytes: cap,
+        max_pixels,
+        ..test_limits()
+    };
+    harness_limits(quota, limits, None).await
+}
+
+/// `[oauth]`'s defaults at the test cap.
+pub(super) fn test_limits() -> BlobLimits {
+    let mut l = BlobLimits::from_config(&crate::oauth_config::OAuthConfig::default()).unwrap();
+    l.max_bytes = CAP;
+    l
+}
+
+/// A harness with these limits and, if given, this processor.
+pub(super) async fn harness_limits(
+    quota: TestQuota,
+    limits: BlobLimits,
+    processor: Option<Arc<Processor>>,
+) -> Harness {
     let doc_store = fresh_doc_store().await;
     let owner = Arc::new(Identity::generate("owner"));
     doc_store.set_signer(Arc::clone(&owner));
@@ -125,6 +169,7 @@ pub(super) async fn harness_cap(quota: TestQuota, max_pixels: u64, cap: u64) -> 
         &[
             (&people.editor.fingerprint(), Role::Editor),
             (&people.viewer.fingerprint(), Role::Viewer),
+            (AGENT, Role::Editor),
         ],
     )
     .await;
@@ -153,7 +198,11 @@ pub(super) async fn harness_cap(quota: TestQuota, max_pixels: u64, cap: u64) -> 
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(BlobStore::open(&dir.path().join("blobs")).unwrap());
-    let routes = Arc::new(BlobRoutes::new(store, cap, max_pixels));
+    let mut routes = BlobRoutes::new(store, limits);
+    if let Some(p) = processor {
+        routes = routes.with_processor(p);
+    }
+    let routes = Arc::new(routes);
     let daemon = Arc::new(Identity::generate("daemon"));
     let self_issue = mae_daemon::oauth_self_issue::SelfIssueConfig {
         identity: Arc::clone(&daemon),
@@ -181,14 +230,7 @@ pub(super) async fn harness_cap(quota: TestQuota, max_pixels: u64, cap: u64) -> 
 }
 
 async fn harness() -> Harness {
-    harness_with(
-        TestQuota {
-            storage: None,
-            refuse_requests: false,
-        },
-        40_000_000,
-    )
-    .await
+    harness_with(TestQuota::none(), 40_000_000).await
 }
 
 /// The listener's own service, over plain HTTP/1.1 on a loopback port.
@@ -222,8 +264,12 @@ async fn serve(listener: Arc<Listener>) -> (SocketAddr, tokio::sync::watch::Rece
 
 impl Harness {
     fn token(&self, who: &Identity) -> String {
-        mae_daemon::oauth_self_issue::mint_self_token(&self.daemon, &who.fingerprint(), AUD, 3600)
-            .unwrap()
+        self.token_for(&who.fingerprint())
+    }
+
+    /// A token for any principal string.
+    pub(super) fn token_for(&self, principal: &str) -> String {
+        mae_daemon::oauth_self_issue::mint_self_token(&self.daemon, principal, AUD, 3600).unwrap()
     }
 
     /// Send `head` (request line and headers, without the blank line), then
@@ -248,12 +294,26 @@ impl Harness {
     }
 
     pub(super) async fn upload(&self, who: &Identity, kb: &str, body: &[u8], extra: &str) -> Reply {
-        let head = format!(
-            "POST /kb/{kb}/blobs HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}{extra}",
-            self.token(who),
-            body.len()
-        );
+        self.upload_as(&who.fingerprint(), kb, body, extra).await
+    }
+
+    pub(super) async fn upload_as(
+        &self,
+        principal: &str,
+        kb: &str,
+        body: &[u8],
+        extra: &str,
+    ) -> Reply {
+        let head = self.upload_head(principal, kb, body.len(), extra);
         self.raw(&head, body).await
+    }
+
+    /// An upload's request line and headers, declaring `len` bytes.
+    pub(super) fn upload_head(&self, principal: &str, kb: &str, len: usize, extra: &str) -> String {
+        format!(
+            "POST /kb/{kb}/blobs HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {len}{extra}",
+            self.token_for(principal),
+        )
     }
 
     pub(super) async fn fetch(
@@ -271,7 +331,7 @@ impl Harness {
         self.raw(&head, b"").await
     }
 
-    fn rows(&self) -> Vec<(String, String)> {
+    pub(super) fn rows(&self) -> Vec<(String, String)> {
         self.routes.store.list_all().unwrap()
     }
 
@@ -292,7 +352,7 @@ pub(super) struct Reply {
 }
 
 impl Reply {
-    fn parse(raw: &[u8]) -> Reply {
+    pub(super) fn parse(raw: &[u8]) -> Reply {
         if raw.is_empty() {
             // The server dropped the connection without answering.
             return Reply {
@@ -327,7 +387,7 @@ impl Reply {
         }
     }
 
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(super) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(k, _)| k == name)
@@ -339,7 +399,7 @@ impl Reply {
             .unwrap_or_else(|_| panic!("not JSON: {}", String::from_utf8_lossy(&self.body)))
     }
 
-    fn kind(&self) -> String {
+    pub(super) fn kind(&self) -> String {
         self.json()["kind"].as_str().unwrap_or("").to_string()
     }
 }
@@ -489,8 +549,8 @@ async fn an_unauthenticated_or_over_budget_request_is_refused_before_the_gate() 
     assert_eq!(anon.status, 401);
     let h = harness_with(
         TestQuota {
-            storage: None,
             refuse_requests: true,
+            ..TestQuota::default()
         },
         40_000_000,
     )
@@ -704,16 +764,7 @@ async fn the_storage_quota_refuses_the_overshooting_upload_and_concurrent_ones_c
     .bytes
     .len() as u64;
     // Room for exactly two blobs of about this size.
-    let h = Arc::new(
-        harness_with(
-            TestQuota {
-                storage: Some(size * 2 + size / 2),
-                refuse_requests: false,
-            },
-            40_000_000,
-        )
-        .await,
-    );
+    let h = Arc::new(harness_with(TestQuota::everyone(size * 2 + size / 2), 40_000_000).await);
     let tasks: Vec<_> = (0..4u8)
         .map(|i| {
             let h = Arc::clone(&h);
@@ -752,14 +803,7 @@ async fn the_storage_quota_refuses_the_overshooting_upload_and_concurrent_ones_c
 
 #[tokio::test]
 async fn processing_refusals_have_their_kinds() {
-    let h = harness_with(
-        TestQuota {
-            storage: None,
-            refuse_requests: false,
-        },
-        100,
-    )
-    .await;
+    let h = harness_with(TestQuota::none(), 100).await;
     let big = h
         .upload(&h.people.editor, "kb-a", &png(20, 20, 1), "")
         .await;
@@ -942,7 +986,7 @@ fn the_attachment_defaults_fit_adr_109s_memory_budget() {
     // One worker holds the upload and the decode's allocation bound.
     let worker = c.oauth.max_attachment_bytes + c.oauth.max_attachment_pixels * 8;
     assert!(
-        crate::oauth_blobs::IMAGE_WORKERS as u64 * worker <= per_tenant,
+        c.oauth.attachment_image_workers as u64 * worker <= per_tenant,
         "{worker} bytes per worker"
     );
     assert_eq!(

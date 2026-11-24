@@ -50,6 +50,8 @@ pub mod upload;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod svg_tests;
+#[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
@@ -97,9 +99,34 @@ pub struct BlobMeta {
 /// A tenant's storage quota, as the upload's principal resolves it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageQuota {
+    /// The bucket's label, recorded in `charged_to`: [`StorageQuota::tenant`]
+    /// or [`StorageQuota::unassigned`].
     pub tenant: String,
     /// Bytes the tenant's blobs may total. `0`: unlimited, still recorded.
     pub max_bytes: u64,
+}
+
+/// The `charged_to` label of the bucket principals in no configured tenant
+/// share. A configured tenant's label is always `tenant:<name>`, so no tenant
+/// name, whatever an operator writes, can share this bucket's usage.
+pub const UNASSIGNED: &str = "unassigned";
+
+impl StorageQuota {
+    /// A configured tenant's quota.
+    pub fn tenant(name: &str, max_bytes: u64) -> Self {
+        StorageQuota {
+            tenant: format!("tenant:{name}"),
+            max_bytes,
+        }
+    }
+
+    /// The quota every principal in no configured tenant shares.
+    pub fn unassigned(max_bytes: u64) -> Self {
+        StorageQuota {
+            tenant: UNASSIGNED.to_string(),
+            max_bytes,
+        }
+    }
 }
 
 #[derive(Debug)]

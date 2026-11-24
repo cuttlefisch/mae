@@ -262,6 +262,10 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
 # attachments_enabled = true                   # a KB's attachments (ADR-115), below
 # max_attachment_bytes = 10485760              # largest upload; refused before its body is read
 # max_attachment_pixels = 40000000             # an image's width x height, checked before decoding
+# attachment_idle_timeout_secs = 30            # longest gap in an upload's body (408 upload_timeout)
+# attachment_upload_deadline_secs = 160        # whole body; unset = the cap at 64 KiB/s
+# attachment_image_workers = 1                 # images processed at once (~230 MiB each at worst)
+# default_storage_bytes = 1073741824           # attachments of principals in no [[tenant]]; 0 = unlimited
 # webview_enabled: deprecated and ignored (ADR-119 Amendment 2 B4)
 ```
 
@@ -324,8 +328,20 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   for an address the KB does not hold gets `404 blob_missing`. An end-to-end encrypted KB refuses
   attachments (`409 e2e_unsupported`). The bytes live under `<collab data_dir>/blobs/`
   (`blobs.db` plus one file per blob), counted against the uploader's tenant `max_storage_bytes`
-  (`[tenant.quota]`, default 1 GiB, `0` = unlimited); `backup` includes them. Nothing is deleted
-  yet: collection arrives with the node's attachment map (ADR-115 P2).
+  (`[tenant.quota]`, default 1 GiB, `0` = unlimited); a principal in no `[[tenant]]` (agents
+  included, and everyone on a daemon with none configured) shares `default_storage_bytes` instead,
+  so no uploader is unbounded. `backup` includes them. Nothing is deleted yet: collection arrives
+  with the node's attachment map (ADR-115 P2).
+
+  An upload's body must keep arriving: a gap over `attachment_idle_timeout_secs`, or a body still
+  arriving after `attachment_upload_deadline_secs`, is refused `408 upload_timeout` with its
+  temporary file deleted. Images are processed by `attachment_image_workers` workers; a tenant may
+  have four uploads waiting for or holding one (a principal in no tenant counts alone), and an
+  upload waits at most 30 s for a worker. Past either, `503 attachment_busy` with `Retry-After: 10`.
+  Processing over 30 s is refused (`422 attachment_undecodable`) and the upload is never stored
+  afterwards. Every refusal here stores and charges nothing. An SVG nested deeper than 256, with a
+  `<use>` chain deeper than 8, or whose `<use>`s expand to over 200,000 elements is refused as
+  undecodable; an attribute holding a CSS escape (a backslash) is dropped.
 
 #### Identity-provider tokens and the binding table (ADR-098 Phase C)
 
@@ -483,6 +499,8 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `attachment_too_many_pixels` | An image whose header declares more than `max_attachment_pixels`, or an animation over 1000 frames or four times that many pixels in all. Refused before decoding. HTTP `413`, `error: "payload_too_large"`. | `POST /kb/<kb-id>/blobs` | `limit` |
 | `attachment_undecodable` | An image that is malformed, fails to decode within its limits, or takes over 30 seconds to process. Nothing was stored. HTTP `422`, `error: "unprocessable"`. | `POST /kb/<kb-id>/blobs` | — |
 | `attachment_unsupported` | A type the daemon recognises but cannot process: AVIF (its decoders are C), or an animation carrying an orientation tag. HTTP `415`, `error: "unsupported_media_type"`. | `POST /kb/<kb-id>/blobs` | — |
+| `upload_timeout` | The upload's body stopped arriving for longer than `attachment_idle_timeout_secs`, or was still arriving after `attachment_upload_deadline_secs`. Nothing was stored or charged. HTTP `408`, `error: "request_timeout"`. | `POST /kb/<kb-id>/blobs` | — |
+| `attachment_busy` | No image worker was free within 30 s, or the caller's tenant already has four uploads waiting or processing. Nothing was stored or charged; retry after `retry_after_secs` (also sent as `Retry-After`). HTTP `503`, `error: "temporarily_unavailable"`. | `POST /kb/<kb-id>/blobs` | `retry_after_secs` |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
