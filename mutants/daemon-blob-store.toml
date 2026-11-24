@@ -1,0 +1,80 @@
+# The KB attachment store and its routes (ADR-115 P1): one mutant per guard.
+# Tests: daemon/src/blob_store/tests.rs (--lib) and
+# daemon/src/tests/blob_route_tests.rs (--bin).
+
+[[mutant]]
+id = "daemon-blob-store/read-gate-bypassed"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_non_reader_gets_one_identical_refusal_whatever_exists)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/access.rs"
+find = '''    if !matches!(read, Ok(AccessDecision::Allow)) {'''
+replace = '''    if false && !matches!(read, Ok(AccessDecision::Allow)) {'''
+
+[[mutant]]
+id = "daemon-blob-store/cap-checked-after-reading"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_upload_declared_over_the_cap_is_refused_before_its_body_is_read)"
+[[mutant.edit]]
+file = "daemon/src/oauth_blobs.rs"
+find = '''    if declared > routes.max_bytes {'''
+replace = '''    if false && declared > routes.max_bytes {'''
+
+[[mutant]]
+id = "daemon-blob-store/sniff-trusts-a-leading-angle-bracket"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_type_comes_from_the_bytes_never_the_claim)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/sniff.rs"
+find = '''    } else if super::svg::is_svg(bytes) {'''
+replace = '''    } else if bytes.starts_with(b"<") {'''
+
+[[mutant]]
+id = "daemon-blob-store/storage-quota-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_quota_refuses_the_upload_that_would_exceed_it_and_not_the_one_before)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/mod.rs"
+find = '''            if used.saturating_add(staged.size) > q.max_bytes {'''
+replace = '''            if false && used.saturating_add(staged.size) > q.max_bytes {'''
+
+[[mutant]]
+id = "daemon-blob-store/jpeg-app-segments-kept"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_jpeg_is_stored_without_exif_xmp_location_comment_or_tail_and_keeps_its_profile)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/strip.rs"
+find = '''        0xE0..=0xEF | 0xFE => false,'''
+replace = '''        0xE0..=0xEF | 0xFE => true,'''
+
+[[mutant]]
+id = "daemon-blob-store/row-before-rename"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_crash_at_each_commit_step_leaves_no_dangling_row_and_no_counted_orphan)"
+[[mutant.edit]]
+file = "daemon/src/blob_store/mod.rs"
+find = '''        if self.fault(CommitStep::BeforeRename) {'''
+replace = '''        insert(
+            &conn,
+            kb_id,
+            &BlobMeta {
+                sha256: staged.sha256.clone(),
+                size: staged.size,
+                media_type: media.0,
+                width: media.1,
+                height: media.2,
+                stored_at: now_unix(),
+            },
+            quota.map(|q| q.tenant.as_str()),
+        )?;
+        if self.fault(CommitStep::BeforeRename) {'''
+[[mutant.edit]]
+file = "daemon/src/blob_store/mod.rs"
+find = '''        insert(&conn, kb_id, &meta, quota.map(|q| q.tenant.as_str()))?;'''
+replace = ''''''
