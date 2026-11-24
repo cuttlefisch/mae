@@ -314,19 +314,26 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
 /// cannot leave the fixture the browser client checks describing another page.
 #[test]
 fn the_palette_menu_fixture_is_the_daemons_page() {
-    fixture_page(
-        "en-US",
-        include_str!("../../../docs/verification/fixtures/components/palette-menu/input.html"),
-    );
-    fixture_page(
-        "es-ES",
-        include_str!(
-            "../../../docs/verification/fixtures/components/palette-menu/input-es-ES.html"
-        ),
-    );
+    for (lang, file) in [
+        ("en-US", "input.html"),
+        ("es-ES", "input-es-ES.html"),
+        ("fr-FR", "input-fr-FR.html"),
+    ] {
+        fixture_page(lang, file);
+    }
 }
 
-fn fixture_page(lang: &str, fixture: &str) {
+/// The palette-menu fixture directory (the browser client vendors it).
+const PALETTE_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../docs/verification/fixtures/components/palette-menu"
+);
+
+/// The daemon's page in `lang` must equal the fixture `file`. With
+/// `MAE_BLESS_FIXTURES` set, the file is written from the page instead: the
+/// one way to regenerate it, so it is never edited by hand.
+fn fixture_page(lang: &str, file: &str) {
+    let path = std::path::Path::new(PALETTE_FIXTURE).join(file);
     let chrome = site::Chrome {
         lang,
         site: Some(("Parity fixture", "/kb/parity-fixture/")),
@@ -346,9 +353,14 @@ fn fixture_page(lang: &str, fixture: &str) {
         let stem = stem.rsplit_once('-').expect("stem-hash").0;
         html = html.replace(asset.name, &format!("{stem}-{}.{ext}", "0".repeat(16)));
     }
+    if std::env::var_os("MAE_BLESS_FIXTURES").is_some() {
+        std::fs::write(&path, &html).unwrap();
+        return;
+    }
+    let fixture = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
         html, fixture,
-        "{lang}: regenerate its input from this output"
+        "{lang}: regenerate {file} with MAE_BLESS_FIXTURES=1"
     );
 }
 

@@ -5,7 +5,7 @@
 // choice and the steps, and the expected normalised accessibility tree in
 // each state. The browser client runs the same files
 // against its tests; this runs them against MAE's behaviour.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
 import { describe, expect, it } from "vitest";
@@ -77,7 +77,7 @@ function run(scenario: Scenario, steps: Step[]): Document {
 }
 
 it("finds a scenario for each locale the fixture covers", () => {
-  expect(scenarios.map(([, s]) => s.locale).sort()).toEqual(["en-US", "es-ES"]);
+  expect(scenarios.map(([, s]) => s.locale).sort()).toEqual(["en-US", "es-ES", "fr-FR"]);
 });
 
 for (const [file, scenario] of scenarios) {
@@ -89,6 +89,11 @@ for (const [file, scenario] of scenarios) {
     for (const state of scenario.states) {
       it(`${state.name}: the expected accessibility tree`, () => {
         const tree = treeOf(run(scenario, state.steps), scenario.scope);
+        // MAE_BLESS_FIXTURES=1 writes the expected tree from the behaviour:
+        // the one way to regenerate it, so it is never edited by hand.
+        if (process.env.MAE_BLESS_FIXTURES) {
+          writeFileSync(path.join(DIR, state.expected), JSON.stringify(tree, null, 2) + "\n");
+        }
         expect(tree).toEqual(JSON.parse(read(state.expected)));
       });
     }
