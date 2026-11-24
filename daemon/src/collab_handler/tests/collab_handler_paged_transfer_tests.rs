@@ -26,6 +26,18 @@ fn store(cap: Option<usize>) -> Arc<DocStore> {
 }
 
 fn session(store: &Arc<DocStore>, bc: &SharedBroadcaster, principal: &str) -> Pipe {
+    session_bounded(store, bc, principal, None)
+}
+
+/// A session whose transport caps its replies at `reply_bound` (as the
+/// WebSocket does with `max_outbound_bytes`); `None` is a transport that does
+/// not, like raw TCP.
+fn session_bounded(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    principal: &str,
+    reply_bound: Option<usize>,
+) -> Pipe {
     let deps = SessionDeps {
         doc_store: Arc::clone(store),
         broadcaster: Arc::clone(bc),
@@ -37,6 +49,10 @@ fn session(store: &Arc<DocStore>, bc: &SharedBroadcaster, principal: &str) -> Pi
     let (client, server) = tokio::io::duplex(1 << 16);
     let (sr, sw) = tokio::io::split(server);
     let (gov, _h) = governor(0, u64::MAX);
+    let gov = match reply_bound {
+        Some(max) => gov.with_reply_bound(max),
+        None => gov,
+    };
     let peer = mae_mcp::identity::PeerIdentity::bearer(principal);
     tokio::spawn(handle_client_governed(
         tokio::io::BufReader::new(sr),
@@ -181,6 +197,74 @@ async fn a_kb_larger_than_the_cap_is_shared_in_batches_and_joined_in_pages() {
     let whole = call(&mut bob, kb_join_msg(KB)).await;
     assert_eq!(whole["result"]["nodes"].as_array().unwrap().len(), NODES);
     assert!(whole["result"]["next_after"].is_null());
+}
+
+/// The node ids of each page.
+fn page_ids(pages: &[(usize, Vec<serde_json::Value>, Option<String>)]) -> Vec<Vec<String>> {
+    pages
+        .iter()
+        .map(|(_, nodes, _)| {
+            nodes
+                .iter()
+                .map(|n| n["id"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// #1003: a session's reply bound lowers a page and never raises one. With
+/// none (raw TCP), or one at or above the store's bound (a WebSocket left at
+/// its default), the pages are exactly the ones the store's bound gives; with
+/// a lower one, every page fits it and the KB is still served whole, in order.
+#[tokio::test]
+async fn a_sessions_reply_bound_lowers_pages_and_never_raises_them() {
+    let s = store(Some(CAP));
+    let bc = test_broadcaster();
+    let mut alice = session(&s, &bc, ALICE);
+    share_in_batches(&mut alice).await;
+    let mut bob = session(&s, &bc, BOB);
+    let baseline = page_ids(&paged_join(&mut bob, &[]).await);
+    assert!(baseline.len() >= 3, "{baseline:?}");
+    for bound in [CAP, CAP * 4, usize::MAX] {
+        let mut bob = session_bounded(&s, &bc, BOB, Some(bound));
+        let pages = paged_join(&mut bob, &[]).await;
+        assert_eq!(page_ids(&pages), baseline, "reply bound {bound}");
+    }
+
+    let lower = CAP / 2;
+    let mut bob = session_bounded(&s, &bc, BOB, Some(lower));
+    let pages = paged_join(&mut bob, &[]).await;
+    for (k, (len, _, _)) in pages.iter().enumerate() {
+        assert!(
+            *len <= lower,
+            "page {k} is {len} bytes, over the bound {lower}"
+        );
+    }
+    let lowered = page_ids(&pages);
+    assert!(lowered.len() > baseline.len(), "{lowered:?}");
+    assert_eq!(
+        lowered.concat(),
+        baseline.concat(),
+        "the same nodes, once each"
+    );
+}
+
+/// A reply bound too small for any node leaves a page budget of 0. The join
+/// still ends, one node per page (a page always carries one), every node
+/// served once and in order: no loop, no skip, no duplicate at `next_after`.
+#[tokio::test]
+async fn a_reply_bound_with_no_room_pages_one_node_at_a_time_and_ends() {
+    let s = store(Some(CAP));
+    let bc = test_broadcaster();
+    let mut alice = session(&s, &bc, ALICE);
+    share_in_batches(&mut alice).await;
+    let mut bob = session(&s, &bc, BOB);
+    let baseline = page_ids(&paged_join(&mut bob, &[]).await);
+    let mut bob = session_bounded(&s, &bc, BOB, Some(1));
+    let pages = page_ids(&paged_join(&mut bob, &[]).await);
+    assert_eq!(pages.len(), NODES, "{pages:?}");
+    assert!(pages.iter().all(|p| p.len() == 1), "{pages:?}");
+    assert_eq!(pages.concat(), baseline.concat());
 }
 
 #[tokio::test]
