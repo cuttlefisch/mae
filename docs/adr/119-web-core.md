@@ -5,7 +5,8 @@ first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) an
 `GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
 Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
 where its home page comes from, and the retirement of ADR-073's view; Amendment 3 (2026-11-24) the
-live explorer and who may list a KB. Spikes
+live explorer and who may list a KB; Amendment 4 (2026-11-24) where the live app's slot components and
+their data come from. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -820,6 +821,66 @@ asks for it.
 
 The two new catalogue strings (the explorer's name and the untagged group) join A4's catalogues in all
 four locales; `eo`'s await the same speaker's review as the rest of its strings.
+
+## Amendment 4 (2026-11-24): slot components in the live app
+
+D18 decided how a component is written (a minijinja template, sanitised like content, with an optional
+behaviour registered through `mae.site.register`). It did not say where the live app finds the
+components or what a "version" is without a build. Both are the owner's (H1, H2); the rest follows.
+
+### H1. Components come from an operator directory *(owner, 2026-11-24)*
+
+- **Configuration, never content (D3).** `daemon.toml` names a directory per KB,
+  `[oauth.site_components] "<kb-id>" = "<dir>"`, beside `site_home` and `site_title`. Nothing in a KB
+  can add, change or select a component.
+- **A manifest, not a naming convention.** The directory holds `components.toml`, which lists each
+  component:
+  - its slot (P-153's seven: document head, header row, before the body, after the body, left-panel
+    footer, right panel, page footer);
+  - its template file;
+  - its optional behaviour script;
+  - the exact `data-` keys and ARIA states its markup needs, which is all A2's sanitiser extension
+    admits for it;
+  - for a page-emitting component, its page name and its data file (H2).
+- **Loaded once, at startup.** Every template is compiled, every script and data file is read and
+  validated, and every declared attribute is checked against the sanitiser's rules before the daemon
+  serves. Any failure stops the daemon with the component and the reason, as an invalid TLS path does.
+  It is the live counterpart of P-157's "the build fails". A change takes a restart; there is no hot
+  reload.
+- **A failure while rendering** leaves that slot empty for that page, and is logged, rate-limited per
+  template (D18).
+- **What a template sees (P-154):**
+  - the page's own data: ID, title, file-level properties, dates, tags and URL;
+  - the site settings: locale, base path and KB ID;
+  - its own validated data file (H2).
+
+  Never another page. A component cannot read the KB beyond the page it renders, so a template cannot
+  widen what a reader sees.
+- **Behaviours** are served like the runtime's own assets, under content-addressed names, as
+  `script-src 'self'` requires. Each runs once per navigation and is cleaned up before the next (P-156),
+  under the router's single Trusted Types policy: a behaviour builds DOM, and cannot inject HTML.
+- **Empty slots add nothing** (P-158). A slot with no component writes no element, so removing a
+  component moves nothing else.
+- **The five examples** (state badge P-161, copy link P-162, what's-new link, version footer and
+  last-updated line P-163) ship as a fixture component directory under `docs/verification/fixtures/`,
+  with the tests that render each one. They are not engine code: the contract is that they need no
+  engine change.
+- **Rejected:** shipping the examples as built-in engine features (the contract would not be met until
+  later, and each example would be a second implementation to retire); serving no components until the
+  export exists (the live app is L1's first deliverable).
+
+### H2. A version is an entry in an operator data file *(owner, 2026-11-24)*
+
+- **The data.** The site-changes page and the version footer (P-160, P-163) read a data file the
+  manifest names. It is validated at startup against the component's declared shape, as the export's
+  build-time data is. A malformed entry stops the daemon (H1). A malformed date in a page's own
+  properties only omits that line (P-150, P-163).
+- **The address.** A component-emitted page lives under one reserved segment, `/kb/<kb-id>/site/<name>`
+  (`<base>/site/<name>/` in the export). `site` joins A3's reserved IDs, so no operator-declared name
+  reserves an ordinary word per KB, and no node can shadow a generated page.
+- **Rejected:** deriving versions from the KB's history (it needs L3's change records, ADR-116 and
+  ADR-113, which are not built), and keeping the page export-only (the version footer would then link
+  nowhere live).
 
 ## Amendments this needs
 
