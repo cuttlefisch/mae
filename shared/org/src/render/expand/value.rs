@@ -147,7 +147,11 @@ impl Engine {
             return Err((MacroFailure::Unsupported, 0, 0));
         }
         let root = self.d.syntax();
-        let entry = entry_at(&root, place);
+        let entry = u32::try_from(place).ok().and_then(|at| {
+            self.headlines
+                .get_or_insert_with(|| crate::inherit::HeadlineIndex::new(&root))
+                .at(at)
+        });
         if matches!(key.as_str(), "ITEM" | "TODO") {
             // `org-get-heading t t t t`, the TODO keyword; at the top of
             // the file Org reads neither.
@@ -176,11 +180,6 @@ impl Engine {
             .map(|(_, v)| v.clone())
             .unwrap_or_default())
     }
-}
-
-/// The headline whose entry holds `place` (`None`: before the first).
-fn entry_at(root: &SyntaxNode, place: usize) -> Option<SyntaxNode> {
-    crate::inherit::headline_at(root, u32::try_from(place).ok()?)
 }
 
 /// The property lines of an entry's drawer, values trimmed.

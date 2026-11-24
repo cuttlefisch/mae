@@ -92,6 +92,8 @@ pub(super) struct Engine {
     pub(super) outer_lines: Option<std::rc::Rc<Vec<String>>>,
     pub(super) keywords: HashMap<String, Option<String>>,
     pub(super) properties: HashMap<usize, Vec<(String, String)>>,
+    /// The headline holding each place, for `{{{property}}}`.
+    pub(super) headlines: Option<crate::inherit::HeadlineIndex>,
 }
 
 /// How a unit's scan ended.
@@ -223,6 +225,7 @@ impl Engine {
             outer_lines: None,
             keywords: HashMap::default(),
             properties: HashMap::default(),
+            headlines: None,
         }
     }
 
@@ -330,6 +333,7 @@ impl Engine {
         self.lines = None;
         self.keywords.clear();
         self.properties.clear();
+        self.headlines = None;
         let _ = at;
         Ok(())
     }

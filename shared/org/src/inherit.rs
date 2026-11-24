@@ -16,7 +16,8 @@ use crate::seeded::HashMap;
 use crate::span::Span;
 use crate::views::{canonical_key, Headline, PropertyDrawer};
 use crate::Document;
-use std::cell::RefCell;
+use rowan::WalkEvent;
+use std::cell::{OnceCell, RefCell};
 
 /// The inherited properties of one document, memoised per headline, so
 /// every lookup of one property is linear in the document overall.
@@ -28,6 +29,8 @@ pub(crate) struct Inherited {
     file_drawer: Option<PropertyDrawer>,
     /// (headline start, canonical property) → its inherited value.
     memo: RefCell<HashMap<(u32, String), Option<String>>>,
+    /// Built on the first [`Inherited::headline_at`].
+    headlines: OnceCell<HeadlineIndex>,
 }
 
 impl Inherited {
@@ -37,13 +40,16 @@ impl Inherited {
             global: global_properties(doc),
             file_drawer: doc.property_drawer(),
             memo: RefCell::new(HashMap::default()),
+            headlines: OnceCell::new(),
         }
     }
 
     /// The headline whose entry holds byte `at` (`None`: before the first
     /// headline, or past the end).
     pub fn headline_at(&self, at: u32) -> Option<SyntaxNode> {
-        headline_at(&self.root, at)
+        self.headlines
+            .get_or_init(|| HeadlineIndex::new(&self.root))
+            .at(at)
     }
 
     /// `prop` (canonical) as `org-entry-get` with inheritance reads it at a
@@ -95,16 +101,57 @@ impl Inherited {
     }
 }
 
-/// The headline whose entry holds byte `at` of the document `root`
-/// (`None`: before the first headline, or past the end).
-pub(crate) fn headline_at(root: &SyntaxNode, at: u32) -> Option<SyntaxNode> {
-    if at >= u32::from(root.text_range().end()) {
-        return None;
+/// Which headline's entry holds each byte of one document: the innermost
+/// headline whose range holds it, as a token's nearest `HEADLINE` ancestor
+/// gives it, found by one binary search.
+///
+/// Built in one pass over the tree. Asking rowan for the token at an
+/// offset instead descends from the root testing every child of each node
+/// on the way, which is linear in the root's children: one lookup per link,
+/// inline src block or property macro under N headlines was O(N²)
+/// (`tests/scaling.rs`, "under N headlines").
+#[derive(Debug)]
+pub(crate) struct HeadlineIndex {
+    headlines: Vec<SyntaxNode>,
+    /// From each offset on, until the next entry's, the innermost headline
+    /// holding the byte there (an index into `headlines`), in document
+    /// order. Where several entries share an offset, the last one holds.
+    from: Vec<(u32, Option<usize>)>,
+}
+
+impl HeadlineIndex {
+    pub fn new(root: &SyntaxNode) -> HeadlineIndex {
+        let mut headlines = Vec::new();
+        let mut from = Vec::new();
+        let mut open: Vec<usize> = Vec::new();
+        // Headline ranges nest, so entering one at its start and leaving
+        // it at its end come in document order, and between two of these
+        // events the innermost open headline holds every byte.
+        for event in root.preorder() {
+            match event {
+                WalkEvent::Enter(n) if n.kind() == HEADLINE => {
+                    let i = headlines.len();
+                    from.push((Span::of(&n).start, Some(i)));
+                    open.push(i);
+                    headlines.push(n);
+                }
+                WalkEvent::Leave(n) if n.kind() == HEADLINE => {
+                    open.pop();
+                    from.push((Span::of(&n).end, open.last().copied()));
+                }
+                _ => {}
+            }
+        }
+        HeadlineIndex { headlines, from }
     }
-    // The token STARTING at `at` (right-biased): at a headline's first
-    // byte, the one before it ends the previous headline's section.
-    let token = root.token_at_offset(at.into()).right_biased()?;
-    token.parent()?.ancestors().find(|a| a.kind() == HEADLINE)
+
+    /// The headline whose entry holds byte `at` (`None`: before the first
+    /// headline, or past the end).
+    pub fn at(&self, at: u32) -> Option<SyntaxNode> {
+        let i = self.from.partition_point(|&(start, _)| start <= at);
+        let (_, h) = self.from.get(i.checked_sub(1)?)?;
+        Some(self.headlines[(*h)?].clone())
+    }
 }
 
 /// `base` then `plus`, joined by spaces (`org-property-separators`'s
@@ -163,4 +210,68 @@ pub(crate) fn global_properties(doc: &Document) -> HashMap<String, String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The headline holding byte `at` the way the index replaced: the token
+    /// STARTING at `at` (right-biased: at a headline's first byte, the one
+    /// before it ends the previous headline's section), and its nearest
+    /// `HEADLINE` ancestor. Linear in the root's children per lookup.
+    fn by_descent(root: &SyntaxNode, at: u32) -> Option<SyntaxNode> {
+        if at >= u32::from(root.text_range().end()) {
+            return None;
+        }
+        let token = root.token_at_offset(at.into()).right_biased()?;
+        token.parent()?.ancestors().find(|a| a.kind() == HEADLINE)
+    }
+
+    fn check(text: &str) -> Result<(), TestCaseError> {
+        let doc = crate::parse(text, &Default::default());
+        let root = doc.syntax();
+        let index = HeadlineIndex::new(&root);
+        // Every byte, the end, and past it.
+        for at in 0..=u32::try_from(text.len()).unwrap() + 2 {
+            prop_assert_eq!(
+                index.at(at),
+                by_descent(&root, at),
+                "byte {} of {:?}",
+                at,
+                text
+            );
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// The index finds the headline the descent does at every byte, on
+        /// outlines with levels going up and down, empty and blank-titled
+        /// headlines, drawers, blocks, inline tasks and CRLF.
+        #[test]
+        fn the_index_is_the_descent(
+            text in "(\u{feff}|\\* |\\*\\* T |\\*\\*\\* |\\*{15} inline\n|\\*{15} END\n|\\*\n|x|é|[ \t]|\n|\r\n|\\[\\[attachment:a\\]\\]|:PROPERTIES:\n:ID: a\n:END:\n|#\\+begin_src\n|#\\+end_src\n|- i\n|src_sh\\{x\\}){0,40}",
+        ) {
+            check(&text)?;
+        }
+    }
+
+    #[test]
+    fn the_index_is_the_descent_on_fixed_outlines() {
+        for text in [
+            "",
+            "x",
+            "* a",
+            "* a\n",
+            "x\n* a\n** b\nbody\n*** c\n* d\n",
+            "* a\n*** b\n** c\n* d\ne\n",
+            "\u{feff}* a\r\n** b\r\n",
+        ] {
+            check(text).unwrap();
+        }
+    }
 }
