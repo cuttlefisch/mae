@@ -109,6 +109,17 @@ pub async fn export(
     force: bool,
 ) -> Result<ExportReport, SeedError> {
     let coll = literal_collection(store, kb_id).await?;
+    match store.seed_update(kb_id).await {
+        Ok(None) => {}
+        Ok(Some((u, _))) => {
+            return Err(SeedError(format!(
+                "an update of KB '{kb_id}' to plan {} is in progress: finish it (re-run \
+                 `kb seed --update` with that plan) before exporting",
+                u.plan_hash
+            )))
+        }
+        Err(e) => return Err(SeedError(format!("seed update of '{kb_id}': {e}"))),
+    }
     let rows: HashMap<String, SeedNodeRow> = match store.seed_record(kb_id).await {
         Ok(found) => found.map(|(_, r)| r).unwrap_or_default(),
         Err(e) => return Err(SeedError(format!("seed record of '{kb_id}': {e}"))),

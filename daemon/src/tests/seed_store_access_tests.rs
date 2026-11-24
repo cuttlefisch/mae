@@ -164,3 +164,79 @@ async fn the_cli_applies_reruns_and_exports() {
         "now non-empty"
     );
 }
+
+const PAGE_V2: &str = ":PROPERTIES:\n:ID: 0b000000-0000-4000-8000-000000000001\n:Zed: z\n:Alpha: a\n:END:\n#+title: Page, revised\nBody, revised.\n";
+
+/// The refresh procedure end to end: seed v1, then `--update --dry-run` of v2
+/// (which writes nothing), the update with a wrong hash (refused), with the
+/// reviewed hash (applied), again (nothing to do); an export then writes v2.
+/// While something answers on the control socket, both the update and its dry
+/// run are refused. Kills: an update path that skips `open_exclusive`.
+#[tokio::test]
+async fn the_cli_refreshes_a_seeded_kb_and_refuses_while_a_daemon_answers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = isolated(tmp.path());
+    let id_dir = config.collab.auth.identity_dir().unwrap();
+    mae_mcp::identity::Identity::load_or_generate(&id_dir, "daemon").unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join("p")).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("p/page.org"), PAGE).unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "c"]);
+    git(&repo, &["tag", "v1"]);
+    let r = repo.to_str().unwrap();
+    let hash_of = |rev: &str| {
+        let opts = crate::seed_cli::plan_options_for_test(&repo, rev);
+        mae_daemon::seed::plan(&opts).unwrap().plan_hash().unwrap()
+    };
+    let v1 = args(&[
+        "seed",
+        "--git",
+        r,
+        "--rev",
+        "v1",
+        "--kb-id",
+        "k",
+        "--plan-hash",
+        &hash_of("v1"),
+    ]);
+    assert_eq!(crate::seed_cli::run_kb(&config, &v1).await, 0);
+    std::fs::write(repo.join("p/page.org"), PAGE_V2).unwrap();
+    git(&repo, &["commit", "-q", "-am", "v2"]);
+    git(&repo, &["tag", "v2"]);
+    let update = |extra: &[&str]| {
+        let mut a = args(&[
+            "seed", "--update", "--git", r, "--rev", "v2", "--kb-id", "k",
+        ]);
+        a.extend(args(extra));
+        a
+    };
+    let dry = update(&["--dry-run"]);
+    assert_eq!(crate::seed_cli::run_kb(&config, &dry).await, 0);
+    let wrong = update(&["--plan-hash", &"0".repeat(64)]);
+    assert_eq!(crate::seed_cli::run_kb(&config, &wrong).await, 1);
+    let reviewed = update(&["--plan-hash", &hash_of("v2")]);
+    {
+        let _listener = std::os::unix::net::UnixListener::bind(&config.socket).unwrap();
+        assert_eq!(crate::seed_cli::run_kb(&config, &dry).await, 1);
+        assert_eq!(crate::seed_cli::run_kb(&config, &reviewed).await, 1);
+        std::fs::remove_file(&config.socket).unwrap();
+    }
+    let out = tmp.path().join("before");
+    let export = |dir: &Path| args(&["export", "--kb-id", "k", "--out", dir.to_str().unwrap()]);
+    assert_eq!(crate::seed_cli::run_kb(&config, &export(&out)).await, 0);
+    assert_eq!(
+        std::fs::read_to_string(out.join("p/page.org")).unwrap(),
+        PAGE,
+        "the dry run wrote nothing"
+    );
+    assert_eq!(crate::seed_cli::run_kb(&config, &reviewed).await, 0);
+    assert_eq!(crate::seed_cli::run_kb(&config, &reviewed).await, 0);
+    let out = tmp.path().join("after");
+    assert_eq!(crate::seed_cli::run_kb(&config, &export(&out)).await, 0);
+    assert_eq!(
+        std::fs::read_to_string(out.join("p/page.org")).unwrap(),
+        PAGE_V2
+    );
+}
