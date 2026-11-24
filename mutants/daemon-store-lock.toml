@@ -1,0 +1,33 @@
+# The collab store's lock (daemon/src/store_lock.rs): a held lock is retried
+# for GRACE before it is refused, because a lock dropped while another thread
+# spawns stays held until the child execs (#1008). Tests: store_lock::tests.
+
+[[mutant]]
+id = "daemon-store-lock/no-retry"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_lock_released_while_other_threads_spawn_is_acquired)"
+[[mutant.edit]]
+file = "daemon/src/store_lock.rs"
+find = '''                Err(TryLockError::WouldBlock) if start.elapsed() < grace => wait(),'''
+replace = '''                Err(TryLockError::WouldBlock) if false && start.elapsed() < grace => wait(),'''
+
+[[mutant]]
+id = "daemon-store-lock/no-retry-deterministic"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_lock_is_waited_for_within_the_grace_and_refused_after_it)"
+[[mutant.edit]]
+file = "daemon/src/store_lock.rs"
+find = '''                Err(TryLockError::WouldBlock) if start.elapsed() < grace => wait(),'''
+replace = '''                Err(TryLockError::WouldBlock) if false && start.elapsed() < grace => wait(),'''
+
+[[mutant]]
+id = "daemon-store-lock/grace-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_lock_is_waited_for_within_the_grace_and_refused_after_it)"
+[[mutant.edit]]
+file = "daemon/src/store_lock.rs"
+find = '''                Err(TryLockError::WouldBlock) if start.elapsed() < grace => wait(),'''
+replace = '''                Err(TryLockError::WouldBlock) if start.elapsed() <= grace || true => wait(),'''
