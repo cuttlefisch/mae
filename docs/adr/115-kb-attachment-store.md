@@ -131,10 +131,41 @@ upload that would exceed it (`tenant_quota_exceeded`).
   valid org.
 - **The node's CRDT** gains an additive `attachments` map (ADR-093: a tolerant reader, no upcast on
   read). Each entry maps `NAME` to `{sha256, size, media_type}`.
+- **The map is a root type of the node document**, not a key inside the `node` map. Every node that
+  exists today has no such container, so a nested map could only be created lazily, which ADR-093 D4
+  forbids for a good reason: two peers attaching the first image to the same node concurrently would
+  each insert their own map at the key, and one of the two maps, with its image, would be dropped. A
+  root type has no creating operation, so every peer's writes land in the same map, and a document
+  without it reads as empty. Reading never creates it.
 - **Renaming** a file changes a map key, not the content. Replacing a file binds the name to a new
   hash.
 - Concurrent edits to different names merge cleanly. Two edits to the same name resolve last
-  writer wins, the CRDT map's own rule.
+  writer wins, the CRDT map's own rule. "Last" is yrs's deterministic order of the two writes by
+  client id, not wall-clock time, so every peer picks the same winner whatever order the updates
+  arrive in.
+
+**A NAME is one portable file name**, because an export writes it as a file on Linux, macOS or
+Windows (principle #13). It is 1 to 255 bytes of UTF-8, is not `.` or `..`, and contains no `/`,
+`\`, control character (Unicode Cc), format character (Unicode Cf: bidi controls, zero-width
+characters), or any of `< > : " | ? *`. It does not end in a dot or a space, and it is not a Windows
+device name, case-insensitively, with or without an extension: `CON`, `PRN`, `AUX`, `NUL`,
+`COM1`–`COM9`, `LPT1`–`LPT9`, and, following Python's `ntpath.isreserved`, `CONIN$`, `CONOUT$` and the
+superscript-digit ports `COM¹`–`COM³`, `LPT¹`–`LPT³`.
+
+**No two NAMEs of one node may be one file.** Two NAMEs equal once NFC-normalised and lowercased
+(the seed's path-collision key) are the same file on APFS and NTFS, so a writer refuses to bind the
+second, on set and on rename (a rename to another spelling of the same NAME is allowed). Two peers can
+still bind such a pair concurrently, each write valid where it was made. The reader keeps both
+rather than picking one, every peer converges on the same pair, and the export must refuse such a
+node, naming both NAMEs, unless a defined disambiguation exists by then (P4; an `@ai-caution` marks
+the place).
+
+**There are two readers, failing in opposite directions.** The display reader is tolerant: an entry
+with a bad NAME or shape is reported and left out, never repaired. The sweep's reader (D5) fails
+safe: any entry holding a 64-hex-digit hash where `sha256` would be counts as referenced, whatever
+else about it is rejected, because an entry an older daemon rejects may be one a newer peer still
+binds, and leaving it out would delete its bytes. A holder that cannot be read at all marks the KB's
+live set incomplete, and a sweep collects nothing in that KB.
 
 **The mapping is part of the node's content, everywhere content is fixed.** Replacing `diagram.png`
 under the same name must never change what a revision, a history version or an export shows. So the
