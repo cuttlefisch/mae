@@ -29,6 +29,7 @@ export const MAIN_ID = "mae-main";
 export const PANELS_ID = "mae-panels";
 export const HEADER_ID = "mae-header";
 export const ANNOUNCER_ID = "mae-announcer";
+export const EXPLORER_ID = "mae-explorer";
 
 /** What a click asks for, as far as routing is concerned. */
 export interface ClickFacts {
@@ -203,17 +204,26 @@ export function start(win: Window & typeof globalThis): Router {
     const main = doc.getElementById(MAIN_ID);
     const nextMain = next.getElementById(MAIN_ID);
     if (main && nextMain) main.replaceWith(doc.adoptNode(nextMain));
-    // The site's header before the main landmark and the side panels after
-    // it: each replaced, removed or added to match the next page.
-    const region = (id: string, place: "before" | "after"): void => {
+    // The site's header, then the explorer, before the main landmark, and the
+    // side panels after it: each replaced, removed or added to match the next
+    // page; the explorer kept instead when `keep` says it is the same list.
+    const region = (
+      id: string,
+      place: "before" | "after",
+      at: () => Element | null,
+      keep?: (mine: Element, theirs: Element) => boolean,
+    ): void => {
       const mine = doc.getElementById(id);
       const theirs = next.getElementById(id);
-      if (mine && theirs) mine.replaceWith(doc.adoptNode(theirs));
-      else if (mine) mine.remove();
-      else if (theirs) doc.getElementById(MAIN_ID)?.[place](doc.adoptNode(theirs));
+      if (mine && theirs) {
+        if (!keep?.(mine, theirs)) mine.replaceWith(doc.adoptNode(theirs));
+      } else if (mine) mine.remove();
+      else if (theirs) at()?.[place](doc.adoptNode(theirs));
     };
-    region(HEADER_ID, "before");
-    region(PANELS_ID, "after");
+    const mainOf = (): Element | null => doc.getElementById(MAIN_ID);
+    region(EXPLORER_ID, "before", mainOf, keepExplorer);
+    region(HEADER_ID, "before", () => doc.getElementById(EXPLORER_ID) ?? mainOf());
+    region(PANELS_ID, "after", mainOf);
     mountAll();
   };
 
@@ -926,6 +936,438 @@ function mountControls(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The explorer (ADR-119 L1a; P-39 to P-45): the KB's pages by tag, in a left
+// column. The daemon ships an empty, hidden `<nav id="mae-explorer">` naming
+// the list's URL (`data-src`) and its version (`data-version`), and only to a
+// reader allowed the list; this behaviour fetches the list, builds it with
+// createElement and textContent only (see the file header), and shows it. The
+// router keeps the nav across navigations while its `data-src` holds, so the
+// list's scroll position and the reader's open groups survive (P-45); a new
+// version is fetched again, an unchanged one never. Anything unexpected
+// leaves the nav hidden: no error is shown, as for a reader without the list.
+
+/** The nav attributes that follow the page when the router keeps the node. */
+export const EXPLORER_ATTRS = [
+  "data-version",
+  "aria-label",
+  "data-untagged",
+  "lang",
+] as const;
+
+/** One page in the list: its title as raw text, and its path on the site. */
+export interface ExplorerPage {
+  title: string;
+  href: string;
+}
+
+/** The list as the daemon serves it, in display order (never re-sorted here). */
+export interface ExplorerData {
+  groups: Array<{ tag: string; pages: ExplorerPage[] }>;
+  untagged: ExplorerPage[];
+}
+
+/**
+ * Whether the router keeps the explorer on screen (`mine`) for the next page
+ * (`theirs`): when both name the same list. Kept, it takes the next page's
+ * version, label, untagged label and language; otherwise it is replaced.
+ */
+export function keepExplorer(mine: Element, theirs: Element): boolean {
+  const src = theirs.getAttribute("data-src");
+  if (src === null || mine.getAttribute("data-src") !== src) return false;
+  for (const name of EXPLORER_ATTRS) {
+    const v = theirs.getAttribute(name);
+    if (v === null) mine.removeAttribute(name);
+    else mine.setAttribute(name, v);
+  }
+  return true;
+}
+
+/** `href` as a URL of one of the site's pages on this origin; null otherwise. */
+export function sitePage(href: string, here: URL): URL | null {
+  let url: URL;
+  try {
+    url = new URL(href, here);
+  } catch {
+    return null;
+  }
+  return url.origin === here.origin && url.pathname.startsWith(SITE_PREFIX)
+    ? url
+    : null;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+function pagesOf(v: unknown, here: URL): ExplorerPage[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: ExplorerPage[] = [];
+  for (const p of v) {
+    if (
+      !isRecord(p) ||
+      typeof p.title !== "string" ||
+      typeof p.href !== "string"
+    )
+      return null;
+    if (sitePage(p.href, here) === null) return null;
+    out.push({ title: p.title, href: p.href });
+  }
+  return out;
+}
+
+/**
+ * The list, if `value` (parsed JSON) has the daemon's shape; null otherwise,
+ * including when any link leaves the site: a list that is not entirely the
+ * site's own pages is not shown at all (fail closed).
+ */
+export function parseExplorer(value: unknown, here: URL): ExplorerData | null {
+  if (!isRecord(value) || !Array.isArray(value.groups)) return null;
+  const untagged = pagesOf(value.untagged, here);
+  if (untagged === null) return null;
+  const groups: ExplorerData["groups"] = [];
+  for (const g of value.groups) {
+    if (!isRecord(g) || typeof g.tag !== "string") return null;
+    const pages = pagesOf(g.pages, here);
+    if (pages === null) return null;
+    groups.push({ tag: g.tag, pages });
+  }
+  return { groups, untagged };
+}
+
+/** A vertical extent on screen, in CSS pixels. */
+export interface Span {
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Sub-pixel slack in "fully visible": layout rounds fractional boxes, and an
+ * entry flush with the list's edge must not count as hidden by a rounding
+ * error (it would nudge the list on every navigation). Half a pixel can never
+ * hide a visible part of a line.
+ */
+export const VISIBLE_SLACK = 0.5;
+
+/**
+ * The part of the list a reader can see: its scroll box (inside its borders),
+ * cut to the window. A sticky list below the header reaches past the window's
+ * bottom until the page scrolls; an entry there is not on screen.
+ */
+export function listView(
+  nav: Span,
+  clientTop: number,
+  clientHeight: number,
+  windowHeight: number,
+): Span {
+  const top = nav.top + clientTop;
+  return {
+    top: Math.max(top, 0),
+    bottom: Math.min(top + clientHeight, windowHeight),
+  };
+}
+
+/** Whether `entry` lies wholly inside `view`. */
+export function fullyVisible(entry: Span, view: Span): boolean {
+  return (
+    entry.top >= view.top - VISIBLE_SLACK &&
+    entry.bottom <= view.bottom + VISIBLE_SLACK
+  );
+}
+
+/**
+ * The list's `scrollTop` that shows `entry` (P-44, P-45): unchanged when it is
+ * already fully visible; otherwise the least move that shows it, its top
+ * first when it is taller than the view. Only the list scrolls, never the
+ * window, so this is applied to the list's own `scrollTop`.
+ */
+export function revealScrollTop(
+  entry: Span,
+  view: Span,
+  scrollTop: number,
+): number {
+  if (fullyVisible(entry, view)) return scrollTop;
+  const fits = entry.bottom - entry.top <= view.bottom - view.top;
+  const delta =
+    entry.top < view.top || !fits
+      ? entry.top - view.top
+      : entry.bottom - view.bottom;
+  return Math.max(0, scrollTop + delta);
+}
+
+/** One occurrence of the current page in the list (a page is listed under each tag). */
+export interface Occurrence {
+  open: boolean;
+  visible: boolean;
+}
+
+/**
+ * Which occurrence of the current page is marked (P-39): the one the reader
+ * clicked; else one in an open group that the reader can see; else the first
+ * (whose group is then opened). -1 when the page is not listed.
+ */
+export function chooseOccurrence(
+  occurrences: readonly Occurrence[],
+  clicked: number | null,
+): number {
+  if (occurrences.length === 0) return -1;
+  if (clicked !== null && clicked >= 0 && clicked < occurrences.length)
+    return clicked;
+  const seen = occurrences.findIndex((o) => o.open && o.visible);
+  return seen >= 0 ? seen : 0;
+}
+
+/** A built entry: its link, its group, and the group's key (null: untagged). */
+interface ExplorerEntry {
+  a: HTMLAnchorElement;
+  group: HTMLDetailsElement;
+  key: string | null;
+}
+
+/** The list as built into one nav, at one version. */
+interface BuiltExplorer {
+  nav: HTMLElement;
+  version: string;
+  groups: Map<string | null, HTMLDetailsElement>;
+  entries: ExplorerEntry[];
+  /** The untagged group's summary text, in the nav's words. */
+  untagged: HTMLElement | null;
+  /** Elements whose text is content (tags, titles), in the page's language. */
+  content: HTMLElement[];
+}
+
+/** The groups, closed, in the given order; the untagged group last, if any. */
+function buildExplorer(
+  doc: Document,
+  nav: HTMLElement,
+  version: string,
+  data: ExplorerData,
+): BuiltExplorer {
+  const built: BuiltExplorer = {
+    nav,
+    version,
+    groups: new Map(),
+    entries: [],
+    untagged: null,
+    content: [],
+  };
+  const group = (
+    key: string | null,
+    pages: ExplorerPage[],
+  ): HTMLDetailsElement => {
+    const details = doc.createElement("details");
+    const summary = doc.createElement("summary");
+    const label = doc.createElement("span");
+    if (key === null) built.untagged = label;
+    else {
+      label.textContent = key;
+      built.content.push(label);
+    }
+    summary.append(label);
+    const list = doc.createElement("ul");
+    for (const p of pages) {
+      const li = doc.createElement("li");
+      const a = doc.createElement("a");
+      a.setAttribute("href", p.href);
+      a.textContent = p.title;
+      built.content.push(a);
+      built.entries.push({ a, group: details, key });
+      li.append(a);
+      list.append(li);
+    }
+    details.append(summary, list);
+    built.groups.set(key, details);
+    return details;
+  };
+  const nodes = data.groups.map((g) => group(g.tag, g.pages));
+  if (data.untagged.length > 0) nodes.push(group(null, data.untagged));
+  nav.replaceChildren(...nodes);
+  return built;
+}
+
+/**
+ * The nav's words and languages: the untagged group's name from
+ * `data-untagged`; and when the nav's words fell back to another language
+ * (`lang` on the nav), the tags and titles carry the page's language back.
+ */
+function labelExplorer(built: BuiltExplorer, doc: Document): void {
+  const nav = built.nav;
+  if (built.untagged)
+    built.untagged.textContent = nav.getAttribute("data-untagged") ?? "";
+  const navLang = nav.getAttribute("lang");
+  const pageLang = doc.documentElement.getAttribute("lang");
+  const back =
+    navLang !== null &&
+    pageLang !== null &&
+    pageLang !== "" &&
+    navLang !== pageLang;
+  for (const e of built.content) {
+    if (back) e.setAttribute("lang", pageLang);
+    else e.removeAttribute("lang");
+  }
+}
+
+/** The list at `src`, if it is a 200 JSON answer of the daemon's shape; else null. */
+async function fetchExplorer(
+  win: Window & typeof globalThis,
+  src: string,
+  here: URL,
+  signal: AbortSignal,
+): Promise<ExplorerData | null> {
+  const url = sitePage(src, here);
+  if (url === null) return null;
+  try {
+    // The router's rules: GET, no custom headers, redirects (the login) not followed.
+    const res = await win.fetch(url.href, {
+      method: "GET",
+      credentials: "same-origin",
+      redirect: "manual",
+      signal,
+    });
+    if (res.type === "opaqueredirect" || res.status !== 200) return null;
+    const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+    if (!ct.startsWith("application/json")) return null;
+    return parseExplorer(JSON.parse(await res.text()), here);
+  } catch {
+    return null;
+  }
+}
+
+/** The explorer behaviour, and for tests the list fetch in flight. */
+export interface ExplorerBehaviour extends Behaviour {
+  idle(): Promise<void> | null;
+}
+
+/**
+ * The explorer as a behaviour (P-156): on every page, mark the current page in
+ * the list on screen, and fetch the list only when its version changed.
+ */
+export function explorer(win: Window & typeof globalThis): ExplorerBehaviour {
+  let built: BuiltExplorer | null = null;
+  // The occurrence the reader clicked, for the page that click navigates to.
+  let clicked: { key: string | null; path: string } | null = null;
+  let loading: Promise<void> | null = null;
+
+  const rect = (e: Element): Span => {
+    const r = e.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  };
+
+  /** aria-current on exactly one occurrence of this page, shown in the list. */
+  const mark = (b: BuiltExplorer, click: typeof clicked): void => {
+    const here = win.location.href;
+    const path = new URL(here).pathname;
+    const current: ExplorerEntry[] = [];
+    for (const e of b.entries) {
+      e.a.removeAttribute("aria-current");
+      if (new URL(e.a.getAttribute("href") ?? "", here).pathname === path)
+        current.push(e);
+    }
+    const nav = b.nav;
+    const view = (): Span =>
+      listView(rect(nav), nav.clientTop, nav.clientHeight, win.innerHeight);
+    const v = view();
+    const at =
+      click && click.path === path
+        ? current.findIndex((e) => e.key === click.key)
+        : -1;
+    const chosen =
+      current[
+        chooseOccurrence(
+          current.map((e) => ({
+            open: e.group.hasAttribute("open"),
+            visible: fullyVisible(rect(e.a), v),
+          })),
+          at >= 0 ? at : null,
+        )
+      ];
+    if (!chosen) return;
+    chosen.group.setAttribute("open", "");
+    chosen.a.setAttribute("aria-current", "page");
+    const top = revealScrollTop(rect(chosen.a), view(), nav.scrollTop);
+    if (top !== nav.scrollTop) nav.scrollTop = top;
+  };
+
+  const load = async (
+    doc: Document,
+    nav: HTMLElement,
+    src: string,
+    version: string,
+    signal: AbortSignal,
+    click: typeof clicked,
+  ): Promise<void> => {
+    const data = await fetchExplorer(
+      win,
+      src,
+      new URL(win.location.href),
+      signal,
+    );
+    if (signal.aborted) return;
+    const before = built?.nav === nav ? built : null;
+    if (data === null) {
+      // Fail closed: no list rather than a stale or partial one.
+      nav.hidden = true;
+      nav.replaceChildren();
+      built = null;
+      return;
+    }
+    const scrollTop = nav.scrollTop;
+    const b = buildExplorer(doc, nav, version, data);
+    // The reader's open groups survive a new version; on first render only
+    // the current page's group opens (mark).
+    if (before)
+      for (const [key, g] of before.groups)
+        if (g.hasAttribute("open")) b.groups.get(key)?.setAttribute("open", "");
+    labelExplorer(b, doc);
+    built = b;
+    nav.hidden = false;
+    nav.scrollTop = scrollTop;
+    mark(b, click);
+  };
+
+  return {
+    idle: () => loading,
+    mount(doc) {
+      loading = null;
+      const click = clicked;
+      clicked = null;
+      const nav = doc.getElementById(EXPLORER_ID);
+      const src = nav?.getAttribute("data-src");
+      if (!nav || src === null || src === undefined) return;
+      if (built !== null && built.nav !== nav) built = null;
+      const ac = new AbortController();
+      nav.addEventListener(
+        "click",
+        (ev) => {
+          const a = (ev.target as Element | null)?.closest?.("a");
+          const entry = built?.entries.find((e) => e.a === a);
+          if (!entry) return;
+          const link: LinkFacts = {
+            href: entry.a.getAttribute("href"),
+            target: null,
+            download: false,
+          };
+          const url = routableClick(
+            ev as MouseEvent,
+            link,
+            new URL(win.location.href),
+          );
+          if (url !== null) clicked = { key: entry.key, path: url.pathname };
+        },
+        { signal: ac.signal },
+      );
+      const version = nav.getAttribute("data-version") ?? "";
+      if (built !== null) {
+        labelExplorer(built, doc);
+        mark(built, click);
+      }
+      if (built === null || built.version !== version) {
+        loading = load(doc, nav, src, version, ac.signal, click);
+      }
+      return () => ac.abort();
+    },
+  };
+}
+
 // On one of the site's pages: start once, and publish the component registry
 // (D18). A document without the main landmark is not the site's.
 if (
@@ -938,5 +1380,6 @@ if (
     const router = start(window);
     w.mae = { ...(w.mae ?? {}), site: router };
     router.register("theme", themeControls(window));
+    router.register("explorer", explorer(window));
   }
 }
