@@ -73,6 +73,9 @@ pub(crate) fn isolated(tmp: &std::path::Path) -> crate::config::DaemonConfig {
 }
 
 mod backup_tests;
+mod blob_bench_tests;
+mod blob_limits_tests;
+mod blob_route_tests;
 mod connection_observability_tests;
 mod doctor_exit_code_tests;
 mod identity_binding_listener_tests;

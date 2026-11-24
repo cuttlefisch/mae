@@ -6,6 +6,7 @@
 //! @stability: stable
 
 pub mod artifact_store;
+pub mod blob_store;
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod content_op_policy;

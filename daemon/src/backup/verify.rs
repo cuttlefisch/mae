@@ -78,6 +78,10 @@ fn check_sqlite_integrity(m: &Manifest, dir: &Path, problems: &mut Vec<String>) 
                 mae_daemon::identity_binding::BINDINGS_FILE
             ))
             .map(|f| f.path.as_str()),
+        )
+        .chain(
+            m.file(&super::blobs::db_archive_path())
+                .map(|f| f.path.as_str()),
         );
     for path in sqlite_files {
         if let Err(e) = integrity_ok(&dir.join(path)) {

@@ -112,6 +112,21 @@ rand = "0.10"
 # `auth_deadline` on the sync WebSocket is an RFC 3339 UTC string. Already in
 # this binary (cozo -> env_logger -> humantime), so no new crate.
 humantime = "2"
+# ADR-115 D3a: uploaded images are decoded, stripped of metadata and checked
+# before they are stored. image-rs's umbrella crate over the four codecs the
+# editor workspace already links through resvg (zune-jpeg, png, gif, image-webp,
+# same versions): pure Rust, MIT OR Apache-2.0, with decode limits, EXIF
+# orientation and ICC profile access built in. Only the four formats ADR-115
+# displays; no rayon, no AVIF (its decoder is C). The direct-codec alternative
+# needs `jpeg-encoder` to re-encode a rotated JPEG, whose licence adds IJG,
+# which deny.toml does not allow.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+# ADR-115 D3a: the SVG sanitiser's parser. Read-only, no DTD (refused), MIT OR
+# Apache-2.0; already in the editor workspace through usvg.
+roxmltree = "0.21"
+# Streams a stored blob to the client in constant memory. Already in this
+# binary's graph (hyper-util, iroh), so no new crate.
+tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies]
 hex = "0.4"

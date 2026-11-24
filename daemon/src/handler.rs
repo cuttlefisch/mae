@@ -2451,6 +2451,7 @@ mod tests {
                 budget_per_minute,
                 max_result_bytes: 4_194_304,
                 idle_evict_secs: 1800,
+                max_storage_bytes: 0,
             },
         }
     }
