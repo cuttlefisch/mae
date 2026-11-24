@@ -543,6 +543,7 @@ Source: `shared/site/src/lib.rs`
 |------|------|
 | `address` | mod |
 | `assets` | mod |
+| `components` | mod |
 | `derive` | mod |
 | `explorer` | mod |
 | `order` | mod |
