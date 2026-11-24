@@ -214,6 +214,32 @@ pub(crate) async fn load_gated(
     Ok((coll, encryption))
 }
 
+/// Whether `principal`, already admitted by [`load_gated`], may have an output
+/// that lists the whole KB: the live site's explorer, its content index and
+/// its tag listings (ADR-119 D7, Amendment 3). A query-only member (ADR-067)
+/// may read pages one at a time but not these, which would hand them the KB
+/// that ADR-067 withholds.
+///
+/// A member with full replication, from the same lookup `kb_access` decides
+/// on (`member_role`), so the site can never disagree with the gate about who
+/// is query-only. `None` is the `none`/loopback auth mode, blanket-trusted as
+/// `kb_access` trusts it. Anything else, a non-member included, is refused:
+/// this answers only for readers, and fails closed for anyone else.
+pub(crate) async fn may_list_whole_kb(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    principal: Option<&str>,
+) -> bool {
+    let Some(principal) = principal else {
+        return true;
+    };
+    matches!(
+        collab_handler::member_role(doc_store, kb_id, coll, principal).await,
+        (Some(_), membership::ReplicationPolicy::Full)
+    )
+}
+
 /// Trustworthy encryption mode: derived from the SIGNED op-log, never the
 /// unsigned collection-doc flag (a key-blind relay could spoof that).
 /// `resolve_content_anchor` mirrors `kb_access`'s own owned-vs-joined

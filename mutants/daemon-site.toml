@@ -82,3 +82,77 @@ filter = "test(a_refusal_never_carries_the_site_title)"
 file = "daemon/src/oauth.rs"
 find = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),'''
 replace = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, format!("not found {:?}", chrome.site)),'''
+
+# The listing gate (ADR-119 D7, Amendment 3): a query-only member reads pages
+# but nothing that lists the whole KB. Tests: daemon/src/tests/
+# site_list_gate_tests.rs, on a real signed op-log. Not declared: admitting a
+# non-member to the gate, which load_gated already refuses before it is asked
+# (defence in depth, invisible to any route test).
+
+[[mutant]]
+id = "daemon-site/list-gate-always-open"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_pages_but_nothing_that_lists_the_kb)"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''    let Some(principal) = principal else {
+        return true;
+    };
+    matches!('''
+replace = '''    let Some(principal) = principal else {
+        return true;
+    };
+    true || matches!('''
+
+[[mutant]]
+id = "daemon-site/list-gate-ignores-replication"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(restricting_a_member_takes_the_listings_away_and_lifting_it_gives_them_back)"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''        (Some(_), membership::ReplicationPolicy::Full)'''
+replace = '''        (Some(_), _)'''
+
+[[mutant]]
+id = "daemon-site/explorer-route-unguarded"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_pages_but_nothing_that_lists_the_kb)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        View::Index | View::Tags | View::Tag(_) | View::Explorer if !may_list => SitePage::NotFound,'''
+replace = '''        View::Index | View::Tags | View::Tag(_) if !may_list => SitePage::NotFound,'''
+
+[[mutant]]
+id = "daemon-site/listings-unguarded"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_pages_but_nothing_that_lists_the_kb)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        View::Index | View::Tags | View::Tag(_) | View::Explorer if !may_list => SitePage::NotFound,'''
+replace = '''        View::Explorer if !may_list => SitePage::NotFound,'''
+
+[[mutant]]
+id = "daemon-site/page-names-explorer-for-query-only"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_pages_but_nothing_that_lists_the_kb)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        may_list.then(|| {
+            let json'''
+replace = '''        true.then(|| {
+            let json'''
+
+[[mutant]]
+id = "daemon-site/page-links-tags-for-query-only"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_pages_but_nothing_that_lists_the_kb)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''may_list.then(|| addressing.tag_href(t))'''
+replace = '''Some(addressing.tag_href(t))'''
