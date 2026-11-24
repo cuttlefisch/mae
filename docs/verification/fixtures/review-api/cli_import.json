@@ -1,0 +1,81 @@
+{
+  "$comment": "Amendment 4 D4: `mae-daemon kb import` (operator CLI, never a network method). Shown: the import file, its SHA256SUMS manifest, and the --json output of a dry run, an apply, and the refusals. All or nothing.",
+  "commands": [
+    "mae-daemon kb import --dry-run --kb-id 0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f --dir <import-dir> --json",
+    "mae-daemon kb import --kb-id 0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f --dir <import-dir> --import-hash <hash> --json"
+  ],
+  "import_file": {
+    "format": "mae-import/1",
+    "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+    "pages": [
+      {
+        "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+        "doc_code": "PRO-1",
+        "revisions": [
+          {
+            "rev": 0,
+            "state": "in_force",
+            "source": "src/PRO-1.org",
+            "signed_pdf": "signed/PRO-1_rev00.pdf",
+            "rendered_pdf": null,
+            "approved_by_name": "Example Approver",
+            "approved_on": "1999-12-20",
+            "effective_at": "2000-01-01T00:00:00.000Z",
+            "ended_at": null
+          }
+        ]
+      }
+    ]
+  },
+  "SHA256SUMS": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486  signed/PRO-1_rev00.pdf\nabcd1cc6bd944e751771a2a1e8d3218f44e709cd2b9475b29d1f2adec69aa1e2  src/PRO-1.org\n",
+  "dry_run_output": {
+    "ok": true,
+    "import_hash": "e114947ffdd8c25d0c90bdd84569f1888a43f27aeda5d2fb524fd4f792f1c2b0",
+    "manifest_sha256": "60acf3a759ea4346b7c9fc656df592cf61dd2be600b28acefd39b14af008a6c4",
+    "pages": 1,
+    "revisions": 1,
+    "pdfs": 1
+  },
+  "apply_output": {
+    "ok": true,
+    "event_id": "ev-0000000001",
+    "import_hash": "e114947ffdd8c25d0c90bdd84569f1888a43f27aeda5d2fb524fd4f792f1c2b0"
+  },
+  "refusals": [
+    {
+      "case": "a PDF's bytes do not match its manifest line; nothing written",
+      "output": {
+        "ok": false,
+        "error": {
+          "kind": "manifest_mismatch",
+          "path": "signed/PRO-1_rev00.pdf",
+          "reason": "hash",
+          "expected": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486",
+          "actual": "d121be3103007b41edf96f8262925f8c7d61894afe9a041843b631f69445bc57"
+        }
+      }
+    },
+    {
+      "case": "a manifest line names a file no revision uses",
+      "output": {
+        "ok": false,
+        "error": {
+          "kind": "manifest_mismatch",
+          "path": "signed/extra.pdf",
+          "reason": "unused_line"
+        }
+      }
+    },
+    {
+      "case": "the node already holds a revision effective after the imported one",
+      "output": {
+        "ok": false,
+        "error": {
+          "kind": "import_overlap",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "latest_existing": "2000-06-01T00:00:00.000Z"
+        }
+      }
+    }
+  ]
+}

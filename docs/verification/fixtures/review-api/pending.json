@@ -1,0 +1,109 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.pending",
+  "description": "Open requests on one KB, under the KB's read access. The caller's own inbox across KBs is ADR-117's kb/review.my_pending. Paged with an opaque cursor.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "one open request",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 49,
+        "method": "kb/review.pending",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "limit": 50
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 49,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "requests": [
+            {
+              "request_id": "rq-01a7c2",
+              "set_name": "Purchasing procedures",
+              "state": "in_review",
+              "requested_by": {
+                "label": "Requester"
+              },
+              "requested_at": "2000-01-03T09:00:00.000Z",
+              "reason": "Annual revision of the purchasing procedures.",
+              "in_force_on_approval": false,
+              "revisions": [
+                {
+                  "revision_id": "rv-01a7c2-1",
+                  "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+                  "doc_code": "PRO-1",
+                  "state": "approved"
+                },
+                {
+                  "revision_id": "rv-01a7c2-2",
+                  "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+                  "doc_code": "PRO-2",
+                  "state": "in_review"
+                },
+                {
+                  "revision_id": "rv-01a7c2-3",
+                  "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
+                  "doc_code": "PRO-3",
+                  "state": "in_review"
+                }
+              ],
+              "waiting_for": [
+                {
+                  "capacity": "approve",
+                  "revision_id": "rv-01a7c2-2",
+                  "performer": {
+                    "group": "quality-approvers"
+                  }
+                },
+                {
+                  "capacity": "approve",
+                  "revision_id": "rv-01a7c2-3",
+                  "performer": {
+                    "group": "quality-approvers"
+                  }
+                }
+              ]
+            }
+          ],
+          "next_cursor": null
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "unknown cursor",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 50,
+        "method": "kb/review.pending",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "cursor": "not-a-cursor"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 50,
+        "error": {
+          "code": -32602,
+          "message": "cursor is not one this method issued",
+          "data": {
+            "kind": "invalid_params",
+            "param": "cursor"
+          }
+        }
+      }
+    }
+  ]
+}

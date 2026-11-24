@@ -1,0 +1,160 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.attach_signed_pdf",
+  "description": "Binds an uploaded blob (blob_upload.json) to a revision as its signed PDF: the controlled record of approval (Amendment 4 D3). Write-once. Approved, in-force, superseded or derogated revisions only; by a listed approver who is a person, with a fresh second factor when the KB requires one. The daemon does not verify the PDF's signatures.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "attach after the upload",
+      "precedes": "blob_upload.json",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 35,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 35,
+        "result": {
+          "event_id": "ev-0000000008"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "the KB does not hold that blob",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "6c12e0672dc85c33136cb2d0eb0b8f531503fb7a050575f42507f0529e215497"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "error": {
+          "code": -32603,
+          "message": "this KB holds no blob with that hash",
+          "data": {
+            "kind": "blob_missing"
+          }
+        }
+      }
+    },
+    {
+      "case": "a signed PDF is already attached (different bytes)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 37,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "16367aacb67a4a017c8da8ab95682ccb390863780f7114dda0a0e0c55644c7c4"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 37,
+        "error": {
+          "code": -32603,
+          "message": "this revision already holds a signed_pdf",
+          "data": {
+            "kind": "attachment_exists",
+            "current": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+          }
+        }
+      }
+    },
+    {
+      "case": "the blob is not a PDF",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "8f8cbb7dcf46e0bc7d53265749a6c17d116093a6ba95e442764060c76fd4a86c"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "error": {
+          "code": -32603,
+          "message": "a signed_pdf must be application/pdf",
+          "data": {
+            "kind": "attachment_type"
+          }
+        }
+      }
+    },
+    {
+      "case": "revision still in review",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-2",
+          "blob_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "error": {
+          "code": -32603,
+          "message": "a signed PDF attaches only to an approved revision",
+          "data": {
+            "kind": "invalid_transition",
+            "from": "in_review",
+            "act": "attach_signed_pdf"
+          }
+        }
+      }
+    },
+    {
+      "case": "unknown revision",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-ffffff-1",
+          "blob_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "error": {
+          "code": -32603,
+          "message": "no such revision in this KB",
+          "data": {
+            "kind": "unknown_revision"
+          }
+        }
+      }
+    }
+  ]
+}

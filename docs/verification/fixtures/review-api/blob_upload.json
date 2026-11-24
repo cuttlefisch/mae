@@ -1,0 +1,66 @@
+{
+  "$comment": "ADR-115 P1 as built (daemon/src/oauth_blobs.rs). Not JSON-RPC: the HTTP route that every attachment's bytes go through first (ADR-113 O3). PDFs are stored exactly as they arrive, so the answer's sha256 is the sha256 of the uploaded file. Refusal bodies are {error, error_description, kind, ...data}.",
+  "route": "POST /kb/<kb_id>/blobs",
+  "request": {
+    "method": "POST",
+    "path": "/kb/0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/blobs",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/pdf",
+      "Content-Length": "58",
+      "Content-Digest": "sha-256=:98aYjvagDlV0bE5nVVf5vAaQsPh+YTEDphimsMNI5IY=:"
+    },
+    "body_utf8": "%PDF-1.7\n% example signed original, rev 01 of PRO-1\n%%EOF\n"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486",
+      "size": 58,
+      "media_type": "application/pdf"
+    }
+  },
+  "refusals": [
+    {
+      "case": "Content-Digest does not match the bytes that arrived; nothing stored",
+      "request_headers": {
+        "Content-Digest": "sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "invalid_request",
+          "error_description": "the bytes that arrived do not match Content-Digest",
+          "kind": "blob_hash_mismatch"
+        }
+      }
+    },
+    {
+      "case": "over max_attachment_bytes",
+      "response": {
+        "status": 413,
+        "body": {
+          "error": "invalid_request",
+          "error_description": "upload exceeds the attachment cap",
+          "kind": "quota_exceeded",
+          "size": 209715200,
+          "limit": 104857600
+        }
+      }
+    },
+    {
+      "case": "uploader's storage quota exhausted",
+      "response": {
+        "status": 507,
+        "body": {
+          "error": "insufficient_storage",
+          "error_description": "storage quota exhausted",
+          "kind": "tenant_quota_exceeded"
+        }
+      }
+    }
+  ]
+}

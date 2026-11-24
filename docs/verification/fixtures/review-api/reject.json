@@ -1,0 +1,135 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.reject",
+  "description": "Rejecting any member ends the whole request: every member becomes `rejected`; the named member carries the reason, the others record `rejected_with` pointing at it. A new request freezes again.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "reject one member of the set of three",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 25,
+        "method": "kb/review.reject",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-01a7c2",
+          "revision_id": "rv-01a7c2-2",
+          "reason": "Section 4 contradicts the approved supplier procedure."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 25,
+        "result": {
+          "event_id": "ev-0000000006"
+        }
+      },
+      "afterwards": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 26,
+          "method": "kb/review.status",
+          "params": {
+            "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+            "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3"
+          }
+        },
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 26,
+          "result": {
+            "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+            "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
+            "doc_code": "PRO-3",
+            "draft": true,
+            "working_version": "e7d6c5b4a3928170f6e5d4c3b2a19087",
+            "in_review": null,
+            "approved": null,
+            "in_force": null,
+            "revisions": [
+              {
+                "revision_id": "rv-01a7c2-3",
+                "rev": null,
+                "state": "rejected",
+                "request_id": "rq-01a7c2",
+                "set_name": "Purchasing procedures",
+                "source_sha256": "42f47205b9d6f498188907a227dbcdc4dc628e40dc05766d6f3bd406d3b2bc8f",
+                "version": "e7d6c5b4a3928170f6e5d4c3b2a19087",
+                "created_at": "2000-01-03T09:00:00.000Z",
+                "approved_at": null,
+                "in_force_since": null,
+                "ended_at": "2000-01-03T09:20:00.000Z",
+                "reason": null,
+                "rejected_with": "rv-01a7c2-2",
+                "replaces": null,
+                "superseded_by": null,
+                "imported": null,
+                "signed_pdf_sha256": null
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "request already ended",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 27,
+        "method": "kb/review.reject",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-01a7c2",
+          "revision_id": "rv-01a7c2-2",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 27,
+        "error": {
+          "code": -32603,
+          "message": "this request has already ended",
+          "data": {
+            "kind": "invalid_transition",
+            "from": "rejected",
+            "act": "reject"
+          }
+        }
+      }
+    },
+    {
+      "case": "unknown request",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 28,
+        "method": "kb/review.reject",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-ffffff",
+          "revision_id": "rv-01a7c2-2",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 28,
+        "error": {
+          "code": -32603,
+          "message": "no such request in this KB",
+          "data": {
+            "kind": "unknown_request"
+          }
+        }
+      }
+    }
+  ]
+}

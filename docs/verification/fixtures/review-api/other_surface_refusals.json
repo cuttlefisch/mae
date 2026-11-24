@@ -1,0 +1,53 @@
+{
+  "$comment": "Refusals this amendment adds on surfaces outside kb/review.*: the delete guard (Amendment 4 D7) on the collab handler's node removal, and C9's agent write gate.",
+  "refusals": [
+    {
+      "case": "delete a node that has any revision (also the editor's delete and seed removal)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 63,
+        "method": "kb/collection_node_remove",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 63,
+        "error": {
+          "code": -32603,
+          "message": "a node with a revision is never deleted; derogate it",
+          "data": {
+            "kind": "invalid_transition",
+            "from": "under_control",
+            "act": "delete"
+          }
+        }
+      }
+    },
+    {
+      "case": "an agent writes to a review-enabled KB before the deployment's assessment act",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 64,
+        "method": "sync/update",
+        "params": {
+          "doc": "kbn:0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "update": "<base64 yrs update>"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 64,
+        "error": {
+          "code": -32603,
+          "message": "agent writes to review-enabled KBs are not enabled",
+          "data": {
+            "kind": "agents_not_assessed"
+          }
+        }
+      }
+    }
+  ]
+}
