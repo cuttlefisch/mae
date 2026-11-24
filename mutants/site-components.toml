@@ -44,3 +44,37 @@ file = "shared/site/src/components/mod.rs"
 find = '''                errors.push(e);
                 continue;'''
 replace = '''                errors.push(e);'''
+
+# The live site's wiring (daemon/src/site_components.rs, daemon/src/site.rs,
+# ADR-119 Amendment 4 H1/H2). Tests: daemon/src/tests/site_components_tests.rs.
+
+[[mutant]]
+id = "site-components/site-id-not-reserved"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_node_whose_id_is_site_is_withheld)"
+[[mutant.edit]]
+file = "shared/site/src/address.rs"
+find = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site"];'''
+replace = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json"];'''
+
+[[mutant]]
+id = "site-components/failed-render-output-kept-in-the-shell"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_failing_component_leaves_its_slot_empty_and_the_page_renders)"
+[[mutant.edit]]
+file = "shared/site/src/components/mod.rs"
+find = '''                errors.push(e);
+                continue;'''
+replace = '''                errors.push(e);'''
+
+[[mutant]]
+id = "site-components/asset-served-by-file-name"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_component_asset_is_served_at_its_hash_only)"
+[[mutant.edit]]
+file = "daemon/src/site_components.rs"
+find = '''        let name = asset_name(kind, body);'''
+replace = '''        let name = file.to_string();'''
