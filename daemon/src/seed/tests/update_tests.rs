@@ -194,14 +194,42 @@ async fn an_update_reaches_a_fresh_seed_of_the_new_revision() {
     assert_eq!(record.rev, rev);
     assert!(store.seed_update(KB).await.unwrap().is_none());
 
-    let (got_owner, members) = crate::collab_handler::operator_list_members(&store, KB)
+    the_reader_still_reads_the_new_kb(&store, &owner, &reader).await;
+
+    let versions = store.history_list(KB, ALPHA).await.unwrap();
+    assert!(
+        versions
+            .iter()
+            .any(|v| v.kind == mae_sync::kb::history::VersionKind::Seed),
+        "the content an update replaces is kept: {versions:?}"
+    );
+    let gone = store.history_list(KB, EMPTY).await.unwrap();
+    assert!(gone
+        .iter()
+        .any(|v| v.kind == mae_sync::kb::history::VersionKind::Delete));
+
+    let before = high_waters(&store).await;
+    let again = update_to(&store, &owner, &r, &rev, false).await;
+    assert_eq!(again, Ok(UpdateOutcome::AlreadyApplied));
+    assert_eq!(high_waters(&store).await, before);
+}
+
+/// After an update: the owner and a member added before it are kept, the
+/// member reads the new content dated by the new revision, and a removed
+/// node is no longer served though its document is kept.
+async fn the_reader_still_reads_the_new_kb(
+    store: &Arc<DocStore>,
+    owner: &Identity,
+    reader: &Identity,
+) {
+    let (got_owner, members) = crate::collab_handler::operator_list_members(store, KB)
         .await
         .unwrap();
     assert_eq!(got_owner, owner.fingerprint());
     assert!(members.iter().any(|(m, _)| *m == reader.fingerprint()));
     let fp = reader.fingerprint();
     let read = |id: &'static str| {
-        let store = Arc::clone(&store);
+        let store = Arc::clone(store);
         let fp = fp.clone();
         async move {
             crate::kb_query::dispatch(
@@ -224,23 +252,6 @@ async fn an_update_reaches_a_fresh_seed_of_the_new_revision() {
         store.has_durable_doc(&removed).await,
         "its document is kept"
     );
-
-    let versions = store.history_list(KB, ALPHA).await.unwrap();
-    assert!(
-        versions
-            .iter()
-            .any(|v| v.kind == mae_sync::kb::history::VersionKind::Seed),
-        "the content an update replaces is kept: {versions:?}"
-    );
-    let gone = store.history_list(KB, EMPTY).await.unwrap();
-    assert!(gone
-        .iter()
-        .any(|v| v.kind == mae_sync::kb::history::VersionKind::Delete));
-
-    let before = high_waters(&store).await;
-    let again = update_to(&store, &owner, &r, &rev, false).await;
-    assert_eq!(again, Ok(UpdateOutcome::AlreadyApplied));
-    assert_eq!(high_waters(&store).await, before);
 }
 
 /// An edit made after the apply refuses the update, naming the node, the
