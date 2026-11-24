@@ -261,6 +261,7 @@
         "mae-snippets",
         "mae-spell",
         "mae-sync",
+        "mae-syntax",
         "mae-mcp"
       ],
       "public_items": [
@@ -1407,6 +1408,10 @@
           "kind": "mod"
         },
         {
+          "name": "highlight",
+          "kind": "mod"
+        },
+        {
           "name": "order",
           "kind": "mod"
         },
@@ -1525,6 +1530,16 @@
         {
           "name": "compute_project_identity",
           "kind": "fn"
+        }
+      ]
+    },
+    "mae-syntax": {
+      "path": "shared/syntax/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "HIGHLIGHT_NAMES",
+          "kind": "const"
         }
       ]
     }

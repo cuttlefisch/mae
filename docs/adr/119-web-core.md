@@ -336,7 +336,11 @@ nginx (all MIT or Apache-2.0).
 - A block whose highlighted text is not byte-identical to its source falls back to plain text.
 - An unknown language is plain and logged (P-105–P-110).
 
-The grammars add about 14.5 MB to the binary that carries them.
+The daemon carries every grammar the editor has, plus the four above, from one shared registry
+(`mae-syntax`, its `site-grammars` feature), so a language the editor highlights also highlights on the
+site and there is no second list to drift *(owner, 2026-11-24)*. Measured on the release build, that is
+21 grammars and +28.7 MB (69.6 MB to 98.4 MB). C12's 14.5 MB counted six of the editor's grammars, not
+all of them.
 
 ### D13. Diagrams: a self-built Graphviz WASM module, after a licence opinion
 

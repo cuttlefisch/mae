@@ -167,13 +167,15 @@ pub async fn view(
     // Rendering is CPU work: off the async workers.
     let view = view.clone();
     let opts = opts.clone();
+    let kb_id = kb_id.to_string();
     let answered = tokio::task::spawn_blocking(move || {
-        answer(
-            &derive_with(&sources, &addressing, &opts),
-            &addressing,
-            view,
-            may_copy,
-        )
+        let site = derive_with(&sources, &addressing, &opts);
+        // P-108: never fatal, but said. Once per derivation, which is per
+        // request until the derivation cache (D6) lands.
+        for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
+            tracing::info!("{line}");
+        }
+        answer(&site, &addressing, view, may_copy)
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)
@@ -408,7 +410,8 @@ pub fn document<'a>(
     let chrome = chrome.into();
     let words = Words::of(chrome.lang);
     let article = format!(
-        "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
+        "<article id=\"mae-article\"{}><h1>{}</h1>{}{article}</article>",
+        copy_words(&words),
         escape(title),
         tags_list(&words, tags),
     );
@@ -419,6 +422,25 @@ pub fn document<'a>(
         backlinks_nav(&words, backlinks)
     );
     shell(chrome, title, &article, &panels, explorer)
+}
+
+/// The words the router's copy control needs (P-109), on the article that
+/// holds the source blocks, for the behaviour to read as the theme box's are
+/// read: core chrome, never content. On a fallback the behaviour marks each
+/// button with the catalogue's locale (`data-copy-lang`), since the article
+/// itself holds content in the page's language.
+fn copy_words(words: &Words) -> String {
+    let lang = if words.mark.is_empty() {
+        String::new()
+    } else {
+        format!(" data-copy-lang=\"{}\"", escape(words.s.locale))
+    };
+    format!(
+        " data-copy-label=\"{}\" data-copy-done=\"{}\" data-copy-selected=\"{}\"{lang}",
+        escape(words.s.copy_code),
+        escape(words.s.code_copied),
+        escape(words.s.code_selected),
+    )
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the

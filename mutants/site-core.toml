@@ -62,5 +62,5 @@ targets = ["-p", "mae-site", "--test", "fixture"]
 filter = "test(the_sanitiser_refuses_protocol_relative_urls_spoofed_classes_and_misplaced_attributes)"
 [[mutant.edit]]
 file = "shared/site/src/sanitize.rs"
-find = '''                    .filter(|c| is_content_class(c))'''
-replace = '''                    .filter(|c| !c.is_empty())'''
+find = '''                    .filter(|c| is_content_class(c) || is_token_class(tag, c))'''
+replace = '''                    .filter(|c| !c.is_empty() || is_token_class(tag, c))'''

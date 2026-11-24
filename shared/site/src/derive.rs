@@ -7,7 +7,8 @@
 //! that does not publish. The second render is each such page against it,
 //! and its HTML passes the final sanitiser.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use mae_org::{
     parse, render, semantics, HeadlineIds, NodeOrigin, ParseOptions, RenderOptions, Rendered,
@@ -15,6 +16,7 @@ use mae_org::{
 };
 
 use crate::address::{export_collision_key, is_reserved, valid_id, valid_tag, Addressing};
+use crate::highlight::{highlight_blocks, Highlighter, PlainBlock};
 use crate::sanitize::sanitize_fragment;
 
 /// One page's source: an Org text with a file-level `:ID:`.
@@ -101,6 +103,9 @@ pub struct Site {
     /// The content index search and the graph read (P-77): one entry per
     /// published page, by ID.
     pub index: Vec<IndexEntry>,
+    /// The published pages' source blocks left plain, and why (P-108): one
+    /// per page, language and reason. Empty without a highlighter.
+    pub plain_blocks: BTreeSet<PlainBlock>,
 }
 
 impl Site {
@@ -132,11 +137,22 @@ pub struct IndexEntry {
 }
 
 /// What the site's operator configures (D3): never content.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default)]
 pub struct SiteOptions {
     /// Namespaces whose references (`ns:rest`) are removed from every output
     /// (P-13, P-78).
     pub hidden_namespaces: Vec<String>,
+    /// What highlights source blocks (D12); `None`, every block is plain.
+    pub highlighter: Option<Arc<dyn Highlighter>>,
+}
+
+impl std::fmt::Debug for SiteOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SiteOptions")
+            .field("hidden_namespaces", &self.hidden_namespaces)
+            .field("highlighter", &self.highlighter.is_some())
+            .finish()
+    }
 }
 
 /// The render diagnostics that withhold a page: its output would not be what
@@ -202,6 +218,10 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
         };
         let mut r = render(&p.doc, &p.sem, &options(), &resolver);
         scrub_nodes(&mut r.body, &opts.hidden_namespaces);
+        // After scrubbing: a block is highlighted as it is shown.
+        if let Some(h) = &opts.highlighter {
+            highlight_blocks(&mut r.body, &id, h.as_ref(), &mut site.plain_blocks);
+        }
         site.index.push(IndexEntry {
             id: id.clone(),
             title: p.title.clone().unwrap_or_else(|| id.clone()),

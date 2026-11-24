@@ -132,6 +132,22 @@ export function swappable(current: Document, next: Document): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
+/**
+ * Say `text` through the page's one live region, which the router creates on
+ * first use: navigations and components announce through the same element.
+ */
+export function announce(doc: Document, text: string): void {
+  let live = doc.getElementById(ANNOUNCER_ID);
+  if (live === null) {
+    live = doc.createElement("div");
+    live.id = ANNOUNCER_ID;
+    live.setAttribute("aria-live", "polite");
+    live.className = "mae-visually-hidden";
+    doc.body.append(live);
+  }
+  live.textContent = text;
+}
+
 /** A component: mounted on every page, cleaned up before the next (P-25, P-156). */
 export interface Behaviour {
   mount(root: Document): void | (() => void);
@@ -185,18 +201,6 @@ export function start(win: Window & typeof globalThis): Router {
   let inFlight: AbortController | null = null;
   let current: Promise<void> | null = null;
 
-  const announce = (text: string): void => {
-    let live = doc.getElementById(ANNOUNCER_ID);
-    if (live === null) {
-      live = doc.createElement("div");
-      live.id = ANNOUNCER_ID;
-      live.setAttribute("aria-live", "polite");
-      live.className = "mae-visually-hidden";
-      doc.body.append(live);
-    }
-    live.textContent = text;
-  };
-
   const swapIn = (next: Document): void => {
     unmountAll();
     doc.title = next.title;
@@ -237,7 +241,7 @@ export function start(win: Window & typeof globalThis): Router {
       if (!focus.hasAttribute("tabindex")) focus.setAttribute("tabindex", "-1");
       focus.focus({ preventScroll: true });
     }
-    announce(doc.title);
+    announce(doc, doc.title);
   };
 
   const run = async (url: URL, push: boolean, scrollY: number | null): Promise<void> => {
@@ -1368,6 +1372,112 @@ export function explorer(win: Window & typeof globalThis): ExplorerBehaviour {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Copying a source block (ADR-119 D12; P-109). The daemon's article carries
+// the control's words (`data-copy-*`, from the locale catalogue); this
+// behaviour puts one button before each `pre.org-src`, built with
+// createElement and textContent only (see the file header), so without
+// JavaScript there is none. A click copies the block's code exactly as its
+// text content holds it, consecutive blank lines included, through the async
+// clipboard API; where there is no clipboard, or it refuses, the block's text
+// is selected for the reader to copy instead. Either outcome is announced.
+
+export const ARTICLE_ID = "mae-article";
+/** The copy button's class (`mae-`: chrome, which content cannot wear). */
+export const COPY_CLASS = "mae-copy";
+
+/** The copy control's words, as the article carries them. */
+export interface CopyWords {
+  /** The button's text and accessible name. */
+  label: string;
+  /** Announced when the clipboard took the text. */
+  copied: string;
+  /** Announced when the text was selected instead. */
+  selected: string;
+  /** The catalogue's locale when it is a fallback (the button is marked). */
+  lang: string | null;
+}
+
+/** The words on `article`; null when any is missing (then no control). */
+export function copyWords(article: Element): CopyWords | null {
+  const label = article.getAttribute("data-copy-label");
+  const copied = article.getAttribute("data-copy-done");
+  const selected = article.getAttribute("data-copy-selected");
+  if (!label || !copied || !selected) return null;
+  return { label, copied, selected, lang: article.getAttribute("data-copy-lang") };
+}
+
+/** Select everything inside `el`, for the reader to copy by hand. */
+function selectContents(win: Window, doc: Document, el: Element): void {
+  const selection = win.getSelection();
+  if (selection === null) return;
+  const range = doc.createRange();
+  range.selectNodeContents(el);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+/**
+ * Copy `code`'s text: to the clipboard when there is one that accepts it,
+ * otherwise by selecting it. Announces and returns which happened.
+ */
+export async function copyBlock(
+  win: Window,
+  doc: Document,
+  code: Element,
+  words: CopyWords,
+): Promise<"copied" | "selected"> {
+  const text = code.textContent ?? "";
+  const clipboard = (win.navigator as Navigator | undefined)?.clipboard;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    try {
+      await clipboard.writeText(text);
+      announce(doc, words.copied);
+      return "copied";
+    } catch {
+      // Refused (no permission, document not focused): select instead.
+    }
+  }
+  selectContents(win, doc, code);
+  announce(doc, words.selected);
+  return "selected";
+}
+
+/** The copy control as a behaviour (P-156): buttons on mount, none after. */
+export function codeCopy(win: Window & typeof globalThis): Behaviour {
+  return {
+    mount(doc) {
+      const article = doc.getElementById(ARTICLE_ID);
+      const words = article ? copyWords(article) : null;
+      if (!article || !words) return;
+      const ac = new AbortController();
+      const buttons: HTMLElement[] = [];
+      for (const pre of Array.from(article.querySelectorAll("pre.org-src"))) {
+        const code = Array.from(pre.children).find((c) => c.localName === "code");
+        if (!code) continue;
+        const button = doc.createElement("button");
+        button.type = "button";
+        button.className = COPY_CLASS;
+        button.textContent = words.label;
+        if (words.lang) button.setAttribute("lang", words.lang);
+        button.addEventListener(
+          "click",
+          () => {
+            void copyBlock(win, doc, code, words);
+          },
+          { signal: ac.signal },
+        );
+        pre.before(button);
+        buttons.push(button);
+      }
+      return () => {
+        ac.abort();
+        for (const b of buttons) b.remove();
+      };
+    },
+  };
+}
+
 // On one of the site's pages: start once, and publish the component registry
 // (D18). A document without the main landmark is not the site's.
 if (
@@ -1381,5 +1491,6 @@ if (
     w.mae = { ...(w.mae ?? {}), site: router };
     router.register("theme", themeControls(window));
     router.register("explorer", explorer(window));
+    router.register("copy", codeCopy(window));
   }
 }

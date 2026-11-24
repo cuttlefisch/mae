@@ -2,11 +2,12 @@
 
 use std::collections::HashMap;
 
+use mae_syntax::Grammar;
 use tree_sitter::{Parser, Tree};
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+use tree_sitter_highlight::HighlightConfiguration;
 
 use super::markup::{code_block_byte_ranges, compute_org_spans, MarkupFlavor};
-use super::{HighlightSpan, HIGHLIGHT_NAMES};
+use super::HighlightSpan;
 
 pub(crate) fn highlight_name_to_theme_key(name: &str) -> &'static str {
     match name {
@@ -133,153 +134,70 @@ impl Language {
         }
     }
 
-    /// Get the tree-sitter `Language` for grammars we support via tree-sitter.
-    /// Returns `None` for languages highlighted through a fallback path (org).
-    pub(crate) fn ts_language(self) -> Option<tree_sitter::Language> {
+    /// The grammar this language is highlighted and parsed with, from the
+    /// shared registry (`mae-syntax`). `None` for languages highlighted
+    /// through a fallback path (org).
+    pub(crate) fn grammar(self) -> Option<Grammar> {
         Some(match self {
-            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Language::Toml => tree_sitter_toml_ng::LANGUAGE.into(),
-            Language::Markdown => tree_sitter_md::LANGUAGE.into(),
-            Language::Python => tree_sitter_python::LANGUAGE.into(),
-            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Language::Go => tree_sitter_go::LANGUAGE.into(),
-            Language::Json => tree_sitter_json::LANGUAGE.into(),
-            Language::Bash => tree_sitter_bash::LANGUAGE.into(),
-            Language::Scheme => tree_sitter_scheme::LANGUAGE.into(),
-            Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
-            Language::C => tree_sitter_c::LANGUAGE.into(),
-            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
-            Language::Terraform => tree_sitter_hcl::LANGUAGE.into(),
-            Language::Dockerfile => tree_sitter_containerfile::LANGUAGE.into(),
+            Language::Rust => Grammar::Rust,
+            Language::Toml => Grammar::Toml,
+            Language::Markdown => Grammar::Markdown,
+            Language::Python => Grammar::Python,
+            Language::JavaScript => Grammar::JavaScript,
+            Language::TypeScript => Grammar::TypeScript,
+            Language::Tsx => Grammar::Tsx,
+            Language::Go => Grammar::Go,
+            Language::Json => Grammar::Json,
+            Language::Bash => Grammar::Bash,
+            Language::Scheme => Grammar::Scheme,
+            Language::Yaml => Grammar::Yaml,
+            Language::C => Grammar::C,
+            Language::Cpp => Grammar::Cpp,
+            Language::Ruby => Grammar::Ruby,
+            Language::Terraform => Grammar::Terraform,
+            Language::Dockerfile => Grammar::Dockerfile,
             Language::Org => return None,
         })
     }
-}
 
-/// How many levels below a `#;` comment are still painted as comment. A query
-/// has no descendant operator, so each level is its own pattern; past this
-/// depth a commented-out datum's innermost forms highlight as code again.
-/// 0.24's query stopped at four; Scheme config forms nest deeper than that
-/// (a `define` holding a `let` holding a `cond` clause holding a call).
-pub(crate) const SCHEME_SEXP_COMMENT_DEPTH: usize = 8;
-
-/// `(sexp_comment _ @comment)`, `(sexp_comment (_ _* @comment))`, and so on
-/// down to `depth` levels: the same shape tree-sitter-scheme's own query uses
-/// for `#'` syntax quotes.
-fn scheme_sexp_comment_query(depth: usize) -> String {
-    let mut query = String::from("(sexp_comment _ @comment)\n");
-    for level in 1..depth {
-        let open = "(_ ".repeat(level);
-        let close = ")".repeat(level);
-        query.push_str(&format!("(sexp_comment {open}_* @comment{close})\n"));
+    /// The editor language a grammar is shown as. `None` for a grammar the
+    /// editor does not open buffers in (the KB site's extra grammars, when
+    /// `mae-syntax`'s `site-grammars` feature is on).
+    pub(crate) fn from_grammar(grammar: Grammar) -> Option<Language> {
+        Some(match grammar {
+            Grammar::Rust => Language::Rust,
+            Grammar::Toml => Language::Toml,
+            Grammar::Markdown => Language::Markdown,
+            Grammar::Python => Language::Python,
+            Grammar::JavaScript => Language::JavaScript,
+            Grammar::TypeScript => Language::TypeScript,
+            Grammar::Tsx => Language::Tsx,
+            Grammar::Go => Language::Go,
+            Grammar::Json => Language::Json,
+            Grammar::Bash => Language::Bash,
+            Grammar::Scheme => Language::Scheme,
+            Grammar::Yaml => Language::Yaml,
+            Grammar::C => Language::C,
+            Grammar::Cpp => Language::Cpp,
+            Grammar::Ruby => Language::Ruby,
+            Grammar::Terraform => Language::Terraform,
+            Grammar::Dockerfile => Language::Dockerfile,
+            _ => return None,
+        })
     }
-    query
+
+    /// Get the tree-sitter `Language` for grammars we support via tree-sitter.
+    /// Returns `None` for languages highlighted through a fallback path (org).
+    pub(crate) fn ts_language(self) -> Option<tree_sitter::Language> {
+        self.grammar().map(Grammar::language)
+    }
 }
 
-/// tree-sitter-scheme 0.25's query paints `#;` itself as a comment but lets
-/// every datum under it highlight as live code, because the inner symbol/list
-/// captures nest inside the outer @comment. 0.24 re-captured the datum's
-/// descendants as @comment four levels deep; 0.25 dropped that and kept the
-/// same shape only for `#'`. Append it back for `sexp_comment` (last pattern
-/// wins), deeper than 0.24 went.
-fn scheme_highlights_query() -> &'static str {
-    static SCHEME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SCHEME.get_or_init(|| {
-        format!(
-            "{}\n{}",
-            tree_sitter_scheme::HIGHLIGHTS_QUERY,
-            scheme_sexp_comment_query(SCHEME_SEXP_COMMENT_DEPTH)
-        )
-    })
-}
-
+/// The highlight configuration for `lang`, from the shared registry.
+/// Org has no tree-sitter grammar compatible with tree-sitter 0.25;
+/// `compute_spans` handles it via a regex fallback.
 pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfiguration> {
-    let (highlights, injections, locals) = match lang {
-        Language::Rust => (
-            tree_sitter_rust::HIGHLIGHTS_QUERY,
-            tree_sitter_rust::INJECTIONS_QUERY,
-            "",
-        ),
-        Language::Toml => (tree_sitter_toml_ng::HIGHLIGHTS_QUERY, "", ""),
-        Language::Markdown => (
-            tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-            tree_sitter_md::INJECTION_QUERY_BLOCK,
-            "",
-        ),
-        Language::Python => (tree_sitter_python::HIGHLIGHTS_QUERY, "", ""),
-        Language::JavaScript => (
-            tree_sitter_javascript::HIGHLIGHT_QUERY,
-            tree_sitter_javascript::INJECTIONS_QUERY,
-            tree_sitter_javascript::LOCALS_QUERY,
-        ),
-        // TypeScript reuses JavaScript highlights as a fallback, appending
-        // its own typescript-specific captures on top.
-        Language::TypeScript | Language::Tsx => {
-            // Concatenate JS highlights + TS highlights since the TS
-            // crate's query assumes JS captures are in scope.
-            static TS_COMBINED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-            let combined = TS_COMBINED.get_or_init(|| {
-                format!(
-                    "{}\n{}",
-                    tree_sitter_javascript::HIGHLIGHT_QUERY,
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY
-                )
-            });
-            (
-                combined.as_str(),
-                tree_sitter_javascript::INJECTIONS_QUERY,
-                tree_sitter_typescript::LOCALS_QUERY,
-            )
-        }
-        Language::Go => (tree_sitter_go::HIGHLIGHTS_QUERY, "", ""),
-        Language::C => (tree_sitter_c::HIGHLIGHT_QUERY, "", ""),
-        // The tree-sitter-cpp highlights query only carries C++-specific
-        // captures (templates, qualified ids, …) and assumes the C captures are
-        // in scope — the C++ grammar is a superset of C. Concatenate C + C++
-        // highlights, the same combine pattern TypeScript uses over JavaScript.
-        Language::Cpp => {
-            static CPP_COMBINED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-            let combined = CPP_COMBINED.get_or_init(|| {
-                format!(
-                    "{}\n{}",
-                    tree_sitter_c::HIGHLIGHT_QUERY,
-                    tree_sitter_cpp::HIGHLIGHT_QUERY
-                )
-            });
-            (combined.as_str(), "", "")
-        }
-        Language::Ruby => (tree_sitter_ruby::HIGHLIGHTS_QUERY, "", ""),
-        Language::Json => (tree_sitter_json::HIGHLIGHTS_QUERY, "", ""),
-        Language::Bash => (tree_sitter_bash::HIGHLIGHT_QUERY, "", ""),
-        Language::Scheme => (scheme_highlights_query(), "", ""),
-        Language::Yaml => (tree_sitter_yaml::HIGHLIGHTS_QUERY, "", ""),
-        // tree-sitter-hcl ships no highlights query at all (crate or
-        // upstream repo) -- see queries/hcl_highlights.scm's own doc
-        // comment for the full explanation of this deliberate exception to
-        // "no local .scm files."
-        Language::Terraform => (include_str!("queries/hcl_highlights.scm"), "", ""),
-        Language::Dockerfile => (
-            tree_sitter_containerfile::HIGHLIGHTS_QUERY,
-            tree_sitter_containerfile::INJECTIONS_QUERY,
-            "",
-        ),
-        // Org has no tree-sitter grammar compatible with tree-sitter 0.25;
-        // `compute_spans` handles it via a regex fallback.
-        Language::Org => return None,
-    };
-    let mut config = HighlightConfiguration::new(
-        lang.ts_language()?,
-        lang.id(),
-        highlights,
-        injections,
-        locals,
-    )
-    .ok()?;
-    config.configure(HIGHLIGHT_NAMES);
-    Some(config)
+    mae_syntax::build_configuration(lang.grammar()?)
 }
 
 /// Compute highlight spans using a config cache (avoids rebuilding
@@ -382,37 +300,17 @@ pub(crate) fn highlight_with_config(
     config: &HighlightConfiguration,
     source: &str,
 ) -> Vec<HighlightSpan> {
-    let mut highlighter = Highlighter::new();
-    let events = match highlighter.highlight(config, source.as_bytes(), None, |_| None) {
-        Ok(it) => it,
-        Err(_) => return Vec::new(),
+    let Some(regions) = mae_syntax::highlight(config, source) else {
+        return Vec::new();
     };
-
-    let mut spans = Vec::new();
-    // Stack of active highlight indices — needed because regions can nest.
-    let mut stack: Vec<&'static str> = Vec::new();
-    for event in events {
-        let Ok(event) = event else { continue };
-        match event {
-            HighlightEvent::HighlightStart(h) => {
-                let name = HIGHLIGHT_NAMES.get(h.0).copied().unwrap_or("variable");
-                stack.push(highlight_name_to_theme_key(name));
-            }
-            HighlightEvent::HighlightEnd => {
-                stack.pop();
-            }
-            HighlightEvent::Source { start, end } => {
-                if let Some(&key) = stack.last() {
-                    spans.push(HighlightSpan {
-                        byte_start: start,
-                        byte_end: end,
-                        theme_key: key,
-                    });
-                }
-            }
-        }
-    }
-    spans
+    regions
+        .into_iter()
+        .map(|r| HighlightSpan {
+            byte_start: r.start,
+            byte_end: r.end,
+            theme_key: highlight_name_to_theme_key(r.name),
+        })
+        .collect()
 }
 
 /// Inject per-block syntax highlighting for markdown fenced code blocks.
