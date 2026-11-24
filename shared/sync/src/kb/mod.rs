@@ -27,8 +27,9 @@ mod node;
 pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
 pub use node::{
     body_bytes, validate_attachment_name, AttachmentError, AttachmentProblem, AttachmentRef,
-    AttachmentsRead, KbNodeDoc, MaterializedNode, OrgHeader, ATTACHMENTS_ROOT,
-    MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE,
+    AttachmentsRead, KbNodeDoc, MaterializedNode, OrgHeader, UnwalkableAttachments,
+    ATTACHMENTS_ROOT, MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE, MAX_REFERENCE_DEPTH,
+    MAX_REFERENCE_VALUES,
 };
 
 /// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab

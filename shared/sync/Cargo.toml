@@ -27,6 +27,11 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 # ADR-115 D4: NFC for the attachment NAME collision key (portable_name::fold_key).
 # Already in both lock files (mae-crypto, mae-site, the daemon).
 unicode-normalization = "0.1.25"
+# ADR-115 D4: full default case folding (CaseFolding.txt C+F) for the same key.
+# ICU4X, the Unicode Consortium's own library (Unicode-3.0, allowed by deny.toml);
+# its icu_collections/icu_properties/icu_provider are the versions both lock files
+# already carry through idna, so only icu_casemap and its data crate are new.
+icu_casemap = "~2.2.0"
 
 [dev-dependencies]
 tempfile = "3"

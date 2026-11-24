@@ -19,7 +19,8 @@ mod field_types;
 mod org_header;
 pub use attachments::{
     validate_attachment_name, AttachmentError, AttachmentProblem, AttachmentRef, AttachmentsRead,
-    ATTACHMENTS_ROOT, MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE,
+    UnwalkableAttachments, ATTACHMENTS_ROOT, MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE,
+    MAX_REFERENCE_DEPTH, MAX_REFERENCE_VALUES,
 };
 pub use org_header::OrgHeader;
 
@@ -965,7 +966,11 @@ impl KbNodeDoc {
     /// Returns the reborn document. The old one is unchanged — the caller
     /// replaces it only once the manifest hash advances (ADR-107 D3), so there is
     /// no window in which a peer sees neither.
-    pub fn reborn(&self, client_id: u64) -> Self {
+    ///
+    /// `Err` when the `attachments` root cannot be walked in full
+    /// ([`copy_raw_attachments`](Self::copy_raw_attachments)): such a node is
+    /// not reborn, as a copy that could miss an entry could delete an image.
+    pub fn reborn(&self, client_id: u64) -> Result<Self, UnwalkableAttachments> {
         let mat = self.materialize();
         let mut doc =
             Self::new_with_client_id(&mat.id, &mat.title, &mat.body, &mat.tags, client_id);
@@ -985,10 +990,12 @@ impl KbNodeDoc {
         if let Some(header) = &mat.org_header {
             let _ = doc.set_org_header(header);
         }
-        // Every entry `materialize` read is valid, so none is refused here, and
-        // a pair two peers bound concurrently is copied whole (not through
-        // `set_attachment`, whose collision rule would drop one of the two).
-        let _ = doc.copy_attachments(&mat.attachments);
+        // The root as stored, not `mat.attachments`: that is the display
+        // reader's view, which leaves out every entry it rejects (a legacy
+        // NAME, a malformed shape, a newer peer's), and with them references
+        // the sweep needs. Not through `set_attachment` either, whose
+        // collision rule would drop one of a pair two peers bound concurrently.
+        let _ = doc.copy_raw_attachments(self)?;
         // The creation time is a fact about the node, not about this lineage:
         // without it the reborn node reads as undated and its `version` (which
         // digests `created_at`) changes although no content did.
@@ -997,7 +1004,7 @@ impl KbNodeDoc {
             let mut txn = doc.doc.transact_mut();
             Self::stamp_created_at(&root, &mut txn, created);
         }
-        doc
+        Ok(doc)
     }
 
     /// Access the underlying Doc.
@@ -1058,7 +1065,7 @@ mod rebirth_tests {
         edit_n_times(&mut doc, 200);
         let grown = doc.encode_state().len();
 
-        let reborn = doc.reborn(2);
+        let reborn = doc.reborn(2).unwrap();
         let after_rebirth = reborn.encode_state().len();
 
         assert!(
@@ -1072,7 +1079,7 @@ mod rebirth_tests {
         let mut again = reborn;
         edit_n_times(&mut again, 200);
         let regrown = again.encode_state().len();
-        let reborn_again = again.reborn(3).encode_state().len();
+        let reborn_again = again.reborn(3).unwrap().encode_state().len();
 
         assert!(
             reborn_again < after_rebirth * 2,
@@ -1090,7 +1097,7 @@ mod rebirth_tests {
         edit_n_times(&mut doc, 20);
 
         let before = doc.rebirth_hash();
-        let reborn = doc.reborn(2);
+        let reborn = doc.reborn(2).unwrap();
 
         assert_eq!(
             reborn.rebirth_hash(),
@@ -1107,7 +1114,7 @@ mod rebirth_tests {
     #[test]
     fn rebirth_preserves_every_v2_field_not_just_the_text() {
         let doc = v2_doc();
-        let reborn = doc.reborn(2);
+        let reborn = doc.reborn(2).unwrap();
         let m = reborn.materialize();
 
         assert_eq!(m.title, "Original");
@@ -1157,7 +1164,7 @@ mod rebirth_tests {
     #[test]
     fn a_reborn_document_is_a_fresh_lineage() {
         let doc = v2_doc();
-        let reborn = doc.reborn(4242);
+        let reborn = doc.reborn(4242).unwrap();
         // Compare against a doc created with the same id rather than a bare
         // integer -- `ClientID` is yrs's own type and its representation is not
         // this test's business.

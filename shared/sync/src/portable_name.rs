@@ -3,18 +3,39 @@
 //! names are the same file there. One definition, for every caller that turns
 //! a stored name into a path.
 
+use icu_casemap::CaseMapper;
 use unicode_normalization::UnicodeNormalization;
 
 /// Two names that are one file on a case-insensitive or
 /// normalization-insensitive filesystem (APFS and NTFS by default, many
-/// mounts) share this key: NFC, then lowercase.
+/// mounts) share this key: Unicode canonical caseless matching (Unicode
+/// §3.13, D145), `NFD(toCasefold(NFD(name)))`, written in NFC.
 ///
-/// Lowercase is `str::to_lowercase`, the full Unicode lowercase mapping. It is
-/// close to, not exactly, Unicode case folding: `ß` and `ss` keep different
-/// keys, as they are different files on NTFS, whose own table maps one
-/// character to one character.
+/// `toCasefold` is full default case folding, the C and F mappings of
+/// `CaseFolding.txt`, from ICU4X's compiled data. Not `str::to_lowercase`:
+/// lowercase keeps `ſ` and `s`, `ς` and `σ`, `ß` and `ss` apart, and folding
+/// does not. Not the Turkic (T) mappings either, and no locale anywhere, so
+/// every peer computes the same key for the same name: `İ` folds to `i` plus
+/// a combining dot (not to `i`), and dotless `ı` folds to itself. Unicode
+/// keeps case folding stable for assigned characters, so a peer on an older
+/// Unicode release only differs on characters it does not know yet.
+///
+/// The NFD before folding is what makes folding see a character's decomposed
+/// marks (`U+0345` folds to `ι` only once separated); the NFC after it is
+/// only the spelling of the key, as NFD and NFC are each one-to-one on
+/// canonically equivalent strings.
 pub fn fold_key(name: &str) -> String {
-    name.nfc().collect::<String>().to_lowercase()
+    let decomposed: String = name.nfd().collect();
+    CaseMapper::new()
+        .fold_string(&decomposed)
+        .nfc()
+        .collect::<String>()
+}
+
+/// Length in UTF-8 bytes of `name`'s NFD form: what APFS stores, so the
+/// bytes it counts against `NAME_MAX`.
+pub fn nfd_len(name: &str) -> usize {
+    name.nfd().map(char::len_utf8).sum()
 }
 
 /// Unicode general category Cf (format: zero-width and bidirectional

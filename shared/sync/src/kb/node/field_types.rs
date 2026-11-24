@@ -129,10 +129,44 @@ impl KbNodeDoc {
         let before = doc.field_type_violations();
         let rejected_before = doc.rejected_attachment_names();
         doc.apply_update(update)?;
-        let new_bad_entry = !doc.rejected_attachment_names().is_subset(&rejected_before);
-        Ok(doc
-            .field_type_violations()
-            .into_iter()
-            .find(|k| !before.contains(k) || (*k == ATTACHMENTS && new_bad_entry)))
+        Ok(introduced(&doc, &before, &rejected_before))
     }
+
+    /// As [`field_type_introduced`](Self::field_type_introduced), for an
+    /// update that REPLACES the document whose state is `existing` (a rebirth
+    /// or a reseal): the result is `replacement` alone, and what was already
+    /// mistyped is judged against the document it replaces, not against
+    /// nothing. A rebirth copies the attachments root raw, so a node holding
+    /// a legacy entry is reborn with it; judged against an empty base, that
+    /// entry would read as introduced and the node could never be reborn.
+    /// An entry the replaced document did not hold still counts, and an
+    /// `existing` that does not decode excuses nothing (it is judged as
+    /// empty). `Err` when `replacement` does not decode.
+    pub fn field_type_introduced_replacing(
+        existing: &[u8],
+        replacement: &[u8],
+    ) -> Result<Option<&'static str>, SyncError> {
+        let (before, rejected_before) = match KbNodeDoc::from_bytes(existing) {
+            Ok(old) => (old.field_type_violations(), old.rejected_attachment_names()),
+            Err(_) => Default::default(),
+        };
+        let mut doc = KbNodeDoc {
+            doc: crate::text::new_doc(),
+        };
+        doc.apply_update(replacement)?;
+        Ok(introduced(&doc, &before, &rejected_before))
+    }
+}
+
+/// The first violation of `doc` not in `before`, counting `attachments` as
+/// introduced when it rejects a NAME `rejected_before` did not hold.
+fn introduced(
+    doc: &KbNodeDoc,
+    before: &BTreeSet<&'static str>,
+    rejected_before: &BTreeSet<String>,
+) -> Option<&'static str> {
+    let new_bad_entry = !doc.rejected_attachment_names().is_subset(rejected_before);
+    doc.field_type_violations()
+        .into_iter()
+        .find(|k| !before.contains(k) || (*k == ATTACHMENTS && new_bad_entry))
 }

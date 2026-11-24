@@ -36,19 +36,29 @@
 //!   repaired; an entry with fields this version does not know is read for the
 //!   fields it does and the rest reported, so a newer client's additive field
 //!   does not hide an image from an older one;
-//! - the sweep's reader ([`KbNodeDoc::referenced_hashes`]) fails safe: any
-//!   entry holding a hash where `sha256` would be counts, whatever else about
-//!   it is rejected, so a garbage collector never deletes bytes a peer this
-//!   version does not understand still binds.
+//! - the sweep's reader ([`KbNodeDoc::referenced_hashes`]) fails safe: every
+//!   string anywhere in any entry that is a SHA-256 in hex counts, whatever
+//!   key holds it and however deep, so a garbage collector never deletes
+//!   bytes a peer this version does not understand still binds; a document it
+//!   cannot walk in full is reported unreadable, never read as empty.
+//!
+//! Rebirth copies the root's entries as stored, every key and value, and
+//! never through the NAME rule: a copy that dropped what a reader rejects
+//! would drop the references the sweep needs.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use yrs::{Any, Map, Out, ReadTxn, Transact};
+use yrs::types::text::{Diff, YChange};
+use yrs::types::xml::{Xml, XmlFragment};
+use yrs::types::{AsPrelim, Attrs};
+use yrs::{Any, Array, GetString, Map, Out, ReadTxn, Text, Transact};
 
 use super::KbNodeDoc;
-use crate::portable_name::{fold_key, is_format_char, is_windows_device_name, WINDOWS_FORBIDDEN};
+use crate::portable_name::{
+    fold_key, is_format_char, is_windows_device_name, nfd_len, WINDOWS_FORBIDDEN,
+};
 
 /// The root map's name in a node document.
 pub const ATTACHMENTS_ROOT: &str = "attachments";
@@ -120,7 +130,9 @@ impl std::error::Error for AttachmentError {}
 /// file in the node's attachment directory (ADR-115 E2), the same file on
 /// Linux, macOS and Windows (principle #13), since an export writes it on any
 /// of them:
-/// - not empty, and at most [`MAX_ATTACHMENT_NAME_BYTES`] bytes of UTF-8;
+/// - not empty, and at most [`MAX_ATTACHMENT_NAME_BYTES`] bytes of UTF-8,
+///   both as written and in NFD, the form APFS stores (`é` is 2 bytes
+///   composed and 3 decomposed, so 128 of them fit in NFC and not on APFS);
 /// - not `.` or `..`;
 /// - no `/`, and no `\` (a separator on Windows);
 /// - no control character (Unicode `Cc`: C0, DEL and C1, NUL among them);
@@ -144,6 +156,11 @@ pub fn validate_attachment_name(name: &str) -> Result<(), AttachmentError> {
     }
     if name.len() > MAX_ATTACHMENT_NAME_BYTES {
         return Err(AttachmentError::Name("is longer than 255 bytes"));
+    }
+    if nfd_len(name) > MAX_ATTACHMENT_NAME_BYTES {
+        return Err(AttachmentError::Name(
+            "is longer than 255 bytes decomposed (NFD), as APFS stores it",
+        ));
     }
     if name == "." || name == ".." {
         return Err(AttachmentError::Name("is a directory reference"));
@@ -177,24 +194,225 @@ fn valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// A hash where `sha256` would be in one stored entry, for the sweep: 64 hex
-/// digits, lowercased (the store's spelling; an uppercase one is counted
-/// rather than trusted to be meaningless). Reads a plain map or a nested
-/// shared map, whatever else the entry holds.
-fn entry_hash<T: ReadTxn>(txn: &T, value: &Out) -> Option<String> {
-    let hash = match value {
-        Out::Any(Any::Map(m)) => match m.get(SHA256_KEY) {
-            Some(Any::String(s)) => s.to_string(),
-            _ => return None,
-        },
-        Out::YMap(m) => match m.get(txn, SHA256_KEY) {
-            Some(Out::Any(Any::String(s))) => s.to_string(),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| hash.to_ascii_lowercase())
+/// Deepest nesting the sweep's reader walks below a NAME. Today's entry is a
+/// map of three strings, depth 2; this leaves a newer peer's shape fifteen
+/// times that, and it bounds the recursion a rebirth's deep copy
+/// (`as_prelim`) does on a shared type to a depth no stack notices.
+pub const MAX_REFERENCE_DEPTH: usize = 32;
+/// Most values the sweep's reader walks in one document. Today's entry is
+/// four values (the map and its three fields), so this is 25,000 such
+/// entries, or a thousand entries of a hundred values each: no node an
+/// honest writer makes. Past it, a hostile document costs the sweep one
+/// bounded walk and the KB is not collected, instead of the walk running
+/// as long as the document is big.
+pub const MAX_REFERENCE_VALUES: usize = 100_000;
+
+/// Why the sweep's reader could not vouch for every reference a document
+/// makes, so a sweep must count it unreadable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnwalkableAttachments {
+    /// Nested deeper than [`MAX_REFERENCE_DEPTH`].
+    TooDeep,
+    /// More than [`MAX_REFERENCE_VALUES`] values.
+    TooLarge,
+    /// A value this reader cannot see into: a subdocument, a weak link, a
+    /// shared type of unknown kind, or an XML node whose children do not all
+    /// read.
+    Opaque,
+}
+
+impl std::fmt::Display for UnwalkableAttachments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::TooDeep => "attachments nest deeper than the sweep reads",
+            Self::TooLarge => "attachments hold more values than the sweep reads",
+            Self::Opaque => "attachments hold a value the sweep cannot read",
+        })
+    }
+}
+
+impl std::error::Error for UnwalkableAttachments {}
+
+/// One value still to read.
+enum Pending {
+    Out(Out),
+    Any(Any),
+}
+
+/// The sweep's walk of a document's `attachments` root: iterative, so no
+/// input reaches the stack, and bounded in depth and in values.
+#[derive(Default)]
+struct HashWalk {
+    stack: Vec<(Pending, usize)>,
+    values: usize,
+    hashes: std::collections::BTreeSet<String>,
+}
+
+impl HashWalk {
+    fn push(&mut self, item: Pending, depth: usize) -> Result<(), UnwalkableAttachments> {
+        if depth > MAX_REFERENCE_DEPTH {
+            return Err(UnwalkableAttachments::TooDeep);
+        }
+        self.values += 1;
+        if self.values > MAX_REFERENCE_VALUES {
+            return Err(UnwalkableAttachments::TooLarge);
+        }
+        self.stack.push((item, depth));
+        Ok(())
+    }
+
+    /// Count `s` if it is a SHA-256 in hex once ASCII whitespace is trimmed,
+    /// lowercased (the store's spelling; an uppercase one is counted rather
+    /// than trusted to be meaningless).
+    fn string(&mut self, s: &str) {
+        let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+        if t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+            self.hashes.insert(t.to_ascii_lowercase());
+        }
+    }
+
+    fn attrs(&mut self, attrs: Option<&Attrs>, depth: usize) -> Result<(), UnwalkableAttachments> {
+        for (k, v) in attrs.into_iter().flatten() {
+            self.string(k);
+            self.push(Pending::Any(v.clone()), depth + 1)?;
+        }
+        Ok(())
+    }
+
+    fn any(&mut self, v: Any, depth: usize) -> Result<(), UnwalkableAttachments> {
+        match v {
+            Any::String(s) => self.string(&s),
+            Any::Buffer(b) => {
+                // A digest stored as its 32 raw bytes, or as hex in bytes.
+                if b.len() == 32 {
+                    self.hashes.insert(hex::encode(&b[..]));
+                } else if let Ok(s) = std::str::from_utf8(&b) {
+                    self.string(s);
+                }
+            }
+            Any::Array(a) => {
+                for v in a.iter() {
+                    self.push(Pending::Any(v.clone()), depth + 1)?;
+                }
+            }
+            Any::Map(m) => {
+                for (k, v) in m.iter() {
+                    self.string(k);
+                    self.push(Pending::Any(v.clone()), depth + 1)?;
+                }
+            }
+            Any::Null | Any::Undefined | Any::Bool(_) | Any::Number(_) | Any::BigInt(_) => {}
+        }
+        Ok(())
+    }
+
+    fn text<T: ReadTxn, X: Text + GetString>(
+        &mut self,
+        txn: &T,
+        t: &X,
+        depth: usize,
+    ) -> Result<(), UnwalkableAttachments> {
+        self.string(&t.get_string(txn));
+        // Embeds and formatting attributes, which the string leaves out.
+        for Diff {
+            insert, attributes, ..
+        } in t.diff(txn, YChange::identity)
+        {
+            if !matches!(insert, Out::Any(Any::String(_))) {
+                self.push(Pending::Out(insert), depth + 1)?;
+            }
+            self.attrs(attributes.as_deref(), depth)?;
+        }
+        Ok(())
+    }
+
+    fn xml_attributes<T: ReadTxn, X: Xml>(
+        &mut self,
+        txn: &T,
+        x: &X,
+        depth: usize,
+    ) -> Result<(), UnwalkableAttachments> {
+        for (k, v) in x.attributes(txn) {
+            self.string(k);
+            self.push(Pending::Out(v), depth + 1)?;
+        }
+        Ok(())
+    }
+
+    fn xml_children<T: ReadTxn, X: XmlFragment>(
+        &mut self,
+        txn: &T,
+        x: &X,
+        depth: usize,
+    ) -> Result<(), UnwalkableAttachments> {
+        // The iterator stops at the first child that is not an XML node,
+        // so a short count means children it did not show.
+        let mut seen = 0u32;
+        for child in x.children(txn) {
+            seen += 1;
+            self.push(Pending::Out(child.into()), depth + 1)?;
+        }
+        if seen != x.len(txn) {
+            return Err(UnwalkableAttachments::Opaque);
+        }
+        Ok(())
+    }
+
+    fn out<T: ReadTxn>(
+        &mut self,
+        txn: &T,
+        v: Out,
+        depth: usize,
+    ) -> Result<(), UnwalkableAttachments> {
+        match v {
+            Out::Any(a) => self.any(a, depth)?,
+            Out::YText(t) => self.text(txn, &t, depth)?,
+            Out::YArray(a) => {
+                for v in a.iter(txn) {
+                    self.push(Pending::Out(v), depth + 1)?;
+                }
+            }
+            Out::YMap(m) => {
+                for (k, v) in m.iter(txn) {
+                    self.string(k);
+                    self.push(Pending::Out(v), depth + 1)?;
+                }
+            }
+            Out::YXmlText(t) => {
+                self.text(txn, &t, depth)?;
+                self.xml_attributes(txn, &t, depth)?;
+            }
+            Out::YXmlElement(e) => {
+                self.string(e.tag());
+                self.xml_attributes(txn, &e, depth)?;
+                self.xml_children(txn, &e, depth)?;
+            }
+            Out::YXmlFragment(f) => self.xml_children(txn, &f, depth)?,
+            // A subdocument's content is not in this document, and an
+            // untyped or weak reference has no shape to read by.
+            _ => return Err(UnwalkableAttachments::Opaque),
+        }
+        Ok(())
+    }
+
+    /// Every hash in the root `map`, under any NAME, key or depth.
+    fn root<T: ReadTxn>(
+        txn: &T,
+        map: &yrs::MapRef,
+    ) -> Result<std::collections::BTreeSet<String>, UnwalkableAttachments> {
+        let mut walk = Self::default();
+        for (name, value) in map.iter(txn) {
+            walk.string(name);
+            walk.push(Pending::Out(value), 1)?;
+        }
+        while let Some((item, depth)) = walk.stack.pop() {
+            match item {
+                Pending::Out(v) => walk.out(txn, v, depth)?,
+                Pending::Any(a) => walk.any(a, depth)?,
+            }
+        }
+        Ok(walk.hashes)
+    }
 }
 
 /// RFC 6838 `restricted-name`, lowercase: an alphanumeric first character,
@@ -358,21 +576,31 @@ impl KbNodeDoc {
     }
 
     /// Every blob hash the map binds, for a garbage collector (ADR-115 D5):
-    /// the opposite of [`read_attachments`](Self::read_attachments). An entry
-    /// that reader rejects (a bad NAME, a size stored as a string, a shape a
-    /// newer peer writes) still counts if it holds a hash where `sha256` would
-    /// be, because leaving it out would delete bytes that peer still binds.
+    /// the opposite of [`read_attachments`](Self::read_attachments). Every
+    /// string in the root, at any depth and under any key or NAME, whatever
+    /// its container (a plain value, a nested map or array, a `Y.Text`, an
+    /// XML node), that is 64 hex digits once ASCII whitespace is trimmed,
+    /// lowercased; and a 32-byte buffer, as its hex. An entry the display
+    /// reader rejects (a bad NAME, a size stored as a string, a hash under
+    /// `blob.sha256` or `digest`) counts all the same, because leaving it
+    /// out would delete bytes a peer still binds. Keeping a blob nobody
+    /// needed is the cost.
+    ///
+    /// `Err` when the walk passes [`MAX_REFERENCE_DEPTH`] or
+    /// [`MAX_REFERENCE_VALUES`], or meets a value it cannot see into: the
+    /// caller must then treat the document as unreadable.
     ///
     /// @ai-caution: [data-loss] Never filter this through the NAME rule or
-    /// [`AttachmentRef::validate`]. A missed hash is a deleted image.
-    pub fn referenced_hashes(&self) -> std::collections::BTreeSet<String> {
+    /// [`AttachmentRef::validate`], and never turn an `Err` into an empty
+    /// set. A missed hash is a deleted image.
+    pub fn referenced_hashes(
+        &self,
+    ) -> Result<std::collections::BTreeSet<String>, UnwalkableAttachments> {
         let txn = self.doc.transact();
-        let Some(map) = txn.get_map(ATTACHMENTS_ROOT) else {
-            return Default::default();
-        };
-        map.iter(&txn)
-            .filter_map(|(_, value)| entry_hash(&txn, &value))
-            .collect()
+        match txn.get_map(ATTACHMENTS_ROOT) {
+            Some(map) => HashWalk::root(&txn, &map),
+            None => Ok(Default::default()),
+        }
     }
 
     /// The acceptable entries, by NAME. Empty for a document without the map.
@@ -407,43 +635,64 @@ impl KbNodeDoc {
         Ok(txn.encode_update_v1())
     }
 
-    /// Write a whole map, read from another document of this same node, into
-    /// this one: rebirth, or minting a fresh lineage from a projected node.
-    /// Each NAME and entry is checked on its own but not against the others,
-    /// because the map is a copy of what peers already converged on, and that
-    /// can hold a pair two peers bound concurrently that fold to one key.
-    /// [`set_attachment`](Self::set_attachment) would refuse the second, and a
-    /// copy that dropped it would delete an image. Returns the first entry
-    /// refused, after writing every other.
+    /// Write a node's map, as a `Node` projection holds it, into a document
+    /// being MINTED (a fresh lineage, which has no stored root to copy from).
+    /// Every entry is written as held: no NAME rule, no shape check, and no
+    /// collision rule, because the map is a copy of what peers already
+    /// converged on, and that can hold a pair two peers bound concurrently
+    /// that fold to one key. A copy that refused one would delete an image.
     ///
     /// @ai-caution: [data-loss] Only for copying an existing node map. A NEW
-    /// NAME goes through `set_attachment`, which keeps the collision rule.
+    /// NAME goes through `set_attachment`, which keeps the rules.
     #[must_use = "dropping this update silently prevents the attachments from syncing to peers"]
-    pub fn copy_attachments(
-        &mut self,
-        entries: &BTreeMap<String, AttachmentRef>,
-    ) -> Result<Vec<u8>, (String, AttachmentError)> {
+    pub fn copy_attachments(&mut self, entries: &BTreeMap<String, AttachmentRef>) -> Vec<u8> {
         if entries.is_empty() {
-            return Ok(self.doc.transact_mut().encode_update_v1());
+            return self.doc.transact_mut().encode_update_v1();
         }
         let map = self.doc.get_or_insert_map(ATTACHMENTS_ROOT);
         let mut txn = self.doc.transact_mut();
-        let mut refused = None;
         for (name, attachment) in entries {
-            match validate_attachment_name(name).and_then(|()| attachment.validate()) {
-                Ok(()) => {
-                    map.insert(&mut txn, name.as_str(), attachment.to_any());
+            map.insert(&mut txn, name.as_str(), attachment.to_any());
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Copy `src`'s `attachments` root into this document RAW, for rebirth:
+    /// every key, each value as stored (a plain value is the same value; a
+    /// shared type a deep copy of it). Nothing is checked, so an entry a
+    /// reader rejects (a legacy NAME, a malformed shape, a newer peer's
+    /// fields) crosses with the reference the sweep needs.
+    ///
+    /// `Err`, writing nothing, when the sweep's reader cannot walk `src`'s
+    /// root ([`referenced_hashes`](Self::referenced_hashes)): what cannot be
+    /// read in full cannot be shown to be copied in full, and the bound keeps
+    /// the deep copy's recursion shallow.
+    ///
+    /// @ai-caution: [data-loss] Never route this through `read_attachments`,
+    /// `set_attachment` or the NAME rule: each drops what it rejects.
+    #[must_use = "dropping this update silently prevents the attachments from syncing to peers"]
+    pub fn copy_raw_attachments(
+        &mut self,
+        src: &KbNodeDoc,
+    ) -> Result<Vec<u8>, UnwalkableAttachments> {
+        src.referenced_hashes()?;
+        let src_txn = src.doc.transact();
+        let Some(src_map) = src_txn.get_map(ATTACHMENTS_ROOT) else {
+            return Ok(self.doc.transact_mut().encode_update_v1());
+        };
+        let map = self.doc.get_or_insert_map(ATTACHMENTS_ROOT);
+        let mut txn = self.doc.transact_mut();
+        for (name, value) in src_map.iter(&src_txn) {
+            match value {
+                Out::Any(any) => {
+                    map.insert(&mut txn, name, any);
                 }
-                Err(e) => {
-                    refused.get_or_insert((name.clone(), e));
+                shared => {
+                    map.insert(&mut txn, name, shared.as_prelim(&src_txn));
                 }
             }
         }
-        let update = txn.encode_update_v1();
-        match refused {
-            Some(r) => Err(r),
-            None => Ok(update),
-        }
+        Ok(txn.encode_update_v1())
     }
 
     /// Remove whatever `name` holds, acceptable or not (so a malformed entry

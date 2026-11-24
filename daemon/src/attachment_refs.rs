@@ -17,7 +17,8 @@
 //! A node document is read by the sweep's own reader
 //! ([`KbNodeDoc::referenced_hashes`]), which fails safe: an entry the display
 //! reader rejects (a bad NAME, a size stored as a string, a newer peer's
-//! shape) still counts when it holds a hash. A history version holds only
+//! shape) still counts when it holds a hash, wherever in the entry it is. A
+//! document past that reader's bounds is listed unreadable. A history version holds only
 //! entries its canonical encoding accepts, so its map is read as it is.
 //!
 //! @ai-caution: [data-loss] A holder that cannot be read is listed in
@@ -72,9 +73,11 @@ impl DocStore {
                 Ok((state, _)) => KbNodeDoc::from_bytes(&state).ok(),
                 Err(_) => None,
             };
-            match read {
-                Some(doc) => out.hashes.extend(doc.referenced_hashes()),
-                None => out.unreadable.push(name),
+            // A document the sweep's reader cannot walk in full (too deep,
+            // too many values, a subdocument) is unreadable, not empty.
+            match read.map(|doc| doc.referenced_hashes()) {
+                Some(Ok(hashes)) => out.hashes.extend(hashes),
+                Some(Err(_)) | None => out.unreadable.push(name),
             }
         }
         for node_id in self.history_nodes(kb_id).await? {

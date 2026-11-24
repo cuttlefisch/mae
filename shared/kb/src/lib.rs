@@ -577,12 +577,14 @@ impl Node {
     /// `KbNodeDoc::set_attachment` and only projected onto a `Node`, so a
     /// `Node` that lost its map (an org re-ingest, which cannot express it)
     /// must not be able to delete it from a shared document.
-    #[cfg(feature = "crdt")]
     ///
-    /// The whole map is copied at once (`copy_attachments`), not entry by
-    /// entry through `set_attachment`: a pair of NAMEs two peers bound
-    /// concurrently that fold to one key is part of the converged map, and
-    /// `set_attachment`'s collision rule would drop one of the two.
+    /// Every entry the `Node` holds is written as held (`copy_attachments`),
+    /// with no NAME rule, shape check or collision rule: the map is a copy of
+    /// what peers converged on, which can hold a pair of NAMEs two peers bound
+    /// concurrently that fold to one key, and refusing either would delete an
+    /// image. A minted lineage has no stored root to copy raw; rebirth,
+    /// which does, copies that instead (`KbNodeDoc::reborn`).
+    #[cfg(feature = "crdt")]
     fn write_attachments(&self, doc: &mut mae_sync::kb::KbNodeDoc) {
         let entries = self
             .attachments
@@ -596,9 +598,7 @@ impl Node {
                 (name.clone(), entry)
             })
             .collect();
-        if let Err((name, e)) = doc.copy_attachments(&entries) {
-            tracing::warn!(node = %self.id, name = %name, error = %e, "attachment not carried");
-        }
+        let _ = doc.copy_attachments(&entries);
     }
 
     /// Update this node's fields from a `KbNodeDoc`, and store the encoded CRDT

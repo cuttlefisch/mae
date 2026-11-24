@@ -184,3 +184,34 @@ async fn an_entry_the_reader_rejects_still_holds_its_blob() {
     assert!(live.complete());
     assert_eq!(live.hashes, set(&[1, 2, 3]));
 }
+
+/// A node document the sweep's reader cannot walk in full (here, an entry
+/// nested past its depth bound) is listed unreadable, so the KB's set is not
+/// complete and no sweep may collect from it; it is never read as holding
+/// nothing.
+#[tokio::test]
+async fn a_document_past_the_walk_bound_is_unreadable() {
+    let store = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
+    put_node(&store, "kb", "ok", &[("a.png", 1)]).await;
+    put_node(&store, "kb", "deep", &[("b.png", 2)]).await;
+    let mut value = Any::from(h(3).as_str());
+    for _ in 0..mae_sync::kb::MAX_REFERENCE_DEPTH {
+        let m: std::collections::HashMap<String, Any> = [("k".to_string(), value)].into();
+        value = Any::Map(Arc::new(m));
+    }
+    edit(&store, "kb", "deep", |d| {
+        let sv = d.state_vector();
+        let map = d.doc().get_or_insert_map(ATTACHMENTS_ROOT);
+        map.insert(&mut d.doc().transact_mut(), "deep.png", value);
+        d.encode_diff(&sv).unwrap()
+    })
+    .await;
+
+    let live = store.referenced_blobs("kb").await.unwrap();
+    assert!(!live.complete());
+    assert_eq!(
+        live.unreadable,
+        vec![mae_sync::kb_node_doc_name("kb", "deep")]
+    );
+    assert!(live.hashes.contains(&h(1)));
+}

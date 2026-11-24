@@ -91,7 +91,7 @@ fn rebirth_keeps_the_header_and_its_hash_covers_it() {
     let plain_hash = node.rebirth_hash();
     let _ = node.set_org_header(&header());
     assert_ne!(node.rebirth_hash(), plain_hash);
-    let reborn = node.reborn(7);
+    let reborn = node.reborn(7).unwrap();
     assert_eq!(reborn.org_header(), Some(header()));
     assert_eq!(reborn.rebirth_hash(), node.rebirth_hash());
 }
@@ -114,7 +114,7 @@ fn a_given_creation_time_is_the_one_stamped() {
 fn rebirth_keeps_the_creation_time_and_the_version() {
     for created in [0_i64, 1_600_000_000, 1_794_387_026] {
         let doc = KbNodeDoc::new_created_at("n", "T", "body\n", &["a".into()], created);
-        let reborn = doc.reborn(42);
+        let reborn = doc.reborn(42).unwrap();
         assert_eq!(reborn.created_at(), Some(created));
         assert_eq!(reborn.version(), doc.version());
     }

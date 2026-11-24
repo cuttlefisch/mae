@@ -15,6 +15,10 @@ use crate::kb::history::{decode_content, encode_content};
 #[path = "node_attachment_names_tests.rs"]
 mod names;
 
+/// The sweep's reader at any depth and its bound, and rebirth's raw copy.
+#[path = "node_attachment_sweep_tests.rs"]
+mod sweep;
+
 /// A node document stored by the code before the map existed (commit
 /// 6c77b740, `KbNodeDoc::new_with_client_id` and three v2 setters), with the
 /// version, rebirth hash and history content hash that code computed for it.
@@ -194,7 +198,7 @@ fn rebirth_carries_the_map_and_its_hash_covers_it() {
     let _ = n.set_attachment("d.png", &png(1)).unwrap();
     let _ = n.set_attachment("e.svg", &png(2)).unwrap();
     assert_ne!(n.rebirth_hash(), bare);
-    let reborn = n.reborn(99);
+    let reborn = n.reborn(99).unwrap();
     assert_eq!(reborn.attachments(), n.attachments());
     assert_eq!(reborn.rebirth_hash(), n.rebirth_hash());
     assert_eq!(reborn.version(), n.version());

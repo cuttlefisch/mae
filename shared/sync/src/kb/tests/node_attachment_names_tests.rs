@@ -121,6 +121,10 @@ fn portable_file_name(name: &str) -> bool {
     joined.parent() == Some(dir)
         && joined.file_name().and_then(|f| f.to_str()) == Some(name)
         && name.len() <= MAX_ATTACHMENT_NAME_BYTES
+        && unicode_normalization::UnicodeNormalization::nfd(name)
+            .collect::<String>()
+            .len()
+            <= MAX_ATTACHMENT_NAME_BYTES
         && !name
             .chars()
             .any(|c| c.is_control() || "\\<>:\"|?*".contains(c) || INVISIBLE.contains(&c))
@@ -182,10 +186,102 @@ fn a_writer_refuses_a_second_name_for_the_same_file() {
     }
     // Names that differ by more than case and normalization coexist.
     let mut n = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
-    for name in ["a.png", "b.png", "a.jpg", "ß.png", "ss.png"] {
+    for name in [
+        "a.png",
+        "b.png",
+        "a.jpg",
+        "\u{DF}.png",
+        "\u{131}.png",
+        "i.png",
+    ] {
         let _ = n.set_attachment(name, &png(1)).unwrap();
     }
-    assert_eq!(n.attachments().len(), 5);
+    assert_eq!(n.attachments().len(), 6);
+}
+
+/// Full default case folding (`CaseFolding.txt` C+F), not lowercase: these
+/// pairs are one key, though NFC then `to_lowercase` keeps each apart.
+const FOLD_SAME: &[(&str, &str)] = &[
+    ("\u{17F}.png", "s.png"),        // LONG S
+    ("\u{3C2}.png", "\u{3C3}.png"),  // final and medial sigma
+    ("\u{DF}.png", "ss.png"),        // SHARP S
+    ("\u{1E9E}.png", "SS.png"),      // CAPITAL SHARP S
+    ("\u{FB01}.png", "fi.png"),      // LIGATURE FI
+    ("\u{149}.png", "\u{2BC}n.png"), // N PRECEDED BY APOSTROPHE
+];
+
+/// Turkish dotted and dotless I, by default (non-Turkic) folding: `I` is
+/// `i`, `İ` is `i` plus a combining dot above (so not `i`), and `ı` is only
+/// itself. These pairs are different keys.
+const FOLD_DIFFERENT: &[(&str, &str)] = &[
+    ("\u{131}.png", "i.png"), // DOTLESS I
+    ("\u{131}.png", "I.png"),
+    ("\u{130}.png", "i.png"), // I WITH DOT ABOVE
+    ("\u{130}.png", "I.png"),
+];
+
+#[test]
+fn names_fold_by_unicode_default_case_folding() {
+    use crate::portable_name::fold_key;
+    use unicode_normalization::UnicodeNormalization;
+    for &(a, b) in FOLD_SAME {
+        assert_eq!(fold_key(a), fold_key(b), "{a:?} {b:?}");
+        let lowercase = |s: &str| s.nfc().collect::<String>().to_lowercase();
+        assert_ne!(
+            lowercase(a),
+            lowercase(b),
+            "{a:?} {b:?} is no test of folding"
+        );
+        let mut n = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
+        let _ = n.set_attachment(a, &png(1)).unwrap();
+        assert_eq!(
+            n.set_attachment(b, &png(2)),
+            Err(AttachmentError::NameCollides { existing: a.into() }),
+            "{b:?}"
+        );
+    }
+    for &(a, b) in FOLD_DIFFERENT {
+        assert_ne!(fold_key(a), fold_key(b), "{a:?} {b:?}");
+    }
+    assert_eq!(fold_key("I.png"), fold_key("i.png"));
+    // The key itself, spelled out: the same on every peer, as nothing it is
+    // computed from is a locale or a setting.
+    for (name, key) in [
+        ("\u{130}", "i\u{307}"),
+        ("\u{131}", "\u{131}"),
+        ("I", "i"),
+        ("\u{DF}", "ss"),
+        ("\u{17F}", "s"),
+        ("\u{3C2}", "\u{3C3}"),
+        ("\u{212B}", "\u{E5}"), // ANGSTROM SIGN: decomposed, folded, composed
+        ("CAFE\u{301}", "café"),
+    ] {
+        assert_eq!(fold_key(name), key, "{name:?}");
+    }
+}
+
+/// The 255-byte limit holds for the NFD form too, which APFS stores: a name
+/// of precomposed characters can fit as written and not as stored.
+#[test]
+fn the_byte_limit_counts_the_decomposed_form() {
+    // `é` is 2 bytes in NFC and 3 in NFD.
+    let fits = "é".repeat(85); // 170 bytes, 255 decomposed
+    let over = "é".repeat(86); // 172 bytes, 258 decomposed
+    assert_eq!(validate_attachment_name(&fits), Ok(()));
+    assert!(over.len() <= MAX_ATTACHMENT_NAME_BYTES);
+    assert!(
+        refused_for(&over, "decomposed"),
+        "{:?}",
+        validate_attachment_name(&over)
+    );
+    // Hangul syllables are 3 bytes composed, 6 or 9 decomposed.
+    let hangul = "한".repeat(30); // 90 bytes, 270 decomposed
+    assert!(refused_for(&hangul, "decomposed"));
+    let ascii = "x".repeat(MAX_ATTACHMENT_NAME_BYTES);
+    assert_eq!(validate_attachment_name(&ascii), Ok(()));
+    let mut n = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
+    assert!(n.set_attachment(&over, &png(1)).is_err());
+    assert!(n.set_attachment(&fits, &png(1)).is_ok());
 }
 
 /// Two NAMEs for one file, each valid where it was written, made by peers
@@ -258,7 +354,7 @@ fn rebirth_keeps_a_concurrent_collision_pair() {
         .unwrap();
     b.apply_update(&ua).unwrap();
     assert_eq!(a.attachments().len(), 3);
-    let reborn = a.reborn(99);
+    let reborn = a.reborn(99).unwrap();
     assert_eq!(reborn.attachments(), a.attachments());
     assert_eq!(reborn.rebirth_hash(), a.rebirth_hash());
     assert_eq!(reborn.version(), b.version());
@@ -289,7 +385,7 @@ fn nested(base: &[u8], name: &str, hash: &str) -> Vec<u8> {
 #[test]
 fn the_sweep_reader_counts_what_the_display_reader_rejects() {
     let mut honest = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
-    assert!(honest.referenced_hashes().is_empty());
+    assert!(honest.referenced_hashes().unwrap().is_empty());
     let _ = honest.set_attachment("ok.png", &png(1)).unwrap();
     let base = honest.encode();
     let upper = sha(0xab).to_uppercase();
@@ -340,7 +436,7 @@ fn the_sweep_reader_counts_what_the_display_reader_rejects() {
         (
             "no map at all",
             hostile(&base, "x.png", Any::from(sha(9).as_str())),
-            None,
+            Some(sha(9)),
         ),
     ];
     for (what, update, hash) in cases {
@@ -353,10 +449,10 @@ fn the_sweep_reader_counts_what_the_display_reader_rejects() {
         );
         let mut expected: std::collections::BTreeSet<String> = [sha(1)].into();
         expected.extend(hash);
-        assert_eq!(peer.referenced_hashes(), expected, "{what}");
+        assert_eq!(peer.referenced_hashes().unwrap(), expected, "{what}");
     }
     let old = KbNodeDoc::from_bytes(&before_bytes()).unwrap();
-    assert!(old.referenced_hashes().is_empty());
+    assert!(old.referenced_hashes().unwrap().is_empty());
 }
 
 // --- the field-type check, per entry ---------------------------------------
@@ -408,4 +504,35 @@ fn a_second_bad_entry_is_refused_like_the_first() {
     ] {
         assert_eq!(introduced(update), None, "{what}");
     }
+}
+
+/// A replacement (rebirth, reseal) is judged against the document it
+/// replaces: an entry that document already held is not introduced, one it
+/// did not hold is, and an old document that does not decode excuses nothing.
+#[test]
+fn a_replacement_is_judged_against_the_document_it_replaces() {
+    let mut honest = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
+    let _ = honest.set_attachment("ok.png", &png(1)).unwrap();
+    let clean = honest.encode();
+    let mut legacy = KbNodeDoc::from_bytes(&clean).unwrap();
+    legacy
+        .apply_update(&hostile(&clean, "CON.png", entry(&good_fields())))
+        .unwrap();
+    let existing = legacy.encode();
+    let reborn = legacy.reborn(7).unwrap();
+    let replacing = |old: &[u8], new: &KbNodeDoc| {
+        KbNodeDoc::field_type_introduced_replacing(old, &new.encode_state()).unwrap()
+    };
+    assert_eq!(replacing(&existing, &reborn), None);
+    assert_eq!(replacing(&clean, &reborn), Some("attachments"));
+    assert_eq!(replacing(b"not a document", &reborn), Some("attachments"));
+    let mut more = KbNodeDoc::from_bytes(&reborn.encode()).unwrap();
+    more.apply_update(&hostile(&reborn.encode(), "nul.png", entry(&good_fields())))
+        .unwrap();
+    assert_eq!(replacing(&existing, &more), Some("attachments"));
+    assert_eq!(
+        KbNodeDoc::field_type_introduced(&[], &reborn.encode_state()).unwrap(),
+        Some("attachments"),
+        "judged against nothing, the legacy entry reads as introduced"
+    );
 }

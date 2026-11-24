@@ -190,4 +190,27 @@ mod bridge {
         assert_eq!(doc.attachment("Photo.png"), Some(sync_ref(1)));
         assert_eq!(doc.attachment("photo.png"), Some(sync_ref(2)));
     }
+
+    /// Minting copies every entry the node holds as held, with no NAME rule
+    /// and no shape check: a NAME a later rule refuses (a device name, a
+    /// legacy one) and a shape this version would not write still cross, so
+    /// the sweep's reader still finds every hash in the new lineage.
+    #[test]
+    fn a_fresh_lineage_carries_entries_a_reader_would_reject() {
+        let mut n = node_with("n", &[("CON.png", 1), ("a.png.", 2), ("ok.png", 3)]);
+        n.attachments.get_mut("ok.png").unwrap().media_type = "Image/PNG".into();
+        let doc = n.to_crdt_doc().unwrap();
+        let txn_keys = {
+            use mae_sync::yrs::{Map, ReadTxn, Transact};
+            let txn = doc.doc().transact();
+            let root = txn.get_map(mae_sync::kb::ATTACHMENTS_ROOT).unwrap();
+            let mut keys: Vec<String> = root.keys(&txn).map(String::from).collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(txn_keys, ["CON.png", "a.png.", "ok.png"]);
+        let want: std::collections::BTreeSet<String> =
+            [1, 2, 3].iter().map(|s| att(*s).sha256).collect();
+        assert_eq!(doc.referenced_hashes(), Ok(want));
+    }
 }
