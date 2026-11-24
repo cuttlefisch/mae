@@ -12,6 +12,7 @@ mod object_tests;
 mod plan_tests;
 mod prop_tests;
 mod split_tests;
+mod update_edit_tests;
 mod update_prop_tests;
 mod update_tests;
 mod vector_tests;

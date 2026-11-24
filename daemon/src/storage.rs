@@ -32,7 +32,7 @@ mod writer;
 
 pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
-pub use seed_update::{SeedUpdate, SeedUpdateNode};
+pub use seed_update::{SeedRemoved, SeedUpdate, SeedUpdateNode};
 pub use writer::{inspect_store, CheckpointPolicy, StorageHealth, StoreInspection};
 use writer::{Checkpointer, WriteConn, WriterLock};
 
@@ -334,6 +334,11 @@ pub trait StorageBackend: Send + Sync {
 
     /// Apply a finished seed update to the seed record, atomically.
     async fn seed_update_finish(&self, _kb_id: &str, _applied_at: i64) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// The nodes applied seed updates removed from a KB and none returned.
+    async fn seed_removed(&self, _kb_id: &str) -> Result<Vec<SeedRemoved>, StorageError> {
         Err(no_seed_tables())
     }
 }
@@ -817,6 +822,10 @@ impl StorageBackend for SqliteBackend {
 
     async fn seed_update_finish(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
         seed_update::finish(&*self.pool.write_primary().await, kb_id, applied_at)
+    }
+
+    async fn seed_removed(&self, kb_id: &str) -> Result<Vec<SeedRemoved>, StorageError> {
+        seed_update::removed(&self.pool.lock_primary(), kb_id)
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {

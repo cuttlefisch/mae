@@ -84,7 +84,9 @@ pub use report::{
     render_json, render_text, render_update_json, render_update_text, update_would_apply,
 };
 pub use split::{drawer_id, normalise, regen, split, SplitFile};
-pub use update::{diff as update_diff, update, NodeChange, OutsideEdit, UpdateDiff, UpdateOutcome};
+pub use update::{
+    diff as update_diff, edits_hash, update, NodeChange, OutsideEdit, UpdateDiff, UpdateOutcome,
+};
 
 /// The storage contract a plan is made under. It names the split and the
 /// normalisation above, and enters `plan_hash`, so a change to either is a new

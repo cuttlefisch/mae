@@ -18,9 +18,12 @@
 //! `seed_version` in its seed row. A row from before that column has none: the
 //! node the seed wrote is then rebuilt from the row's blob in the repository
 //! (`node_from_file`, the seed's one mapping), and compared field for field. An
-//! edit is never inferred from a time. Any edit refuses the update, naming the
-//! node, the fields and the editors, unless `--discard-edits`; the discarded
-//! content stays in the node's history.
+//! edit is never inferred from a time. A node an earlier update removed and
+//! this plan returns is judged against its version at the removal, and while
+//! an update is in progress each node against that update's own row (see
+//! `edits`). Any edit refuses the update, naming the node, the fields and the
+//! editors, unless `--discard-edits` gives the dry run's `edits_hash` and the
+//! edits still hash to it; the discarded content stays in the node's history.
 //!
 //! ## Atomicity
 //!
@@ -29,17 +32,20 @@
 //! 1. Read-only checks: the plan has no refusal and is the reviewed one; the KB
 //!    has a finished seed record, is a seed's literal, daemon-owned collection
 //!    and is not end-to-end encrypted; no update to another plan is in
-//!    progress; no node is edited outside the seed (or `--discard-edits`).
+//!    progress; the plan reads the recorded repository; no node is edited
+//!    outside the seed (or `--discard-edits` with the edits' hash).
 //! 2. The update's intent, in ONE transaction (`storage_seed_update`): the new
 //!    plan, and per node its new row, whether it is removed, and its version
 //!    now. From here a re-run with the same plan resumes, a different plan is
 //!    refused, and the rows are the node times.
 //! 3. A resumed run checks again every node not yet done: it must still be at
-//!    the version recorded in step 2, or already at the plan's content.
+//!    the version recorded in step 2, or already at the plan's content (or
+//!    `--discard-edits` with the hash of those that are not).
 //! 4. Each planned node, in path order, one write each: absent, written as a
 //!    new document; different, assigned; equal, kept. Each is then marked done.
 //!    New documents are not in the manifest yet, so no reader sees them.
-//! 5. Each removed node's version is cut, and it is marked done.
+//! 5. Each removed node's version is cut, and it is marked done with its
+//!    document's version, which `kb_seed_removed` keeps once applied.
 //! 6. The manifest: every new node added and every removed node removed in ONE
 //!    update, so the KB's node set switches at once.
 //! 7. The seed record takes the new plan and rows and is marked applied, in one
@@ -52,7 +58,11 @@
 //! @ai-caution: [kb-truth] Never skip the edit check to make an update pass:
 //! a node that differs from what the seed wrote is someone's content.
 //! `--discard-edits` is the operator's decision, made after the dry run named
-//! every such node.
+//! every such node, and bound by `edits_hash` to exactly those edits.
+
+mod edits;
+
+pub use edits::edits_hash;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -63,8 +73,7 @@ use super::apply::{
     build_node, checked_hash, collection_doc, existing_state, refuse, row_from_plan, storage,
     ApplyError, ApplyRefusalKind, ApplyTarget, BY,
 };
-use super::{node_from_file, split, GitRepo, PlannedNode, SeedPlan, CONTRACT};
-use crate::doc_editors::{EditorKind, EditorsSince, InternalWriter};
+use super::{PlannedNode, SeedPlan, CONTRACT};
 use crate::doc_store::DocStore;
 use crate::storage::{SeedNodeRow, SeedRecord, SeedUpdate, SeedUpdateNode};
 
@@ -111,6 +120,13 @@ pub struct OutsideEdit {
     /// editor record.
     pub editors: Vec<String>,
     pub note: Option<String>,
+    /// The document's `version()` now (`None`: no document), which the
+    /// token covers.
+    pub version: Option<String>,
+    /// The apply would discard this edit (overwrite or remove the node).
+    /// `false` only for a node an update in progress already wrote: the
+    /// resume keeps that edit, and the next update finds it.
+    pub discarded: bool,
 }
 
 /// The dry run's comparison of a plan with the KB as applied.
@@ -126,6 +142,9 @@ pub struct UpdateDiff {
     pub removed: Vec<NodeChange>,
     pub unchanged: usize,
     pub edited: Vec<OutsideEdit>,
+    /// [`edits_hash`] of `edited`: what `--discard-edits` must give. `None`
+    /// when the apply would discard no edit.
+    pub edits_hash: Option<String>,
 }
 
 /// The KB as the last apply left it.
@@ -150,21 +169,28 @@ pub async fn diff(
     owner_fp: &str,
 ) -> Result<UpdateDiff, ApplyError> {
     let applied = load_applied(store, kb_id, owner_fp).await?;
-    let in_progress = store
-        .seed_update(kb_id)
-        .await
-        .map_err(storage)?
-        .map(|(u, _)| u.plan_hash);
+    check_repo(plan, &applied.record)?;
+    let progress = store.seed_update(kb_id).await.map_err(storage)?;
+    // Mid-update, each node is judged against the update's own row: the
+    // applied rows no longer describe the nodes it has written.
+    let edited = match &progress {
+        Some((u, nodes)) => {
+            let same = plan.plan_hash().is_some_and(|h| h == u.plan_hash);
+            edits::in_progress(store, kb_id, same.then_some(plan), nodes).await?
+        }
+        None => edits::fresh(store, kb_id, plan, &applied.rows).await?,
+    };
     let placed = place(store, kb_id, plan, &applied.rows).await?;
     let mut d = UpdateDiff {
         kb_id: kb_id.to_string(),
         applied: applied.record.clone(),
-        in_progress,
+        in_progress: progress.map(|(u, _)| u.plan_hash),
         added: Vec::new(),
         changed: Vec::new(),
         removed: removed_rows(plan, &applied.rows).map(removal).collect(),
         unchanged: 0,
-        edited: outside_edits(store, kb_id, &plan.source.repo, &applied.rows).await?,
+        edits_hash: edits_hash(&edited),
+        edited,
     };
     for p in &placed {
         classify(p, applied.rows.get(&p.row.node_id), &mut d);
@@ -214,15 +240,18 @@ fn changed_fields(current: &MaterializedNode, target: &MaterializedNode) -> Vec<
         .collect()
 }
 
-/// Update KB `t.kb_id` to `plan`. See the module doc for the order.
+/// Update KB `t.kb_id` to `plan`. `discard_edits`: the dry run's
+/// `edits_hash`, to overwrite the edits it named. See the module doc for the
+/// order.
 pub async fn update(
     store: &DocStore,
     plan: &SeedPlan,
     t: &ApplyTarget<'_>,
-    discard_edits: bool,
+    discard_edits: Option<&str>,
 ) -> Result<UpdateOutcome, ApplyError> {
     let hash = checked_hash(plan, t.plan_hash)?;
     let applied = load_applied(store, t.kb_id, &t.owner.fingerprint()).await?;
+    check_repo(plan, &applied.record)?;
     let nodes = match store.seed_update(t.kb_id).await.map_err(storage)? {
         Some((u, _)) if u.plan_hash != hash => {
             return Err(refuse(
@@ -276,6 +305,22 @@ async fn load_applied(
     check_collection(store, kb_id, owner_fp).await?;
     let rows = rows.into_iter().map(|r| (r.node_id.clone(), r)).collect();
     Ok(Applied { record, rows })
+}
+
+/// The plan must read the repository the KB was seeded from, compared as
+/// recorded: the path as the operator gave it.
+fn check_repo(plan: &SeedPlan, record: &SeedRecord) -> Result<(), ApplyError> {
+    if plan.source.repo == record.repo {
+        return Ok(());
+    }
+    Err(refuse(
+        ApplyRefusalKind::DifferentRepo,
+        format!(
+            "KB '{}' was seeded from the repository {:?}, not {:?}: give --git exactly as \
+             recorded",
+            record.kb_id, record.repo, plan.source.repo
+        ),
+    ))
 }
 
 async fn check_collection(store: &DocStore, kb_id: &str, owner_fp: &str) -> Result<(), ApplyError> {
@@ -373,12 +418,10 @@ async fn begin(
     hash: &str,
     applied: &Applied,
     t: &ApplyTarget<'_>,
-    discard_edits: bool,
+    discard_edits: Option<&str>,
 ) -> Result<Vec<SeedUpdateNode>, ApplyError> {
-    let edited = outside_edits(store, t.kb_id, &plan.source.repo, &applied.rows).await?;
-    if !edited.is_empty() && !discard_edits {
-        return Err(edited_refusal(&edited));
-    }
+    let edited = edits::fresh(store, t.kb_id, plan, &applied.rows).await?;
+    edits::check_discard(&edited, discard_edits)?;
     let mut nodes = Vec::new();
     for p in place(store, t.kb_id, plan, &applied.rows).await? {
         nodes.push(SeedUpdateNode {
@@ -414,32 +457,16 @@ async fn begin(
     Ok(nodes)
 }
 
-fn edited_refusal(edited: &[OutsideEdit]) -> ApplyError {
-    let names: Vec<String> = edited
-        .iter()
-        .map(|e| format!("{} ({})", e.node_id, e.path))
-        .collect();
-    refuse(
-        ApplyRefusalKind::EditedOutsideSeed,
-        format!(
-            "{} node(s) were edited outside the seed since its last apply: {}; run the dry \
-             run to see how, and give --discard-edits to overwrite them (the edits stay in \
-             each node's history)",
-            edited.len(),
-            names.join(", ")
-        ),
-    )
-}
-
 /// The recorded nodes of an update cut short: they must name this plan's
 /// nodes, and every node not yet done must be where the update left it (its
-/// version when the update began) or already at the plan.
+/// version when the update began) or already at the plan, unless
+/// `discard_edits` is the hash of those that are not.
 async fn resumable(
     store: &DocStore,
     kb_id: &str,
     plan: &SeedPlan,
     nodes: Vec<SeedUpdateNode>,
-    discard_edits: bool,
+    discard_edits: Option<&str>,
 ) -> Result<Vec<SeedUpdateNode>, ApplyError> {
     let planned: BTreeSet<&str> = plan.nodes.iter().map(|n| n.file.id.as_str()).collect();
     let recorded: BTreeSet<&str> = nodes
@@ -454,29 +481,8 @@ async fn resumable(
              record is damaged",
         ));
     }
-    let by_id: HashMap<&str, &PlannedNode> =
-        plan.nodes.iter().map(|n| (n.file.id.as_str(), n)).collect();
-    let mut moved = Vec::new();
-    for n in nodes.iter().filter(|n| !n.done) {
-        let doc = read_node(store, kb_id, &n.row.node_id).await?;
-        let now = doc.as_ref().map(KbNodeDoc::version);
-        let at_plan = match (by_id.get(n.row.node_id.as_str()), &doc) {
-            (Some(p), Some(d)) => same_content(d, &build_node(p, &n.row)),
-            _ => false,
-        };
-        if now != n.base_version && !at_plan {
-            moved.push(OutsideEdit {
-                node_id: n.row.node_id.clone(),
-                path: n.row.path.clone(),
-                fields: None,
-                editors: Vec::new(),
-                note: Some("written since this update began".into()),
-            });
-        }
-    }
-    if !moved.is_empty() && !discard_edits {
-        return Err(edited_refusal(&moved));
-    }
+    let moved = edits::in_progress(store, kb_id, Some(plan), &nodes).await?;
+    edits::check_discard(&moved, discard_edits)?;
     Ok(nodes)
 }
 
@@ -584,18 +590,26 @@ async fn cut(
         .map_err(storage)
 }
 
-/// Step 5 for one removed node: its version, then done. The manifest change
-/// is step 6's.
+/// Step 5 for one removed node: its version cut, then done with the version
+/// its document is left at, against which a later return is judged. The
+/// manifest change is step 6's.
 async fn remove_node(
     store: &DocStore,
     t: &ApplyTarget<'_>,
     u: &SeedUpdateNode,
 ) -> Result<(), ApplyError> {
-    if read_node(store, t.kb_id, &u.row.node_id).await?.is_some() {
-        cut(store, t.kb_id, &u.row.node_id, VersionKind::Delete).await?;
-    }
+    let id = &u.row.node_id;
+    let (wal, version) = match read_node(store, t.kb_id, id).await? {
+        Some(doc) => {
+            cut(store, t.kb_id, id, VersionKind::Delete).await?;
+            let name = mae_sync::kb_node_doc_name(t.kb_id, id);
+            let wal = store.wal_high_water(&name).await.map_err(storage)?;
+            (Some(wal), Some(doc.version()))
+        }
+        None => (None, None),
+    };
     store
-        .seed_update_node_done(t.kb_id, &u.row.node_id, None, None)
+        .seed_update_node_done(t.kb_id, id, wal, version.as_deref())
         .await
         .map_err(storage)
 }
@@ -646,154 +660,6 @@ async fn write_manifest(
         .await
         .map_err(storage)?;
     Ok(())
-}
-
-/// Every recorded node whose document is not what the seed last wrote.
-async fn outside_edits(
-    store: &DocStore,
-    kb_id: &str,
-    repo: &str,
-    rows: &HashMap<String, SeedNodeRow>,
-) -> Result<Vec<OutsideEdit>, ApplyError> {
-    let mut rows: Vec<&SeedNodeRow> = rows.values().collect();
-    rows.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut docs = HashMap::new();
-    for r in &rows {
-        docs.insert(
-            r.node_id.clone(),
-            read_node(store, kb_id, &r.node_id).await?,
-        );
-    }
-    let suspects: Vec<&SeedNodeRow> = rows
-        .iter()
-        .copied()
-        .filter(|r| {
-            let now = docs[&r.node_id].as_ref().map(KbNodeDoc::version);
-            r.seed_version.is_none() || now != r.seed_version
-        })
-        .collect();
-    let written = seed_written(repo, &suspects);
-    let mut out = Vec::new();
-    for r in suspects {
-        let doc = docs[&r.node_id].as_ref();
-        if let Some(e) = judge(r, doc, written.get(&r.node_id)) {
-            out.push(with_editors(store, kb_id, r, e).await);
-        }
-    }
-    Ok(out)
-}
-
-/// Is `r`'s node edited? `written`: the node the seed wrote, rebuilt from the
-/// recorded blob (or why it could not be).
-fn judge(
-    r: &SeedNodeRow,
-    doc: Option<&KbNodeDoc>,
-    written: Option<&Result<KbNodeDoc, String>>,
-) -> Option<OutsideEdit> {
-    let mut e = OutsideEdit {
-        node_id: r.node_id.clone(),
-        path: r.path.clone(),
-        fields: None,
-        editors: Vec::new(),
-        note: None,
-    };
-    let Some(doc) = doc else {
-        e.note = Some("the node's document is missing".into());
-        return Some(e);
-    };
-    let w = match written {
-        Some(Ok(w)) => w,
-        Some(Err(why)) => {
-            e.note = Some(match r.seed_version {
-                None => format!(
-                    "cannot tell: the seed record predates its version digest and the \
-                     seed's write cannot be rebuilt ({why})"
-                ),
-                Some(_) => format!("differs from the seed's write; fields unknown ({why})"),
-            });
-            return Some(e);
-        }
-        None => {
-            e.note = Some("differs from the seed's write".into());
-            return Some(e);
-        }
-    };
-    if r.seed_version.as_ref().is_some_and(|v| *v != w.version()) {
-        e.note = Some(
-            "differs from the seed's write; fields unknown (the recorded blob does not \
-             rebuild it)"
-                .into(),
-        );
-        return Some(e);
-    }
-    let fields = field_diff(&w.materialize(), &doc.materialize());
-    if fields.is_empty() {
-        return None;
-    }
-    e.fields = Some(fields.into_iter().map(|c| c.field).collect());
-    Some(e)
-}
-
-/// Who wrote the node since the seed's write, from the editor record.
-async fn with_editors(
-    store: &DocStore,
-    kb_id: &str,
-    r: &SeedNodeRow,
-    mut e: OutsideEdit,
-) -> OutsideEdit {
-    let name = mae_sync::kb_node_doc_name(kb_id, &r.node_id);
-    let seed = InternalWriter::Seed.as_str();
-    match store
-        .editors_since_wal(&name, r.seed_wal_id.unwrap_or(0))
-        .await
-    {
-        Ok(EditorsSince::Known(rows)) => {
-            e.editors = rows
-                .into_iter()
-                .filter(|w| !(w.kind == EditorKind::Internal && w.editor == seed))
-                .map(|w| format!("{}:{}", w.kind.as_str(), w.editor))
-                .collect();
-        }
-        Ok(_) => e.editors = vec!["(the edit record does not cover it)".into()],
-        Err(err) => e.editors = vec![format!("(edit record unreadable: {err})")],
-    }
-    e
-}
-
-/// The node the seed wrote for each row, rebuilt from its blob: the seed's one
-/// mapping (`node_from_file`) of the file, with the recorded creation time.
-/// Every blob is hash-checked; one git process reads them all.
-fn seed_written(repo: &str, rows: &[&SeedNodeRow]) -> HashMap<String, Result<KbNodeDoc, String>> {
-    if rows.is_empty() {
-        return HashMap::new();
-    }
-    let git = GitRepo::new(repo);
-    let shas: Vec<String> = rows.iter().map(|r| r.blob.clone()).collect();
-    let read = git
-        .object_format()
-        .and_then(|f| git.read_blobs(&shas).map(|b| (f, b)));
-    let (format, blobs) = match read {
-        Ok(v) => v,
-        Err(e) => {
-            return rows
-                .iter()
-                .map(|r| (r.node_id.clone(), Err(e.to_string())))
-                .collect()
-        }
-    };
-    rows.iter()
-        .zip(blobs)
-        .map(|(r, bytes)| (r.node_id.clone(), rebuild(r, &format, &bytes)))
-        .collect()
-}
-
-fn rebuild(r: &SeedNodeRow, format: &str, bytes: &[u8]) -> Result<KbNodeDoc, String> {
-    if super::git::blob_name(format, bytes) != r.blob {
-        return Err(format!("blob {} does not hash to its name", r.blob));
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| "the blob is not UTF-8".to_string())?;
-    let file = split(text).map_err(|_| "the blob no longer splits".to_string())?;
-    Ok(node_from_file(&file, r.created_at))
 }
 
 /// Test-only crash points: stop the update where a killed process would.

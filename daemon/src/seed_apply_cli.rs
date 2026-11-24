@@ -137,15 +137,11 @@ async fn update_dry_run(config: &DaemonConfig, args: &SeedArgs) -> Result<(Strin
     let d = seed::update_diff(&store.doc_store, &plan, kb_id, &identity.fingerprint())
         .await
         .map_err(|e| format!("{} ({:?})", e.detail, e.kind))?;
-    let would = seed::update_would_apply(&d, args.discard_edits);
+    let token = args.discard_edits.as_deref();
+    let would = seed::update_would_apply(&d, token);
     let text = match args.json {
-        true => json_text(&seed::render_update_json(
-            &plan,
-            &opts.exclude,
-            &d,
-            args.discard_edits,
-        )),
-        false => seed::render_update_text(&plan, &d, args.discard_edits),
+        true => json_text(&seed::render_update_json(&plan, &opts.exclude, &d, token)),
+        false => seed::render_update_text(&plan, &d, token),
     };
     Ok((text, would))
 }
@@ -191,9 +187,14 @@ async fn update(config: &DaemonConfig, args: &SeedArgs) -> Result<UpdateOutcome,
         owner: &identity,
         now: now(),
     };
-    seed::update(&store.doc_store, &plan, &target, args.discard_edits)
-        .await
-        .map_err(|e| format!("{} ({:?})", e.detail, e.kind))
+    seed::update(
+        &store.doc_store,
+        &plan,
+        &target,
+        args.discard_edits.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("{} ({:?})", e.detail, e.kind))
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

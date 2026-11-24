@@ -11,6 +11,12 @@
 //!   `done` is set, with the WAL id and version the node was left at, once
 //!   its document is written (or found already written).
 //!
+//! A third table outlives updates: `kb_seed_removed`, one row per node an
+//! applied update removed, with the version its document was left at (the
+//! document is kept). A node that returns in a later plan is judged against
+//! it: a change since the removal is an edit outside the seed. The row goes
+//! when the node returns.
+//!
 //! `kb_seed` and `kb_seed_nodes` keep describing the LAST APPLIED plan until
 //! [`finish`], which replaces them from these rows and deletes these rows, in
 //! one transaction. So the record of what the seed wrote is never half one
@@ -46,6 +52,14 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_seed_update (
      seed_wal_id INTEGER,
      seed_version TEXT,
      PRIMARY KEY (kb_id, node_id)
+ );
+ CREATE TABLE IF NOT EXISTS kb_seed_removed (
+     kb_id TEXT NOT NULL,
+     node_id TEXT NOT NULL,
+     path TEXT NOT NULL,
+     seed_wal_id INTEGER,
+     seed_version TEXT,
+     PRIMARY KEY (kb_id, node_id)
  );";
 
 /// An update in progress: the plan a seeded KB is being moved to.
@@ -75,6 +89,18 @@ pub struct SeedUpdateNode {
     /// there was no document.
     pub base_version: Option<String>,
     pub done: bool,
+}
+
+/// A node an applied update removed from a seeded KB, its document kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedRemoved {
+    pub node_id: String,
+    /// Its path in the plan that last had it.
+    pub path: String,
+    /// The WAL high-water and `version()` of its document when it was
+    /// removed; `None` when it had no document.
+    pub seed_wal_id: Option<u64>,
+    pub seed_version: Option<String>,
 }
 
 pub(super) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
@@ -222,7 +248,7 @@ fn load_nodes(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<SeedUpdateNo
 }
 
 /// Mark one node of the update done, with the WAL id and version it was left
-/// at (both `None` for a removal).
+/// at (for a removal, its document's when it was removed; `None` if none).
 pub(super) fn node_done(
     conn: &sqlite::Connection,
     kb_id: &str,
@@ -275,6 +301,11 @@ fn finish_rows(
         return Err(sql_error("a node of the update is not written yet"));
     }
     let steps = [
+        "DELETE FROM kb_seed_removed WHERE kb_id = ?1 AND node_id IN (SELECT node_id FROM \
+         kb_seed_update_nodes WHERE kb_id = ?1 AND remove = 0)",
+        "INSERT OR REPLACE INTO kb_seed_removed (kb_id, node_id, path, seed_wal_id, \
+         seed_version) SELECT kb_id, node_id, path, seed_wal_id, seed_version FROM \
+         kb_seed_update_nodes WHERE kb_id = ?1 AND remove = 1",
         "DELETE FROM kb_seed_nodes WHERE kb_id = ?1",
         "INSERT INTO kb_seed_nodes (kb_id, node_id, path, blob, normalised_sha256, created_at, \
          created_source, modified_at, modified_source, seed_wal_id, seed_version) \
@@ -308,4 +339,27 @@ fn finish_rows(
         st.next()?;
     }
     Ok(())
+}
+
+/// Every node an applied update removed from `kb_id` and no later one
+/// returned.
+pub(super) fn removed(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+) -> Result<Vec<SeedRemoved>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT node_id, path, seed_wal_id, seed_version FROM kb_seed_removed \
+         WHERE kb_id = ?1 ORDER BY node_id",
+    )?;
+    st.bind((1, kb_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        out.push(SeedRemoved {
+            node_id: st.read("node_id")?,
+            path: st.read("path")?,
+            seed_wal_id: st.read::<Option<i64>, _>("seed_wal_id")?.map(|w| w as u64),
+            seed_version: st.read::<Option<String>, _>("seed_version")?,
+        });
+    }
+    Ok(out)
 }

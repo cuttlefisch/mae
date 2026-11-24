@@ -94,9 +94,9 @@ pub fn render_text(plan: &SeedPlan) -> String {
 }
 
 /// The text report of `kb seed --update --dry-run`: the plan, then how it
-/// differs from the KB as applied. `discard_edits` is whether the apply would
-/// be given `--discard-edits`.
-pub fn render_update_text(plan: &SeedPlan, d: &UpdateDiff, discard_edits: bool) -> String {
+/// differs from the KB as applied. `discard_edits`: the hash the apply would
+/// be given with `--discard-edits`, if any.
+pub fn render_update_text(plan: &SeedPlan, d: &UpdateDiff, discard_edits: Option<&str>) -> String {
     let mut out = render(plan, Some(d));
     update_sections(d, discard_edits, &mut out);
     out
@@ -245,13 +245,17 @@ fn count(plan: &SeedPlan, pred: impl Fn(&PlannedNode) -> bool) -> usize {
     plan.nodes.iter().filter(|n| pred(n)).count()
 }
 
-/// Whether `kb seed --update` would apply `d`: it refuses while a node is
-/// edited outside the seed, unless `--discard-edits`.
-pub fn update_would_apply(d: &UpdateDiff, discard_edits: bool) -> bool {
-    d.edited.is_empty() || discard_edits
+/// Whether `kb seed --update` would apply `d`: it refuses while it would
+/// discard an edit outside the seed, unless `--discard-edits` gives the
+/// edits' hash.
+pub fn update_would_apply(d: &UpdateDiff, discard_edits: Option<&str>) -> bool {
+    match &d.edits_hash {
+        None => true,
+        Some(h) => discard_edits == Some(h.as_str()),
+    }
 }
 
-fn update_sections(d: &UpdateDiff, discard_edits: bool, out: &mut String) {
+fn update_sections(d: &UpdateDiff, discard_edits: Option<&str>, out: &mut String) {
     let a = &d.applied;
     out.push_str(&format!(
         "\n== update of KB '{}' ==\nfrom plan   {} (rev {}, commit {}), applied {}\n",
@@ -271,14 +275,16 @@ fn update_sections(d: &UpdateDiff, discard_edits: bool, out: &mut String) {
     section(out, "removed", d.removed.iter().map(change_line));
     let title = "edited outside the seed since its last apply";
     section(out, title, d.edited.iter().map(edit_line));
-    if !d.edited.is_empty() {
-        out.push_str(if discard_edits {
-            "--discard-edits: the apply overwrites these; each edit stays in its node's history\n"
-        } else {
-            "the apply refuses while these exist; --discard-edits overwrites them (each edit \
-             stays in its node's history)\n"
-        });
-    }
+    let Some(h) = &d.edits_hash else {
+        return;
+    };
+    out.push_str(&format!("edits_hash  {h}\n"));
+    out.push_str(if update_would_apply(d, discard_edits) {
+        "--discard-edits: the apply overwrites these; each edit stays in its node's history\n"
+    } else {
+        "the apply refuses while these exist; --discard-edits <edits_hash> overwrites exactly \
+         these (each edit stays in its node's history); after any other edit it refuses again\n"
+    });
 }
 
 fn change_line(c: &NodeChange) -> String {
@@ -306,6 +312,9 @@ fn edit_line(e: &OutsideEdit) -> String {
     if let Some(n) = &e.note {
         s.push_str(&format!("; {n}"));
     }
+    if !e.discarded {
+        s.push_str("; kept by the update");
+    }
     s
 }
 
@@ -315,7 +324,7 @@ pub fn render_update_json(
     plan: &SeedPlan,
     exclude_requested: &[String],
     d: &UpdateDiff,
-    discard_edits: bool,
+    discard_edits: Option<&str>,
 ) -> Value {
     let mut report = render_json(plan, exclude_requested);
     let change = |c: &NodeChange| {
@@ -337,8 +346,10 @@ pub fn render_update_json(
         "unchanged": d.unchanged,
         "edited_outside_seed": d.edited.iter().map(|e| json!({
             "node_id": e.node_id, "path": e.path, "fields": e.fields,
-            "editors": e.editors, "note": e.note,
+            "editors": e.editors, "note": e.note, "version": e.version,
+            "discarded": e.discarded,
         })).collect::<Vec<_>>(),
+        "edits_hash": d.edits_hash,
         "would_apply": update_would_apply(d, discard_edits),
     });
     report

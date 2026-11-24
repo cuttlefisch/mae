@@ -100,6 +100,12 @@ pub enum ApplyRefusalKind {
     /// `--update` found nodes edited outside the seed since its last apply,
     /// and `--discard-edits` was not given.
     EditedOutsideSeed,
+    /// `--discard-edits` gave a hash other than the edits' now: they changed
+    /// since the dry run.
+    EditsChanged,
+    /// `--update` with a plan read from a repository other than the
+    /// recorded one.
+    DifferentRepo,
     /// `--update` of an end-to-end encrypted KB, whose content the daemon
     /// cannot read or write.
     Encrypted,

@@ -487,6 +487,14 @@ impl DocStore {
         self.storage.seed_update_finish(kb_id, applied_at).await
     }
 
+    /// The nodes applied seed updates removed from `kb_id` and none returned.
+    pub async fn seed_removed(
+        &self,
+        kb_id: &str,
+    ) -> Result<Vec<crate::storage::SeedRemoved>, StorageError> {
+        self.storage.seed_removed(kb_id).await
+    }
+
     /// Mark a seed complete.
     pub async fn seed_complete(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
         self.storage.seed_complete(kb_id, applied_at).await

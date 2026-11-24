@@ -20,10 +20,12 @@ use crate::seed::update::crash::{Step, AT};
 use crate::seed::*;
 
 pub(super) const ALPHA: &str = "0a000000-0000-4000-8000-000000000001";
-const B: &str = "0a000000-0000-4000-8000-000000000002";
+pub(super) const B: &str = "0a000000-0000-4000-8000-000000000002";
 const EMPTY: &str = "0a000000-0000-4000-8000-000000000003";
 const UNICODE: &str = "0a000000-0000-4000-8000-000000000004";
 const NEW: &str = "0a000000-0000-4000-8000-0000000000f1";
+/// A `--discard-edits` value for refusals that come before the edit check.
+const ANY_TOKEN: &str = "any";
 
 /// Every node of the KB as a reader sees it: the manifest, each document.
 pub(super) async fn snapshot(store: &DocStore) -> BTreeMap<String, MaterializedNode> {
@@ -84,6 +86,8 @@ pub(super) fn remove(r: &Repo, path: &str) {
     std::fs::remove_file(r.path().join(path)).unwrap();
 }
 
+/// Update to `rev`. `discard`: give the `edits_hash` of a dry run made just
+/// before, as an operator who reviewed it does.
 pub(super) async fn update_to(
     store: &DocStore,
     owner: &Identity,
@@ -91,9 +95,34 @@ pub(super) async fn update_to(
     rev: &str,
     discard: bool,
 ) -> Result<UpdateOutcome, ApplyError> {
+    let token = match discard {
+        true => dry_run(store, owner, r, rev).await?.edits_hash,
+        false => None,
+    };
+    update_with(store, owner, r, rev, token.as_deref()).await
+}
+
+/// Update to `rev` with `token` as `--discard-edits`.
+pub(super) async fn update_with(
+    store: &DocStore,
+    owner: &Identity,
+    r: &Repo,
+    rev: &str,
+    token: Option<&str>,
+) -> Result<UpdateOutcome, ApplyError> {
     let plan = r.plan(rev);
     let hash = plan.plan_hash().expect("the revision plans cleanly");
-    update(store, &plan, &target(owner, &hash), discard).await
+    update(store, &plan, &target(owner, &hash), token).await
+}
+
+/// The update dry run of `rev`.
+pub(super) async fn dry_run(
+    store: &DocStore,
+    owner: &Identity,
+    r: &Repo,
+    rev: &str,
+) -> Result<UpdateDiff, ApplyError> {
+    update_diff(store, &r.plan(rev), KB, &owner.fingerprint()).await
 }
 
 /// Write `body` into node `id` as principal `who`, as a member's edit lands.
@@ -109,7 +138,7 @@ pub(super) async fn edit_body(store: &DocStore, id: &str, body: &str, who: &str)
 
 /// The WAL high-water of the collection and every node document the store
 /// holds for the KB: equal before and after means nothing was written.
-async fn high_waters(store: &DocStore) -> Vec<(String, u64)> {
+pub(super) async fn high_waters(store: &DocStore) -> Vec<(String, u64)> {
     let mut names = store.document_names().await;
     let nodes = mae_sync::kb_node_doc_name(KB, "");
     names.retain(|n| *n == format!("kbc:{KB}") || n.starts_with(&nodes));
@@ -124,7 +153,7 @@ async fn high_waters(store: &DocStore) -> Vec<(String, u64)> {
 
 /// v2 of the fixture: one body edited, a page given a title and tags, one
 /// page removed, one moved to another folder, one added.
-fn v2(r: &Repo) -> String {
+pub(super) fn v2(r: &Repo) -> String {
     release(r, 1, |r| {
         let alpha = fixture_files()[0].1.replace("Text.\n", "Text, revised.\n");
         r.write("notes/alpha.org", &alpha);
@@ -460,7 +489,7 @@ async fn every_refusal_writes_nothing() {
     let refused = |e: Result<UpdateOutcome, ApplyError>| e.unwrap_err().kind;
 
     let wrong = "0".repeat(64);
-    let k = refused(update(&store, &plan, &target(&owner, &wrong), true).await);
+    let k = refused(update(&store, &plan, &target(&owner, &wrong), Some(ANY_TOKEN)).await);
     assert_eq!(k, ApplyRefusalKind::PlanHashMismatch);
     let mut bad = plan.clone();
     bad.refusals.push(Refusal {
@@ -469,7 +498,7 @@ async fn every_refusal_writes_nothing() {
         detail: String::new(),
     });
     let hash = plan.plan_hash().unwrap();
-    let k = refused(update(&store, &bad, &target(&owner, &hash), true).await);
+    let k = refused(update(&store, &bad, &target(&owner, &hash), Some(ANY_TOKEN)).await);
     assert_eq!(k, ApplyRefusalKind::PlanRefused);
     let mut other = target(&owner, &hash);
     other.kb_id = "never-seeded";
@@ -479,7 +508,7 @@ async fn every_refusal_writes_nothing() {
         .share_doc("kbc:never-seeded", &coll.encode_state(), by)
         .await
         .unwrap();
-    let k = refused(update(&store, &plan, &other, true).await);
+    let k = refused(update(&store, &plan, &other, Some(ANY_TOKEN)).await);
     assert_eq!(k, ApplyRefusalKind::NotSeeded);
     assert_eq!(high_waters(&store).await, before);
     assert!(store.seed_update(KB).await.unwrap().is_none());
@@ -489,7 +518,7 @@ async fn every_refusal_writes_nothing() {
     let e2e = coll.set_encryption(mae_sync::kb::Encryption::E2e);
     store.apply_update(&name, &e2e, None, by).await.unwrap();
     let before = high_waters(&store).await;
-    let k = refused(update(&store, &plan, &target(&owner, &hash), true).await);
+    let k = refused(update(&store, &plan, &target(&owner, &hash), Some(ANY_TOKEN)).await);
     assert_eq!(k, ApplyRefusalKind::Encrypted);
     assert_eq!(high_waters(&store).await, before);
 
@@ -498,7 +527,7 @@ async fn every_refusal_writes_nothing() {
     crate::seed::apply::crash::BEFORE_NODE.with(|c| c.set(Some(1)));
     let _ = apply(&unfinished, &v1, &target(&owner, &v1.plan_hash().unwrap())).await;
     crate::seed::apply::crash::BEFORE_NODE.with(|c| c.set(None));
-    let k = refused(update(&unfinished, &plan, &target(&owner, &hash), true).await);
+    let k = refused(update(&unfinished, &plan, &target(&owner, &hash), Some(ANY_TOKEN)).await);
     assert_eq!(k, ApplyRefusalKind::SeedUnfinished);
 }
 
