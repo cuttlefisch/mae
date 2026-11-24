@@ -15,6 +15,7 @@
 //! NOT encrypted: whatever holds the archive holds the key.
 
 mod archive;
+mod blobs;
 mod create;
 mod manifest;
 mod verify;
