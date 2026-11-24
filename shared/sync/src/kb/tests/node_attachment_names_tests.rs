@@ -487,15 +487,27 @@ fn a_second_bad_entry_is_refused_like_the_first() {
             "a good entry spoilt",
             hostile(&base, "ok.png", with("size", None)),
         ),
+        (
+            "a new bad value under the NAME already bad",
+            hostile(&base, "m1", with("media_type", None)),
+        ),
+        (
+            "a too-deep value under the NAME already bad",
+            hostile(&base, "m1", deep_any(MAX_REFERENCE_DEPTH + 4)),
+        ),
     ] {
         assert_eq!(introduced(update), Some("attachments"), "{what}");
     }
-    // The legacy document stays writable: touching only its bad entry, or
-    // adding a good one, introduces nothing.
+    // The legacy document stays writable: rewriting its bad entry with the
+    // same value, repairing it, or adding a good one, introduces nothing.
     for (what, update) in [
         (
-            "the bad entry rewritten",
-            hostile(&base, "m1", with("media_type", None)),
+            "the bad entry rewritten unchanged",
+            hostile(&base, "m1", with("size", None)),
+        ),
+        (
+            "the bad entry repaired",
+            hostile(&base, "m1", entry(&good_fields())),
         ),
         (
             "a good entry added",
@@ -534,5 +546,33 @@ fn a_replacement_is_judged_against_the_document_it_replaces() {
         KbNodeDoc::field_type_introduced(&[], &reborn.encode_state()).unwrap(),
         Some("attachments"),
         "judged against nothing, the legacy entry reads as introduced"
+    );
+}
+
+/// `depth` maps, each holding the next under `k`.
+fn deep_any(depth: usize) -> Any {
+    (0..depth).fold(Any::Null, |inner, _| {
+        Any::Map(std::sync::Arc::new(
+            [("k".to_string(), inner)].into_iter().collect(),
+        ))
+    })
+}
+
+/// A document already holding a too-deep bad entry stays writable: an edit
+/// that leaves the entry alone introduces nothing.
+#[test]
+fn a_too_deep_bad_entry_already_held_does_not_block_other_edits() {
+    let mut honest = KbNodeDoc::new_with_client_id("n", "T", "B", &[], 1);
+    let _ = honest.set_attachment("ok.png", &png(1)).unwrap();
+    let clean = honest.encode();
+    let mut legacy = KbNodeDoc::from_bytes(&clean).unwrap();
+    legacy
+        .apply_update(&hostile(&clean, "deep", deep_any(MAX_REFERENCE_DEPTH + 4)))
+        .unwrap();
+    let base = legacy.encode();
+    let update = hostile(&base, "new.png", entry(&good_fields()));
+    assert_eq!(
+        KbNodeDoc::field_type_introduced(&base, &update).unwrap(),
+        None
     );
 }

@@ -155,3 +155,17 @@ find = '''    let decomposed: String = name.nfd().collect();
         .collect::<String>()'''
 replace = '''    let _ = CaseMapper::new;
     name.nfc().collect::<String>().to_lowercase()'''
+
+[[mutant]]
+id = "sync-attachment-map/field-type-compares-names-only"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(a_second_bad_entry_is_refused_like_the_first)"
+ref = "the field-type check compares a rejected entry's NAME and value, so no new bad value hides under a NAME already bad (D4)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''                (name, rendered)
+'''
+replace = '''                let _ = rendered;
+                (name, None)
+'''

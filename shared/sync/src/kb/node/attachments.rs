@@ -762,20 +762,101 @@ impl KbNodeDoc {
         }
     }
 
-    /// The NAMEs of the entries a writer must not introduce: a bad name or a
-    /// bad shape (unknown extra fields are fine, so a newer client's additive
-    /// field never trips an older daemon). For the field-type check, which
-    /// compares them entry by entry.
-    pub(super) fn rejected_attachment_names(&self) -> std::collections::BTreeSet<String> {
-        self.read_attachments()
+    /// The entries a writer must not introduce: a bad name or a bad shape
+    /// (unknown extra fields are fine, so a newer client's additive field
+    /// never trips an older daemon), each as its NAME and its value rendered
+    /// canonically. For the field-type check, which compares them entry by
+    /// entry: comparing NAMEs alone would let an update swap a new bad value
+    /// in under a NAME that was already bad. `None`: a value too deep to
+    /// render. It compares equal to another `None` under the same NAME, so a
+    /// document already holding one stays writable; swapping one too-deep
+    /// value for another goes unseen, which costs nothing, as the sweep
+    /// reads such a document as unreadable and keeps every blob.
+    pub(super) fn rejected_attachment_entries(
+        &self,
+    ) -> std::collections::BTreeSet<(String, Option<String>)> {
+        let names: Vec<String> = self
+            .read_attachments()
             .problems
             .into_iter()
             .filter_map(|p| match p {
                 AttachmentProblem::Rejected { name, .. } => Some(name),
                 AttachmentProblem::UnknownFields { .. } => None,
             })
+            .collect();
+        if names.is_empty() {
+            return Default::default();
+        }
+        use yrs::types::ToJson;
+        let txn = self.doc.transact();
+        let Some(map) = txn.get_map(ATTACHMENTS_ROOT) else {
+            return Default::default();
+        };
+        names
+            .into_iter()
+            .map(|name| {
+                let value = map.get(&txn, &name).map(|v| v.to_json(&txn));
+                let mut out = String::new();
+                let rendered = match value {
+                    Some(v) => canonical_any(&v, 0, &mut out).then_some(out),
+                    None => Some(out),
+                };
+                (name, rendered)
+            })
             .collect()
     }
+}
+
+/// `v` written to `out` with map keys in order and every value tagged by its
+/// type, so two values render alike only when they are equal. `false` past
+/// [`MAX_REFERENCE_DEPTH`].
+fn canonical_any(v: &Any, depth: usize, out: &mut String) -> bool {
+    use std::fmt::Write;
+    if depth > MAX_REFERENCE_DEPTH {
+        return false;
+    }
+    match v {
+        Any::Null => out.push('n'),
+        Any::Undefined => out.push('u'),
+        Any::Bool(b) => out.push(if *b { 'T' } else { 'F' }),
+        Any::Number(f) => {
+            let _ = write!(out, "f{:016x};", f.to_bits());
+        }
+        Any::BigInt(i) => {
+            let _ = write!(out, "i{i};");
+        }
+        Any::String(s) => {
+            let _ = write!(out, "s{}:{s}", s.len());
+        }
+        Any::Buffer(b) => {
+            let _ = write!(out, "b{}:", b.len());
+            for byte in b.iter() {
+                let _ = write!(out, "{byte:02x}");
+            }
+        }
+        Any::Array(a) => {
+            let _ = write!(out, "a{}[", a.len());
+            for item in a.iter() {
+                if !canonical_any(item, depth + 1, out) {
+                    return false;
+                }
+            }
+            out.push(']');
+        }
+        Any::Map(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            let _ = write!(out, "m{}{{", m.len());
+            for k in keys {
+                let _ = write!(out, "{}:{k}", k.len());
+                if !canonical_any(&m[k], depth + 1, out) {
+                    return false;
+                }
+            }
+            out.push('}');
+        }
+    }
+    true
 }
 
 fn problem_name(p: &AttachmentProblem) -> &str {
