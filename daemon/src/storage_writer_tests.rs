@@ -91,7 +91,7 @@ async fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-const WRITE_KINDS: usize = 11;
+const WRITE_KINDS: usize = 12;
 
 /// One write of each kind the backend has, by `kind`; `(t, i)` keeps keys apart.
 async fn write_one(b: &SqliteBackend, kind: usize, t: usize, i: usize) -> Result<(), StorageError> {
@@ -107,9 +107,47 @@ async fn write_one(b: &SqliteBackend, kind: usize, t: usize, i: usize) -> Result
         6 => b.history_cut(version(t, i), 1).await.map(drop),
         7 => b.history_append_head(&head(&kb)).await,
         8 => b.seed_insert(&seed(&kb), &[]).await,
-        9 => b.seed_set_node_wal(&kb, "n", 1).await,
-        _ => b.seed_complete(&kb, 1).await,
+        9 => b.seed_set_node_wal(&kb, "n", 1, "v").await,
+        10 => b.seed_complete(&kb, 1).await,
+        _ => seed_update_writes(b, &kb).await,
     }
+}
+
+/// Every write a seed update makes, in its order: the record it updates, the
+/// intent, a node done, the finish.
+async fn seed_update_writes(b: &SqliteBackend, kb: &str) -> Result<(), StorageError> {
+    b.seed_insert(&seed(kb), &[]).await?;
+    let row = crate::storage::SeedNodeRow {
+        node_id: "n".into(),
+        path: "n.org".into(),
+        blob: "b".into(),
+        normalised_sha256: "s".into(),
+        created_at: 1,
+        created_source: "git".into(),
+        modified_at: 1,
+        modified_source: "git".into(),
+        seed_wal_id: None,
+        seed_version: None,
+    };
+    let node = crate::storage::SeedUpdateNode {
+        row,
+        remove: false,
+        base_version: None,
+        done: false,
+    };
+    let u = crate::storage::SeedUpdate {
+        kb_id: kb.into(),
+        plan_hash: "p2".into(),
+        repo: "r".into(),
+        rev: "v2".into(),
+        commit: "c".into(),
+        tree: "t".into(),
+        excluded: Vec::new(),
+        started_at: 2,
+    };
+    b.seed_update_begin(&u, &[node]).await?;
+    b.seed_update_node_done(kb, "n", Some(1), Some("v")).await?;
+    b.seed_update_finish(kb, 3).await
 }
 
 fn version(t: usize, i: usize) -> Checkpoint {

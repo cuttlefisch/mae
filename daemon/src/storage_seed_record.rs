@@ -9,8 +9,12 @@
 //!   short, which is how a re-run tells its own unfinished KB from another).
 //! - `kb_seed_nodes`: one row per seeded node: its source path (where export
 //!   writes it back), its blob and N(F) digest, the git times and their
-//!   sources, and the WAL id of the write that installed it (edits after it are
-//!   the node's working-copy history).
+//!   sources, the WAL id of the write that installed it (edits after it are
+//!   the node's working-copy history), and the node's `version` digest right
+//!   after that write (`seed_version`): what the seed wrote, which a later
+//!   `kb seed --update` compares the node with to find edits made outside it.
+//!   A row from before that column has none (`seed::update` then rebuilds what
+//!   the seed wrote from the recorded blob).
 //!
 //! A later ADR-113 build records the imported, in-force act from these rows
 //! (Amendment 1, A4).
@@ -40,6 +44,7 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_seed (
      modified_at INTEGER NOT NULL,
      modified_source TEXT NOT NULL,
      seed_wal_id INTEGER,
+     seed_version TEXT,
      PRIMARY KEY (kb_id, node_id),
      UNIQUE (kb_id, path)
  );";
@@ -78,10 +83,29 @@ pub struct SeedNodeRow {
     pub modified_source: String,
     /// The WAL id of the write that installed the node; `None` before it.
     pub seed_wal_id: Option<u64>,
+    /// `KbNodeDoc::version()` of the node as that write left it; `None` before
+    /// it, and on a row recorded before this field existed.
+    pub seed_version: Option<String>,
 }
 
 pub(super) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
-    conn.execute(SCHEMA)
+    conn.execute(SCHEMA)?;
+    // A database from before `seed_version`: add it, asking first rather than
+    // ignoring the error, so a real failure is not taken for "already there".
+    if !has_column(conn, "kb_seed_nodes", "seed_version")? {
+        conn.execute("ALTER TABLE kb_seed_nodes ADD COLUMN seed_version TEXT")?;
+    }
+    Ok(())
+}
+
+fn has_column(conn: &sqlite::Connection, table: &str, column: &str) -> Result<bool, sqlite::Error> {
+    let mut st = conn.prepare(format!("SELECT name FROM pragma_table_info('{table}')"))?;
+    while st.next()? == sqlite::State::Row {
+        if st.read::<String, _>(0)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The record and node rows of `kb_id`, if it was seeded here.
@@ -122,7 +146,7 @@ pub(super) fn load_nodes(
 ) -> Result<Vec<SeedNodeRow>, StorageError> {
     let mut st = conn.prepare(
         "SELECT node_id, path, blob, normalised_sha256, created_at, created_source, \
-         modified_at, modified_source, seed_wal_id FROM kb_seed_nodes \
+         modified_at, modified_source, seed_wal_id, seed_version FROM kb_seed_nodes \
          WHERE kb_id = ?1 AND (?2 IS NULL OR node_id = ?2) ORDER BY path",
     )?;
     st.bind((1, kb_id))?;
@@ -139,6 +163,7 @@ pub(super) fn load_nodes(
             modified_at: st.read("modified_at")?,
             modified_source: st.read("modified_source")?,
             seed_wal_id: st.read::<Option<i64>, _>("seed_wal_id")?.map(|w| w as u64),
+            seed_version: st.read::<Option<String>, _>("seed_version")?,
         });
     }
     Ok(rows)
@@ -212,18 +237,23 @@ fn insert_node(
     Ok(())
 }
 
-/// Record the WAL id of the write that installed a seeded node.
+/// Record the WAL id of the write that installed a seeded node, and the
+/// node's version as it left it.
 pub(super) fn set_node_wal(
     conn: &sqlite::Connection,
     kb_id: &str,
     node_id: &str,
     wal_id: u64,
+    version: &str,
 ) -> Result<(), StorageError> {
-    let mut st = conn
-        .prepare("UPDATE kb_seed_nodes SET seed_wal_id = ?3 WHERE kb_id = ?1 AND node_id = ?2")?;
+    let mut st = conn.prepare(
+        "UPDATE kb_seed_nodes SET seed_wal_id = ?3, seed_version = ?4 \
+         WHERE kb_id = ?1 AND node_id = ?2",
+    )?;
     st.bind((1, kb_id))?;
     st.bind((2, node_id))?;
     st.bind((3, wal_id as i64))?;
+    st.bind((4, version))?;
     st.next()?;
     Ok(())
 }

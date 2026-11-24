@@ -404,6 +404,32 @@ impl GitRepo {
         Ok(String::from_utf8_lossy(&out).trim().to_string())
     }
 
+    /// Whether commit `ancestor` is `descendant` or in its history
+    /// (`git merge-base --is-ancestor`). Both must be full object ids: they
+    /// come from a seed record and a resolved plan, never from the operator.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, SeedError> {
+        let is_oid = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit());
+        if !is_oid(ancestor) || !is_oid(descendant) {
+            return Err(SeedError(format!(
+                "not object ids: {ancestor:?}, {descendant:?}"
+            )));
+        }
+        let out = self
+            .command()
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .output()
+            .map_err(|e| SeedError(format!("cannot run git: {e}")))?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(SeedError(format!(
+                "git merge-base failed in {}: {}",
+                self.dir.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))),
+        }
+    }
+
     /// `(commit, tree)` for `rev`, which must name a commit (a tag is peeled).
     pub fn resolve(&self, rev: &str) -> Result<(String, String), SeedError> {
         if rev.is_empty() || rev.starts_with('-') {
