@@ -256,7 +256,13 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
             properties,
             id: id.clone(),
         };
-        list_under_tags(&mut site.tags, &page);
+        for t in &page.tags {
+            site.tags.entry(t.clone()).or_default().push(PageRef {
+                title: page.title.clone(),
+                id: page.id.clone(),
+                href: page.href.clone(),
+            });
+        }
         site.pages.insert(id, page);
     }
     finish_lists(&mut site);
@@ -436,17 +442,6 @@ fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
         }
     }
     out
-}
-
-/// `page` under each of its tags, for the tag pages (P-70).
-fn list_under_tags(tags: &mut BTreeMap<String, Vec<PageRef>>, page: &DerivedPage) {
-    for t in &page.tags {
-        tags.entry(t.clone()).or_default().push(PageRef {
-            title: page.title.clone(),
-            id: page.id.clone(),
-            href: page.href.clone(),
-        });
-    }
 }
 
 /// The file node's properties but its `ID` (see [`DerivedPage::properties`]).
