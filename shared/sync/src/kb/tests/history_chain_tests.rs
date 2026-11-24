@@ -3,7 +3,7 @@
 //! metadata intact; different entries never share a hash; stored content is
 //! accepted only in its one canonical encoding.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use proptest::prelude::*;
 
@@ -80,6 +80,24 @@ fn arb_text() -> impl Strategy<Value = String> {
     .prop_map(|v| v.concat())
 }
 
+/// Zero to two valid attachment entries (ADR-115 D4), so every history
+/// property also covers a node with attachments.
+fn arb_attachments() -> impl Strategy<Value = BTreeMap<String, AttachmentRef>> {
+    let entry = (
+        any::<[u8; 32]>(),
+        0..=MAX_ATTACHMENT_SIZE,
+        prop::sample::select(&["image/png", "application/octet-stream"][..]),
+    )
+        .prop_map(|(h, size, media_type)| AttachmentRef {
+            sha256: hex::encode(h),
+            size,
+            media_type: media_type.into(),
+        });
+    let name =
+        prop::sample::select(&["a.png", "ñ.jpg", "v1..2.svg", "😀"][..]).prop_map(String::from);
+    prop::collection::btree_map(name, entry, 0..3)
+}
+
 fn arb_node() -> impl Strategy<Value = MaterializedNode> {
     let lists = (
         prop::collection::vec(arb_text(), 0..3),
@@ -97,9 +115,18 @@ fn arb_node() -> impl Strategy<Value = MaterializedNode> {
             any::<bool>(),
         )),
     );
-    let props = prop::collection::hash_map(arb_text(), arb_text(), 0..3);
+    let props = (
+        prop::collection::hash_map(arb_text(), arb_text(), 0..3),
+        arb_attachments(),
+    );
     (arb_text(), arb_text(), lists, opts, props).prop_map(
-        |(title, body, (tags, links, aliases), (kind, source, sv, created, header), properties)| {
+        |(
+            title,
+            body,
+            (tags, links, aliases),
+            (kind, source, sv, created, header),
+            (properties, attachments),
+        )| {
             MaterializedNode {
                 id: NODE.into(),
                 title,
@@ -119,6 +146,7 @@ fn arb_node() -> impl Strategy<Value = MaterializedNode> {
                     has_title_line: t,
                     has_filetags_line: f,
                 }),
+                attachments,
             }
         },
     )

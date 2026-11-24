@@ -14,8 +14,13 @@ use crate::SyncError;
 
 use super::sv_has_ops_beyond;
 
+mod attachments;
 mod field_types;
 mod org_header;
+pub use attachments::{
+    validate_attachment_name, AttachmentError, AttachmentProblem, AttachmentRef, AttachmentsRead,
+    ATTACHMENTS_ROOT, MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE,
+};
 pub use org_header::OrgHeader;
 
 const ID_KEY: &str = "id";
@@ -91,6 +96,10 @@ pub struct MaterializedNode {
     /// The org header shape a seeded node came from (`org_header`). `None`
     /// for every node not made by a seed.
     pub org_header: Option<OrgHeader>,
+    /// The `attachments` map (ADR-115 D4): NAME to the blob it is bound to.
+    /// Empty for a document without one. Part of the node's content: a
+    /// replaced image is a new version.
+    pub attachments: std::collections::BTreeMap<String, AttachmentRef>,
 }
 
 impl MaterializedNode {
@@ -115,6 +124,7 @@ impl MaterializedNode {
             source,
             created_at,
             org_header,
+            attachments,
         } = self;
         let mut h = Sha256::new();
         let mut put = |b: &[u8]| {
@@ -151,6 +161,11 @@ impl MaterializedNode {
         if let Some(bytes) = org_header::digest_bytes(org_header.as_ref()) {
             put(&bytes);
         }
+        // Appended only when non-empty, like `org_header`, so every node without
+        // attachments keeps the version it had.
+        if let Some(bytes) = attachments::digest_bytes(attachments) {
+            put(&bytes);
+        }
         h.finalize().into()
     }
 }
@@ -168,6 +183,8 @@ fn unix_now() -> i64 {
 /// Schema:
 /// - Root YMap "node" contains: id (String), title (YText), body (YText),
 ///   tags (YArray<String>), links (YArray<String>), meta (YMap<String, String>)
+/// - Root YMap "attachments" (optional, ADR-115 D4): NAME to `{sha256, size,
+///   media_type}`; see the `attachments` module for why it is a root
 ///
 /// All Doc instances use UTF-16 offset kind for cross-client consistency.
 pub struct KbNodeDoc {
@@ -766,19 +783,23 @@ impl KbNodeDoc {
         }
     }
 
-    /// Apply a remote update. Returns whether content actually changed
-    /// (detected via SHA-256 hash comparison, since yrs state vectors are
-    /// monotonically increasing even for undo operations).
+    /// Apply a remote update. Returns whether anything a reader sees changed:
+    /// [`version`](Self::version) before and after, since yrs state vectors
+    /// grow even for undo operations.
+    ///
+    /// The comparison was [`content_hash`](Self::content_hash) (title, body
+    /// and tags) until the `attachments` map: a remote update that only
+    /// replaced an image, or only changed a v2 field, reported no change, so
+    /// the editor's copy of the node never took it.
     pub fn apply_update(&mut self, update: &[u8]) -> Result<bool, SyncError> {
-        let hash_before = self.content_hash();
+        let before = self.version();
         let update =
             yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
         let mut txn = self.doc.transact_mut();
         txn.apply_update(update)
             .map_err(|e| SyncError::Encoding(e.to_string()))?;
         drop(txn);
-        let hash_after = self.content_hash();
-        Ok(hash_before != hash_after)
+        Ok(before != self.version())
     }
 
     /// State vector for sync.
@@ -817,6 +838,7 @@ impl KbNodeDoc {
             source: self.source(),
             created_at: self.created_at(),
             org_header: self.org_header(),
+            attachments: self.attachments(),
         }
     }
 
@@ -919,6 +941,9 @@ impl KbNodeDoc {
         if let Some(bytes) = org_header::digest_bytes(mat.org_header.as_ref()) {
             field(&bytes);
         }
+        if let Some(bytes) = attachments::digest_bytes(&mat.attachments) {
+            field(&bytes);
+        }
         hex::encode(h.finalize())
     }
 
@@ -959,6 +984,10 @@ impl KbNodeDoc {
         }
         if let Some(header) = &mat.org_header {
             let _ = doc.set_org_header(header);
+        }
+        // Every entry `materialize` read is valid, so none is refused here.
+        for (name, attachment) in &mat.attachments {
+            let _ = doc.set_attachment(name, attachment);
         }
         // The creation time is a fact about the node, not about this lineage:
         // without it the reborn node reads as undated and its `version` (which

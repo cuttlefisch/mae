@@ -11,6 +11,10 @@
 //! | `id`, `kind`, `todo`, `prio`, `source`, `src_v`, `schema_v`, `created` | string |
 //! | `meta` | `Y.Map` (legacy; its values are not checked) |
 //! | `org_header` | `Y.Map`: `property_order` an array of strings, `has_title_line` and `has_filetags_line` booleans |
+//!
+//! And the `attachments` root (ADR-115 D4), reported as `attachments`: every
+//! entry a plain-file NAME bound to `{sha256, size, media_type}` of the right
+//! shapes. Extra fields in an entry are not a violation.
 
 use std::collections::BTreeSet;
 
@@ -90,6 +94,10 @@ impl KbNodeDoc {
         };
         if !header_ok {
             bad.insert("org_header");
+        }
+        drop(txn);
+        if self.has_rejected_attachment() {
+            bad.insert("attachments");
         }
         bad
     }

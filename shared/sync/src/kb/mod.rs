@@ -25,7 +25,11 @@ pub mod history;
 mod node;
 
 pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
-pub use node::{body_bytes, KbNodeDoc, MaterializedNode, OrgHeader};
+pub use node::{
+    body_bytes, validate_attachment_name, AttachmentError, AttachmentProblem, AttachmentRef,
+    AttachmentsRead, KbNodeDoc, MaterializedNode, OrgHeader, ATTACHMENTS_ROOT,
+    MAX_ATTACHMENT_NAME_BYTES, MAX_ATTACHMENT_SIZE,
+};
 
 /// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
 /// identity `fingerprint` + its per-KB authorization `epoch` (ADR-020 B-16,
