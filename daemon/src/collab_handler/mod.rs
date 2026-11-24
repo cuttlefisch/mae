@@ -2009,12 +2009,9 @@ async fn handle_doc_request_inner(
             kb_membership::handle_kb_join(
                 doc_store,
                 broadcaster,
-                session_id,
+                (session_id, auth_principal, auth_pubkey, transport),
                 auth_label,
-                auth_principal,
-                auth_pubkey,
                 session_docs,
-                transport,
                 reply_bound,
                 id,
                 &params,

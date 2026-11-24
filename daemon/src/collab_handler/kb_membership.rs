@@ -127,12 +127,9 @@ pub(super) async fn handle_kb_unregister(
 pub(super) async fn handle_kb_join(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    (session_id, auth_principal, auth_pubkey, transport): super::kb_content::KbCaller<'_>,
     auth_label: Option<&str>,
-    auth_principal: Option<&str>,
-    auth_pubkey: Option<&[u8; 32]>,
     session_docs: &mut HashSet<String>,
-    transport: Transport,
     reply_bound: usize,
     id: serde_json::Value,
     params: &serde_json::Value,
