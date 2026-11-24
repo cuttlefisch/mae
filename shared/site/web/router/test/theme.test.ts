@@ -7,6 +7,7 @@ import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  context,
   EDGE,
   HOVER_INTENT_MS,
   menuAction,
@@ -281,7 +282,7 @@ function runPrepaint(win: Win): void {
 function mountControls(win: Win) {
   runPrepaint(win);
   const b = themeControls(win);
-  const cleanup = b.mount(win.document);
+  const cleanup = b.init(context(win.document, new AbortController().signal));
   return { cleanup: typeof cleanup === "function" ? cleanup : () => undefined };
 }
 
@@ -374,7 +375,7 @@ describe("the generated pre-paint script (P-91, P-93, P-96, P-97, P-98)", () => 
 describe("the controls (P-91, P-93, P-94, P-99)", () => {
   it("absent without the offer: the box stays hidden, nothing is built", () => {
     const { win, doc } = browser();
-    themeControls(win).mount(doc);
+    themeControls(win).init(context(doc, new AbortController().signal));
     expect(byId(win, "mae-theme").hidden).toBe(true);
     expect(doc.getElementById("mae-palette-menu")).toBeNull();
   });
@@ -661,7 +662,7 @@ describe("under the router", () => {
       add(type, f, o);
     }) as typeof win.addEventListener;
     const router = start(win as unknown as Parameters<typeof start>[0]);
-    router.register("theme", themeControls(win));
+    router.register(themeControls(win));
     click(win, byId(win, "mae-mode-toggle"));
     const mode = root.getAttribute("data-mode");
     const old = byId(win, "mae-palette-button");

@@ -1,0 +1,5 @@
+{# P-163. Omitted when the node is not published in this view. #}
+{% set href = published(data.node) %}
+{% if href %}
+<a class="site-whats-new" href="{{ href }}">{{ data.label }}</a>
+{% endif %}

@@ -20,8 +20,12 @@
 //! [`SiteLimits`] and run off the async workers (`spawn_blocking`). The derivation cache and incremental re-derivation (D6) come with the
 //! change index (ADR-074 Amendment 1).
 
+use std::sync::Arc;
+
 use crate::doc_store::DocStore;
 use crate::kb_query;
+use crate::site_components::{KbComponents, Slots};
+use mae_site::components::{PageData, Slot};
 use mae_site::{derive_with, Addressing, SourcePage};
 use mae_sync::kb::{Encryption, KbNodeDoc};
 
@@ -37,6 +41,17 @@ pub enum SitePage {
         tags: Vec<(String, String)>,
         toc: Vec<mae_site::TocEntry>,
         explorer: Option<ExplorerRef>,
+        /// The operator's components rendered for this page; `None` when
+        /// the KB has none.
+        slots: Option<Slots>,
+    },
+    /// A page a component emits (H2): its title (raw text) and its
+    /// sanitised HTML.
+    Component {
+        title: String,
+        html: String,
+        explorer: Option<ExplorerRef>,
+        slots: Option<Slots>,
     },
     /// The content index (P-77): one entry per published page.
     Index(Vec<mae_site::IndexEntry>),
@@ -46,6 +61,7 @@ pub enum SitePage {
         kind: Listing,
         items: Vec<(String, String)>,
         explorer: Option<ExplorerRef>,
+        slots: Option<Slots>,
     },
     /// The explorer's data (P-39, Amendment 3), as the JSON the browser
     /// runtime reads.
@@ -120,6 +136,15 @@ pub enum View {
     /// `/kb/<kb-id>/`: the KB's home page, the node the operator declared
     /// for it (ADR-119 Amendment 2 B3).
     Home(Option<String>),
+    /// `/kb/<kb-id>/site/<name>`: a page a component emits (Amendment 4 H2).
+    Site(String),
+}
+
+/// The operator's components for one KB, and the locale they render in.
+#[derive(Debug, Clone)]
+pub struct ComponentsFor {
+    pub components: Arc<KbComponents>,
+    pub locale: String,
 }
 
 /// What one page request may read (D21).
@@ -127,7 +152,9 @@ pub enum View {
 pub struct SiteLimits {
     /// Nodes in the KB: more, and the KB is [`SitePage::TooLarge`].
     pub max_scan_nodes: usize,
-    /// Bytes of one node's title or body: more, and the KB is too large.
+    /// Bytes of one node's title, of its body, or of its properties (keys and
+    /// values together, which now reach the page source): more, and the KB is
+    /// too large.
     pub max_body_bytes: usize,
 }
 
@@ -146,11 +173,14 @@ pub async fn page(
         principal,
         limits,
         &mae_site::SiteOptions::default(),
+        None,
     )
     .await
 }
 
-/// One view of `kb_id`, as `principal` may read it.
+/// One view of `kb_id`, as `principal` may read it, with the KB's
+/// `components` in its slots. A component page of a KB with no components is
+/// the same not-found as every other refusal, answered before any read.
 pub async fn view(
     doc_store: &DocStore,
     kb_id: &str,
@@ -158,7 +188,11 @@ pub async fn view(
     principal: Option<&str>,
     limits: SiteLimits,
     opts: &mae_site::SiteOptions,
+    components: Option<ComponentsFor>,
 ) -> SitePage {
+    if matches!(view, View::Site(_)) && components.is_none() {
+        return SitePage::NotFound;
+    }
     let (sources, addressing, may_copy) =
         match readable_sources(doc_store, kb_id, principal, limits).await {
             Ok(v) => v,
@@ -175,7 +209,7 @@ pub async fn view(
         for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
             tracing::info!("{line}");
         }
-        answer(&site, &addressing, view, may_copy)
+        answer(&site, &addressing, view, may_copy, components.as_ref())
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)
@@ -229,7 +263,15 @@ async fn readable_sources(
             continue;
         };
         let (title, body) = (doc.title(), doc.body());
-        if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
+        let props: usize = doc
+            .properties()
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+        if [title.len(), body.len(), props]
+            .iter()
+            .any(|n| *n > limits.max_body_bytes)
+        {
             return Err(Refused::TooLarge);
         }
         if let Some(text) = page_source(&node_id, &doc) {
@@ -246,20 +288,28 @@ async fn readable_sources(
 /// whole KB's content at once (`may_copy`, a query-only member, D7 and G2)
 /// is refused the content index, which holds every page's text, as the one
 /// not-found. Everything else is theirs: pages one at a time, and the
-/// explorer and tag listings, which hold titles only.
-fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: bool) -> SitePage {
+/// explorer and tag listings, which hold titles only. Every page and listing
+/// carries `components` rendered in its slots.
+fn answer(
+    site: &mae_site::Site,
+    addressing: &Addressing,
+    view: View,
+    may_copy: bool,
+    components: Option<&ComponentsFor>,
+) -> SitePage {
     let explorer = || {
         let json = explorer_json(&mae_site::explorer::explorer(site));
         Some(explorer_ref(&json, addressing))
     };
+    let slots = |page: PageData| slots_for(components, site, addressing, page);
     match view {
         View::Index if !may_copy => SitePage::NotFound,
         // The declared node when this reader has it as a page; otherwise the
         // tag index. Unpublished, withheld and undeclared all answer alike, so
         // the home address says nothing about a node the reader cannot see.
         View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {
-            Some(id) => answer(site, addressing, View::Page(id), may_copy),
-            None => answer(site, addressing, View::Tags, may_copy),
+            Some(id) => answer(site, addressing, View::Page(id), may_copy, components),
+            None => answer(site, addressing, View::Tags, may_copy, components),
         },
         View::Page(id) => match site.pages.get(&id) {
             Some(p) => SitePage::Found {
@@ -273,6 +323,7 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: 
                     .collect(),
                 toc: p.toc.clone(),
                 explorer: explorer(),
+                slots: slots(page_data(p)),
             },
             None => SitePage::NotFound,
         },
@@ -284,11 +335,13 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: 
                 .map(|(t, _)| (t.to_string(), addressing.tag_href(t)))
                 .collect(),
             explorer: explorer(),
+            slots: slots(generated_page("tags", addressing.tags_href())),
         },
         View::Index => SitePage::Index(site.index.clone()),
         View::Explorer => SitePage::Explorer(explorer_json(&mae_site::explorer::explorer(site))),
         View::Tag(tag) => match site.tags.get(&tag) {
             Some(pages) => SitePage::Listing {
+                slots: slots(generated_page(&tag, addressing.tag_href(&tag))),
                 kind: Listing::Tag(tag),
                 items: pages
                     .iter()
@@ -298,13 +351,93 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: 
             },
             None => SitePage::NotFound,
         },
+        View::Site(name) => component_page(site, addressing, &name, components).map_or(
+            SitePage::NotFound,
+            |(title, html, slots)| SitePage::Component {
+                title,
+                html,
+                explorer: explorer(),
+                slots,
+            },
+        ),
     }
 }
 
-/// A node as the Org text of its page: its ID, title and file tags, then its
-/// body. Any node has a page, however it was written (seed, editor, tool), so
-/// this is not the seed export's file, which refuses a node that would not
-/// seed back exactly.
+/// The page `name` a component emits, as `(title, html, slots)`; `None` when
+/// no component emits it or its render failed (logged).
+fn component_page(
+    site: &mae_site::Site,
+    addressing: &Addressing,
+    name: &str,
+    components: Option<&ComponentsFor>,
+) -> Option<(String, String, Option<Slots>)> {
+    let c = components?;
+    let ctx = c
+        .components
+        .site_context(&c.locale, addressing, published(site));
+    let (title, html) = c.components.render_page(name, &ctx)?;
+    let href = mae_site::components::site_page_href(addressing, name);
+    let slots = c.components.render(generated_page(&title, href), &ctx);
+    Some((title, html, Some(slots)))
+}
+
+/// Every published page's address, by ID: what `published(id)` answers
+/// (P-154), from the same derivation as the page.
+fn published(site: &mae_site::Site) -> std::collections::BTreeMap<String, String> {
+    site.pages
+        .iter()
+        .map(|(id, p)| (id.clone(), p.href.clone()))
+        .collect()
+}
+
+/// `components` rendered for `page`; `None` when the KB has none.
+fn slots_for(
+    components: Option<&ComponentsFor>,
+    site: &mae_site::Site,
+    addressing: &Addressing,
+    page: PageData,
+) -> Option<Slots> {
+    let c = components?;
+    let ctx = c
+        .components
+        .site_context(&c.locale, addressing, published(site));
+    Some(c.components.render(page, &ctx))
+}
+
+/// A derived page's own data, as its components see it (P-154).
+fn page_data(p: &mae_site::DerivedPage) -> PageData {
+    PageData {
+        id: p.id.clone(),
+        title: p.title.clone(),
+        url: p.href.clone(),
+        properties: p.properties.clone(),
+        dates: p.dates.clone(),
+        tags: p.tags.clone(),
+    }
+}
+
+/// A page the engine or a component generates (a listing, a component
+/// page): no ID, no properties, no dates, no tags.
+fn generated_page(title: &str, url: String) -> PageData {
+    PageData {
+        id: String::new(),
+        title: title.to_string(),
+        url,
+        properties: Default::default(),
+        dates: Default::default(),
+        tags: Vec::new(),
+    }
+}
+
+/// A node as the Org text of its page: its ID and properties, title and file
+/// tags, then its body. Any node has a page, however it was written (seed,
+/// editor, tool), so this is not the seed export's file, which refuses a node
+/// that would not seed back exactly.
+///
+/// The properties are the node's own field, where `kb seed` keeps the file
+/// drawer's; a page built without them had none, so no slot component could
+/// ever read a seeded page's `STATE` or `UPDATED` (P-154, P-161, P-163). Only
+/// a property [`drawer_line`] can write as one line of its own is kept.
 ///
 /// The tags come from the node's own field, which is where `kb seed` and the
 /// editor keep `#+filetags`; a page built from title and body alone had none,
@@ -331,25 +464,69 @@ fn page_source(node_id: &str, doc: &KbNodeDoc) -> Option<String> {
     } else {
         format!("#+filetags: :{}:\n", tags.join(":"))
     };
+    let mut props: Vec<(String, String)> = doc.properties().into_iter().collect();
+    props.sort();
+    let drawer: String = props
+        .iter()
+        .filter_map(|(k, v)| drawer_line(k, v))
+        .collect();
     Some(format!(
-        ":PROPERTIES:\n:ID: {node_id}\n:END:\n#+title: {title}\n{filetags}\n{}\n",
+        ":PROPERTIES:\n:ID: {node_id}\n{drawer}:END:\n#+title: {title}\n{filetags}\n{}\n",
         doc.body()
     ))
 }
 
-/// What every page of one KB's site shares: its locale and, when the operator
-/// named one, the site's title (P-16) with the address of its home page. A
-/// plain locale string is a site without a title.
+/// One property as a drawer line, `:KEY: value`, or `None` when it cannot be
+/// one line that sets exactly that property: a key that is empty, holds
+/// whitespace or `:`, appends (`KEY+`), or is `ID` (written from the node's
+/// own ID), `END` or `PROPERTIES` in any case. A value's line breaks are
+/// folded, as a title's are, so a value cannot end the drawer or add a line.
+fn drawer_line(key: &str, value: &str) -> Option<String> {
+    let plain = !key.is_empty()
+        && !key.ends_with('+')
+        && !key.chars().any(|c| c.is_whitespace() || c == ':')
+        && !["ID", "END", "PROPERTIES"]
+            .iter()
+            .any(|r| key.eq_ignore_ascii_case(r));
+    if !plain {
+        return None;
+    }
+    let value: String = value
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    Some(format!(":{key}: {value}\n"))
+}
+
+/// The chrome around one page: the site's locale and, when the operator
+/// named one, the site's title (P-16) with the address of its home page, and
+/// the operator's components rendered for this page. A plain locale string is
+/// a site without a title or components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Chrome<'a> {
     pub lang: &'a str,
     /// `(site title, home href)`: operator configuration, never content (D3).
     pub site: Option<(&'a str, &'a str)>,
+    /// The page's slots (D18, H1); `None` writes the shell exactly as a site
+    /// without components has it (P-158).
+    pub slots: Option<&'a Slots>,
 }
 
 impl<'a> From<&'a str> for Chrome<'a> {
     fn from(lang: &'a str) -> Self {
-        Chrome { lang, site: None }
+        Chrome {
+            lang,
+            site: None,
+            slots: None,
+        }
+    }
+}
+
+impl Chrome<'_> {
+    /// The sanitised HTML of `slot` on this page; `""` when it is empty or the
+    /// KB has no components.
+    fn slot(&self, slot: Slot) -> &str {
+        self.slots.map_or("", |s| s.get(slot))
     }
 }
 
@@ -409,11 +586,15 @@ pub fn document<'a>(
 ) -> String {
     let chrome = chrome.into();
     let words = Words::of(chrome.lang);
+    // Before the body: after the title and its metadata (the tags); after
+    // the body: the article's end (P-153).
     let article = format!(
-        "<article id=\"mae-article\"{}><h1>{}</h1>{}{article}</article>",
+        "<article id=\"mae-article\"{}><h1>{}</h1>{}{}{article}{}</article>",
         copy_words(&words),
         escape(title),
         tags_list(&words, tags),
+        chrome.slot(Slot::BeforeBody),
+        chrome.slot(Slot::AfterBody),
     );
     // The side panels sit outside the main landmark (P-165).
     let panels = format!(
@@ -500,12 +681,32 @@ pub fn listing_document<'a>(
         chrome,
         &heading,
         &format!(
-            "<section id=\"mae-listing\"><h1{}>{shown}</h1><ul>{list}</ul></section>",
-            words.mark
+            "<section id=\"mae-listing\"><h1{}>{shown}</h1>{}<ul>{list}</ul>{}</section>",
+            words.mark,
+            chrome.slot(Slot::BeforeBody),
+            chrome.slot(Slot::AfterBody),
         ),
         "",
         explorer,
     )
+}
+
+/// The HTML document for a page a component emits (H2): its sanitised HTML
+/// under its title, in the site's shell, with the slots a page has.
+pub fn component_document<'a>(
+    chrome: impl Into<Chrome<'a>>,
+    title: &str,
+    html: &str,
+    explorer: Option<&ExplorerRef>,
+) -> String {
+    let chrome = chrome.into();
+    let article = format!(
+        "<article id=\"mae-article\"><h1>{}</h1>{}{html}{}</article>",
+        escape(title),
+        chrome.slot(Slot::BeforeBody),
+        chrome.slot(Slot::AfterBody),
+    );
+    shell(chrome, title, &article, "", explorer)
 }
 
 /// The document around a page's main content: lang, the pre-paint script,
@@ -523,6 +724,15 @@ pub fn listing_document<'a>(
 /// the router's behaviour fills it from `data-src` and shows it, so without
 /// JavaScript it is absent, never broken. It carries the words the behaviour
 /// needs (its name, the untagged group's).
+///
+/// The operator's slots (P-153) go where [`Slots`] says, each only when it
+/// has output (P-158): the document head after the runtime's assets, the
+/// header row after the built-in controls, the left-panel footer after the
+/// explorer (`#mae-left-footer`), the right panel at the end of the `aside`,
+/// and the page footer last (`#mae-footer`). The components' stylesheets
+/// follow the base stylesheet and their behaviours follow the router, so the
+/// router has defined `mae.site.register` before any of them runs (module
+/// scripts run in document order).
 fn shell(
     chrome: Chrome<'_>,
     title: &str,
@@ -539,38 +749,92 @@ fn shell(
         None => (escape(title), String::new()),
     };
     let header = format!(
-        "<header id=\"mae-header\">{site_link}{}</header>",
-        theme_controls(&words)
+        "<header id=\"mae-header\">{site_link}{}{}</header>",
+        theme_controls(&words),
+        chrome.slot(Slot::HeaderRow),
     );
-    let explorer = explorer.map_or_else(String::new, |e| {
-        format!(
-            "<nav id=\"mae-explorer\" class=\"mae-explorer\"{} aria-label=\"{}\" \
-             data-src=\"{}\" data-version=\"{}\" data-untagged=\"{}\" hidden></nav>",
-            words.mark,
-            escape(words.s.explorer),
-            escape(&e.src),
-            escape(&e.version),
-            escape(words.s.untagged),
-        )
-    });
-    let aside = if panels.is_empty() {
-        String::new()
-    } else {
-        format!("<aside id=\"mae-panels\">{panels}</aside>")
-    };
+    let explorer = explorer.map_or_else(String::new, |e| explorer_box(&words, e));
+    let panels = format!("{panels}{}", chrome.slot(Slot::RightPanel));
+    let aside = wrapped("aside", "mae-panels", &panels);
+    let (styles, scripts) = component_assets(chrome.slots);
     format!(
         "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <script src=\"{}\"></script>\
          <link rel=\"stylesheet\" href=\"{}\">\
-         <link rel=\"stylesheet\" href=\"{}\">\
-         <script type=\"module\" src=\"{}\"></script>\
-         <title>{doc_title}</title></head><body>{header}{explorer}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
+         <link rel=\"stylesheet\" href=\"{}\">{styles}\
+         <script type=\"module\" src=\"{}\"></script>{scripts}{}\
+         <title>{doc_title}</title></head><body>{header}{explorer}{}<main id=\"mae-main\"{}>{main}</main>{aside}{}</body></html>\n",
         escape(chrome.lang),
         mae_site::assets::href(mae_site::assets::PREPAINT),
         mae_site::assets::href(mae_site::assets::PALETTE),
         mae_site::assets::href(mae_site::assets::BASE),
         mae_site::assets::href(mae_site::assets::ROUTER),
+        chrome.slot(Slot::DocumentHead),
+        wrapped("div", "mae-left-footer", chrome.slot(Slot::LeftPanelFooter)),
+        main_attrs(chrome.slots),
+        wrapped("footer", "mae-footer", chrome.slot(Slot::PageFooter)),
+    )
+}
+
+/// `<tag id="id">html</tag>`, or nothing at all when `html` is empty: an
+/// empty slot or panel adds no element (P-158).
+fn wrapped(tag: &str, id: &str, html: &str) -> String {
+    if html.is_empty() {
+        String::new()
+    } else {
+        format!("<{tag} id=\"{id}\">{html}</{tag}>")
+    }
+}
+
+/// The explorer's box: see [`shell`].
+fn explorer_box(words: &Words, e: &ExplorerRef) -> String {
+    format!(
+        "<nav id=\"mae-explorer\" class=\"mae-explorer\"{} aria-label=\"{}\" \
+         data-src=\"{}\" data-version=\"{}\" data-untagged=\"{}\" hidden></nav>",
+        words.mark,
+        escape(words.s.explorer),
+        escape(&e.src),
+        escape(&e.version),
+        escape(words.s.untagged),
+    )
+}
+
+/// The components' `<link rel="stylesheet">`s and `<script type="module">`s;
+/// nothing without components.
+fn component_assets(slots: Option<&Slots>) -> (String, String) {
+    let Some(s) = slots else {
+        return (String::new(), String::new());
+    };
+    let styles = s
+        .stylesheets
+        .iter()
+        .map(|h| format!("<link rel=\"stylesheet\" href=\"{}\">", escape(h)))
+        .collect();
+    let scripts = s
+        .scripts
+        .iter()
+        .map(|h| format!("<script type=\"module\" src=\"{}\"></script>", escape(h)))
+        .collect();
+    (styles, scripts)
+}
+
+/// What a behaviour's `ctx` reads from `<main>` (D18): the KB, the site's
+/// base path, this page's address and, on a node's page, its ID. Nothing
+/// without components, so a site without them is unchanged (P-158).
+fn main_attrs(slots: Option<&Slots>) -> String {
+    let Some(s) = slots else {
+        return String::new();
+    };
+    let p = &s.page;
+    let id = p.id.as_deref().map_or_else(String::new, |id| {
+        format!(" data-mae-page=\"{}\"", escape(id))
+    });
+    format!(
+        " data-mae-kb=\"{}\" data-mae-base=\"{}\" data-mae-url=\"{}\"{id}",
+        escape(&p.kb),
+        escape(&p.base),
+        escape(&p.url)
     )
 }
 
@@ -706,6 +970,38 @@ mod tests {
         assert!(src.contains("#+filetags: :ok:\n"), "{src}");
         let plain = KbNodeDoc::new("n", "t", "b", &[]);
         assert!(page_source("n", &plain).is_some());
+        // Nor can a property: a value's line breaks fold, and a key that is
+        // not one plain property name, or would be the drawer's own, is
+        // dropped. The page keeps the node's ID.
+        let mut props = KbNodeDoc::new("n", "t", "b", &[]);
+        let _ = props.set_properties(
+            &[
+                ("STATE", "draft\n:END:\n#+title: evil"),
+                ("ID", "other"),
+                ("id", "other"),
+                ("END", "x"),
+                ("a b", "x"),
+                ("k:v", "x"),
+                ("K+", "x"),
+                ("", "x"),
+                ("UPDATED", "2026-11-02"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        );
+        let src = page_source("n", &props).unwrap();
+        assert!(
+            src.starts_with(
+                ":PROPERTIES:\n:ID: n\n:STATE: draft :END: #+title: evil\n:UPDATED: 2026-11-02\n:END:\n"
+            ),
+            "{src}"
+        );
+        assert_eq!(
+            src.lines().filter(|l| l.starts_with("#+title:")).count(),
+            1,
+            "{src}"
+        );
         assert_eq!(page_source("a b", &plain), None);
         assert_eq!(page_source("", &plain), None);
     }
@@ -744,20 +1040,23 @@ mod tests {
     #[test]
     fn a_reader_who_may_not_copy_the_kb_is_refused_its_content_index_only() {
         let (site, live) = kb();
-        assert_eq!(answer(&site, &live, View::Index, false), SitePage::NotFound);
-        let SitePage::Index(all) = answer(&site, &live, View::Index, true) else {
+        assert_eq!(
+            answer(&site, &live, View::Index, false, None),
+            SitePage::NotFound
+        );
+        let SitePage::Index(all) = answer(&site, &live, View::Index, true, None) else {
             panic!("the content index");
         };
         // What makes it a copy: page b's text is in it.
         assert!(all.iter().any(|e| e.text.contains("to a")), "{all:?}");
         for v in title_views() {
             assert_eq!(
-                answer(&site, &live, v.clone(), false),
-                answer(&site, &live, v.clone(), true),
+                answer(&site, &live, v.clone(), false, None),
+                answer(&site, &live, v.clone(), true, None),
                 "{v:?}"
             );
             assert_ne!(
-                answer(&site, &live, v.clone(), false),
+                answer(&site, &live, v.clone(), false, None),
                 SitePage::NotFound,
                 "{v:?}"
             );
@@ -770,7 +1069,7 @@ mod tests {
     #[test]
     fn every_page_names_the_explorer_at_the_version_it_answers() {
         let (site, live) = kb();
-        let SitePage::Explorer(json) = answer(&site, &live, View::Explorer, true) else {
+        let SitePage::Explorer(json) = answer(&site, &live, View::Explorer, true, None) else {
             panic!("the explorer");
         };
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -785,7 +1084,7 @@ mod tests {
         assert_eq!(want.src, "/kb/kb-1/explorer.json");
         assert_eq!(want.version.len(), 16);
         for view in [View::Page("a".into()), View::Tags, View::Tag("t".into())] {
-            let got = match answer(&site, &live, view.clone(), true) {
+            let got = match answer(&site, &live, view.clone(), true, None) {
                 SitePage::Found { explorer, tags, .. } => {
                     assert_eq!(tags, [("t".to_string(), "/kb/kb-1/tags/t".to_string())]);
                     explorer
@@ -803,7 +1102,7 @@ mod tests {
             }],
             &live,
         );
-        let SitePage::Explorer(json2) = answer(&other, &live, View::Explorer, true) else {
+        let SitePage::Explorer(json2) = answer(&other, &live, View::Explorer, true, None) else {
             panic!()
         };
         assert_ne!(explorer_ref(&json2, &live).version, want.version);

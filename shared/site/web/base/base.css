@@ -43,7 +43,14 @@ a:visited {
    the panels on the right. The side columns are `auto`, sized by their
    occupant: a page without the explorer (a reader allowed only queries) or
    without panels gives their room to the content, and the explorer never
-   moves for what follows it (P-47). */
+   moves for what follows it (P-47).
+
+   Two slot boxes exist only when a component fills them (ADR-119 D18,
+   P-153, P-158): the left-panel footer, under the explorer, and the page
+   footer, across the bottom. Wide, the content spans the explorer's row and
+   the footer's, and the explorer's row takes the room (1fr), so the sticky
+   explorer still travels the whole page (P-43) and the footer sits at the
+   left panel's bottom. */
 body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -51,8 +58,22 @@ body {
     "header"
     "main"
     "panels"
-    "explorer";
+    "explorer"
+    "left-footer"
+    "footer";
   align-items: start;
+}
+
+#mae-left-footer {
+  grid-area: left-footer;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0.5rem 1rem;
+}
+
+#mae-footer {
+  grid-area: footer;
+  min-width: 0;
 }
 
 #mae-header {
@@ -86,9 +107,16 @@ body {
 @media (min-width: 50rem) {
   body {
     grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto 1fr auto auto;
     grid-template-areas:
       "header header header"
-      "explorer main panels";
+      "explorer main panels"
+      "left-footer main panels"
+      "footer footer footer";
+  }
+
+  #mae-left-footer {
+    width: 16rem;
   }
 
   #mae-panels {

@@ -18,9 +18,12 @@
 //! - [`order`]: A to Z as a reader reads it, for every list of titles.
 //! - [`sanitize`]: the final allow-list every content-derived fragment
 //!   passes (D18, D19).
+//! - [`components`]: the operator's slot components (D18, Amendment 4),
+//!   loaded from a manifest and rendered into the same kind of sanitiser.
 
 pub mod address;
 pub mod assets;
+pub mod components;
 pub mod derive;
 pub mod explorer;
 pub mod highlight;

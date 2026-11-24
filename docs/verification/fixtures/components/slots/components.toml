@@ -1,0 +1,66 @@
+# Example slot components (ADR-119 Amendment 4 H1/H2; parity P-160 to
+# P-163). The parity contract is that each needs no engine change: they are
+# operator configuration, loaded by mae_site::components like any other
+# site's. Their rendered output for the fixture pages is in expected/, and
+# shared/site/tests/components.rs renders them against it.
+
+# P-161: a document-state badge, above the article after the title. Absent
+# without a STATE property; its own notice when the value is not one the
+# site knows.
+[[component]]
+name = "state-badge"
+slot = "before-body"
+template = "state-badge.html"
+stylesheet = "components.css"
+attributes = ["data-site-state", "role"]
+
+# P-162: copy a link to this page. The template writes a plain link to the
+# page's address, which works and can be copied without JavaScript (A2); the
+# behaviour hides it behind a copy button that adds the origin, copies it,
+# announces the result, falls back to showing the address when there is no
+# clipboard, and adds one button per addressable section heading.
+[[component]]
+name = "copy-link"
+slot = "header-row"
+template = "copy-link.html"
+script = "copy-link.js"
+stylesheet = "components.css"
+attributes = ["role"]
+
+# P-163: a "what's new" link to the node whats-new.json names, omitted when
+# that node is not published in the reader's view.
+[[component]]
+name = "whats-new"
+slot = "header-row"
+template = "whats-new.html"
+
+[component.data]
+file = "whats-new.json"
+fields = { node = "id", label = "string" }
+
+# P-163 and P-160: the version footer at the bottom of the left panel (hidden
+# on narrow screens by components.css), linking to the site-changes page this
+# component also emits from versions.json.
+[[component]]
+name = "versions"
+slot = "left-panel-footer"
+template = "version-footer.html"
+stylesheet = "components.css"
+
+[component.data]
+file = "versions.json"
+list = true
+fields = { version = "string", date = "date", summary = "string?" }
+
+[component.page]
+name = "changes"
+title = "Site changes"
+template = "site-changes.html"
+
+# P-163: when the page was last updated, from its UPDATED property, with a
+# machine-readable <time datetime>. Omitted when the property is absent or
+# not an ISO date.
+[[component]]
+name = "last-updated"
+slot = "after-body"
+template = "last-updated.html"

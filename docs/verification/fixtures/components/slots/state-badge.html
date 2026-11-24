@@ -1,0 +1,10 @@
+{# P-161. Known states and the words the badge shows for each. #}
+{% set labels = {"draft": "Draft", "in-review": "In review", "approved": "Approved", "superseded": "Superseded"} %}
+{% if "STATE" in page.properties %}
+{% set state = page.properties.STATE | lower %}
+{% if state in labels %}
+<p class="site-state-badge site-state-{{ state }}" data-site-state="{{ state }}">{{ labels[state] }}</p>
+{% else %}
+<p class="site-state-badge site-state-unknown" role="note">This page declares a document state this site does not recognise.</p>
+{% endif %}
+{% endif %}
