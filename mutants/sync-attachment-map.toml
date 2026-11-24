@@ -1,6 +1,7 @@
 # A node's attachments map (ADR-115 D4, P2a): its place in the version, the
-# NAME rule, the tolerant reader, last-writer-wins on one NAME, and the
-# projection's rows on remove. Format: tools/mutate/README.md.
+# NAME rule (portable, no Windows device names, one file per NAME per node),
+# the tolerant reader and the sweep's fail-safe one, last-writer-wins on one
+# NAME, and the projection's rows on remove. Format: tools/mutate/README.md.
 
 [[mutant]]
 id = "sync-attachment-map/version-omits-map"
@@ -64,3 +65,42 @@ ref = "the node_attachments rows are the node's map after a removal"
 file = "shared/kb/src/cozo_store/links.rs"
 find = '''            Self::ATTACHMENTS_RM_SCRIPT,'''
 replace = '''            "?[x] <- [[1]]",'''
+
+[[mutant]]
+id = "sync-attachment-map/sweep-skips-rejected"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(the_sweep_reader_counts_what_the_display_reader_rejects)"
+ref = "the sweep's reader fails safe: a rejected entry holding a hash still counts (D4, D5)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''            .filter_map(|(_, value)| entry_hash(&txn, &value))'''
+replace = '''            .filter_map(|(name, value)| {
+                entry_hash(&txn, &value).filter(|_| read_entry(name, &value).is_ok())
+            })'''
+
+[[mutant]]
+id = "sync-attachment-map/windows-device-name-admitted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(the_name_rule_on_named_cases)"
+ref = "a NAME is not a Windows device name, with or without an extension (D4, principle #13)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''    if is_windows_device_name(name) {'''
+replace = '''    if false && is_windows_device_name(name) {'''
+
+[[mutant]]
+id = "sync-attachment-map/name-collision-admitted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(a_writer_refuses_a_second_name_for_the_same_file)"
+ref = "no two NAMEs of one node fold to one key: a writer refuses the second (D4)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''        if map.contains_key(&txn, name) {
+            return Ok(());
+        }'''
+replace = '''        if true || map.contains_key(&txn, name) {
+            return Ok(());
+        }'''
