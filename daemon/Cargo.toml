@@ -46,6 +46,9 @@ mae-sync = { path = "../shared/sync" }
 mae-org = { path = "../shared/org" }
 # ADR-119: the web core, for the live KB site (`site`).
 mae-site = { path = "../shared/site" }
+# ADR-119 D12: the editor's grammars plus the site's own, to highlight source
+# blocks (`site_highlight`).
+mae-syntax = { path = "../shared/syntax", features = ["site-grammars"] }
 
 # Collab WAL persistence — uses `sqlite` crate (same native lib as cozo, no links conflict)
 sqlite = { version = "0.32", features = ["bundled"] } # one SQLite everywhere: the bundled copy the musl release links (see .cargo/config.toml)

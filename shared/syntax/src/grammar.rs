@@ -25,6 +25,14 @@ pub enum Grammar {
     /// HCL, under the name the editor has always shown for it.
     Terraform,
     Dockerfile,
+    #[cfg(feature = "site-grammars")]
+    PowerShell,
+    #[cfg(feature = "site-grammars")]
+    Ini,
+    #[cfg(feature = "site-grammars")]
+    Sql,
+    #[cfg(feature = "site-grammars")]
+    Nginx,
 }
 
 impl Grammar {
@@ -47,6 +55,14 @@ impl Grammar {
         Grammar::Ruby,
         Grammar::Terraform,
         Grammar::Dockerfile,
+        #[cfg(feature = "site-grammars")]
+        Grammar::PowerShell,
+        #[cfg(feature = "site-grammars")]
+        Grammar::Ini,
+        #[cfg(feature = "site-grammars")]
+        Grammar::Sql,
+        #[cfg(feature = "site-grammars")]
+        Grammar::Nginx,
     ];
 
     /// The grammar's name: what the editor shows, and the language name its
@@ -70,6 +86,14 @@ impl Grammar {
             Grammar::Ruby => "ruby",
             Grammar::Terraform => "terraform",
             Grammar::Dockerfile => "dockerfile",
+            #[cfg(feature = "site-grammars")]
+            Grammar::PowerShell => "powershell",
+            #[cfg(feature = "site-grammars")]
+            Grammar::Ini => "ini",
+            #[cfg(feature = "site-grammars")]
+            Grammar::Sql => "sql",
+            #[cfg(feature = "site-grammars")]
+            Grammar::Nginx => "nginx",
         }
     }
 
@@ -93,6 +117,14 @@ impl Grammar {
             Grammar::Ruby => tree_sitter_ruby::LANGUAGE.into(),
             Grammar::Terraform => tree_sitter_hcl::LANGUAGE.into(),
             Grammar::Dockerfile => tree_sitter_containerfile::LANGUAGE.into(),
+            #[cfg(feature = "site-grammars")]
+            Grammar::PowerShell => tree_sitter_powershell::LANGUAGE.into(),
+            #[cfg(feature = "site-grammars")]
+            Grammar::Ini => tree_sitter_ini::LANGUAGE.into(),
+            #[cfg(feature = "site-grammars")]
+            Grammar::Sql => tree_sitter_sequel::LANGUAGE.into(),
+            #[cfg(feature = "site-grammars")]
+            Grammar::Nginx => tree_sitter_nginx::LANGUAGE.into(),
         }
     }
 
@@ -120,6 +152,14 @@ impl Grammar {
             "ruby" | "rb" => Grammar::Ruby,
             "terraform" | "tf" | "hcl" => Grammar::Terraform,
             "dockerfile" => Grammar::Dockerfile,
+            #[cfg(feature = "site-grammars")]
+            "powershell" | "ps1" | "pwsh" => Grammar::PowerShell,
+            #[cfg(feature = "site-grammars")]
+            "ini" | "dosini" => Grammar::Ini,
+            #[cfg(feature = "site-grammars")]
+            "sql" => Grammar::Sql,
+            #[cfg(feature = "site-grammars")]
+            "nginx" => Grammar::Nginx,
             _ => return None,
         })
     }

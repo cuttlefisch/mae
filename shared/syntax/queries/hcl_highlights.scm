@@ -1,8 +1,9 @@
 ; Hand-authored highlights query for HCL/Terraform (Grammar::Terraform).
 ;
-; @ai-caution: [architecture-debt] This is the ONE deliberate exception to
+; @ai-caution: [architecture-debt] This is the one hand-written exception to
 ; "no local .scm query files" (every other language's query comes bundled
-; from its own tree-sitter-<lang> crate, see queries.rs).
+; from its own tree-sitter-<lang> crate, see queries.rs; nginx_highlights.scm
+; is the upstream query, vendored only because the crate exports no constant).
 ; tree-sitter-hcl 1.1.0 ships NO highlights query at all — neither in the
 ; published crate (its Cargo.toml lists `queries/*` in `include` but
 ; the directory doesn't exist in the tarball) nor in the upstream GitHub repo

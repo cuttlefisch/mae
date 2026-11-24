@@ -167,13 +167,15 @@ pub async fn view(
     // Rendering is CPU work: off the async workers.
     let view = view.clone();
     let opts = opts.clone();
+    let kb_id = kb_id.to_string();
     let answered = tokio::task::spawn_blocking(move || {
-        answer(
-            &derive_with(&sources, &addressing, &opts),
-            &addressing,
-            view,
-            may_copy,
-        )
+        let site = derive_with(&sources, &addressing, &opts);
+        // P-108: never fatal, but said. Once per derivation, which is per
+        // request until the derivation cache (D6) lands.
+        for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
+            tracing::info!("{line}");
+        }
+        answer(&site, &addressing, view, may_copy)
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)

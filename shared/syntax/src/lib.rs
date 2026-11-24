@@ -14,6 +14,10 @@
 //! - [`build_configuration`]: a grammar's compiled highlight queries.
 //! - [`highlight`]: one text's highlighted regions, each named by the
 //!   innermost capture from [`HIGHLIGHT_NAMES`].
+//! - [`role`]: the KB site palette's colour role for each of those names.
+//!
+//! Feature `site-grammars` adds the grammars only the KB site highlights
+//! with (PowerShell, INI, SQL, nginx).
 //!
 //! Adding a language is three steps: the grammar crate in Cargo.toml, a
 //! [`Grammar`] variant with its names in `grammar.rs`, and its queries in
@@ -22,10 +26,14 @@
 mod grammar;
 mod highlight;
 mod queries;
+mod role;
 
 pub use grammar::Grammar;
 pub use highlight::{highlight, Region};
 pub use queries::{build_configuration, SCHEME_SEXP_COMMENT_DEPTH};
+pub use role::{role, Role, ROLES};
+/// What [`build_configuration`] returns, for a caller that caches it.
+pub use tree_sitter_highlight::HighlightConfiguration;
 
 /// Highlight groups we recognize, in the order passed to
 /// `HighlightConfiguration::configure`: a [`Region`]'s name is one of these.

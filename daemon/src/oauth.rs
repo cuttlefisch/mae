@@ -827,13 +827,19 @@ async fn site_route(
             max_scan_nodes: config.kb_query_max_scan_nodes,
             max_body_bytes: config.kb_query_max_body_bytes,
         },
-        &mae_site::SiteOptions {
-            hidden_namespaces: config.site_hidden_namespaces.clone(),
-            ..Default::default()
-        },
+        &site_options(config),
     )
     .await;
     site_answer(page, chrome)
+}
+
+/// What the site route derives with: the operator's hidden namespaces, and
+/// the process's highlighter for source blocks (ADR-119 D12).
+pub(crate) fn site_options(config: &ResourceServerConfig) -> mae_site::SiteOptions {
+    mae_site::SiteOptions {
+        hidden_namespaces: config.site_hidden_namespaces.clone(),
+        highlighter: Some(mae_daemon::site_highlight::shared()),
+    }
 }
 
 /// The response for a derived site answer. The chrome (the site's title)

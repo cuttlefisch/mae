@@ -113,6 +113,16 @@ fn queries(grammar: Grammar) -> (&'static str, &'static str, &'static str) {
             tree_sitter_containerfile::INJECTIONS_QUERY,
             "",
         ),
+        #[cfg(feature = "site-grammars")]
+        Grammar::PowerShell => (tree_sitter_powershell::HIGHLIGHTS_QUERY, "", ""),
+        #[cfg(feature = "site-grammars")]
+        Grammar::Ini => (tree_sitter_ini::HIGHLIGHTS_QUERY, "", ""),
+        #[cfg(feature = "site-grammars")]
+        Grammar::Sql => (tree_sitter_sequel::HIGHLIGHTS_QUERY, "", ""),
+        // tree-sitter-nginx ships its query in the package but exports no
+        // constant for it: see queries/nginx_highlights.scm.
+        #[cfg(feature = "site-grammars")]
+        Grammar::Nginx => (include_str!("../queries/nginx_highlights.scm"), "", ""),
     }
 }
 
