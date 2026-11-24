@@ -801,6 +801,27 @@ mod tests {
             .contains("A secret KB name"));
     }
 
+    /// The site route derives with the highlighter (D12) and the operator's
+    /// hidden namespaces: a source block comes out role-classed, and a hidden
+    /// reference does not come out at all.
+    #[test]
+    fn the_site_route_highlights_source_blocks() {
+        let mut config = base_config();
+        config.site_hidden_namespaces = vec!["internal".into()];
+        let page = mae_site::SourcePage {
+            origin: "p".into(),
+            text: ":PROPERTIES:\n:ID: p\n:END:\n#+title: P\n\nSee internal:x.\n\n#+begin_src sh\necho \"hi\" # c\n#+end_src\n".into(),
+        };
+        let addressing = mae_site::Addressing::live("kb").unwrap();
+        let site = mae_site::derive_with(&[page], &addressing, &site_options(&config));
+        let html = &site.pages["p"].html;
+        assert!(
+            html.contains(r#"<span class="org-code-comment"># c</span>"#),
+            "{html}"
+        );
+        assert!(!html.contains("internal:x"), "{html}");
+    }
+
     /// The CSP is a contract: the browser client's backend pins it exactly,
     /// per daemon version, and the router's Trusted Types policy must be the
     /// only one allowed (ADR-119 D16). A change here is deliberate and goes to

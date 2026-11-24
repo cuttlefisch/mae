@@ -1,10 +1,11 @@
-; Hand-authored highlights query for HCL/Terraform (Language::Terraform).
+; Hand-authored highlights query for HCL/Terraform (Grammar::Terraform).
 ;
-; @ai-caution: [architecture-debt] This is the ONE deliberate exception to
+; @ai-caution: [architecture-debt] This is the one hand-written exception to
 ; "no local .scm query files" (every other language's query comes bundled
-; from its own tree-sitter-<lang> crate, see languages.rs's module doc
-; comment). tree-sitter-hcl 1.1.0 ships NO highlights query at all — neither
-; in the published crate (its Cargo.toml lists `queries/*` in `include` but
+; from its own tree-sitter-<lang> crate, see queries.rs; nginx_highlights.scm
+; is the upstream query, vendored only because the crate exports no constant).
+; tree-sitter-hcl 1.1.0 ships NO highlights query at all — neither in the
+; published crate (its Cargo.toml lists `queries/*` in `include` but
 ; the directory doesn't exist in the tarball) nor in the upstream GitHub repo
 ; (verified: github.com/tree-sitter-grammars/tree-sitter-hcl has no
 ; `queries/` directory as of this writing). Authored here directly against
@@ -19,7 +20,7 @@
 ;
 ; @ai-caution: [rendering] Pattern ORDER matters here: `tree-sitter-highlight`
 ; resolves overlapping captures at the same node by LAST-PATTERN-WINS (the
-; same convention `languages.rs`'s TypeScript-over-JavaScript combined query
+; same convention `queries.rs`'s TypeScript-over-JavaScript combined query
 ; relies on — TS-specific captures are appended after JS's so they override).
 ; The general `(identifier) @variable` catch-all MUST stay first so the more
 ; specific `@keyword`/`@function`/`@property` patterns below it win for the

@@ -1,0 +1,24 @@
+# Source-block highlighting in the web core (shared/site/src/highlight.rs,
+# ADR-119 D12, D21): one mutant per guard. Tests: shared/site/tests/highlight.rs.
+
+[[mutant]]
+id = "site-highlight/byte-exact-check-removed"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "highlight"]
+filter = "test(a_highlighter_that_drops_or_alters_bytes_leaves_the_block_plain)"
+[[mutant.edit]]
+file = "shared/site/src/highlight.rs"
+find = '''    if plain_text(&out) != text {
+        return None;
+    }'''
+replace = '''    let _ = plain_text(&out) != text;'''
+
+[[mutant]]
+id = "site-highlight/size-cap-removed"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "highlight"]
+filter = "test(a_block_over_the_size_cap_is_plain_and_one_at_it_is_highlighted)"
+[[mutant.edit]]
+file = "shared/site/src/highlight.rs"
+find = '''    if text.len() > MAX_HIGHLIGHT_BYTES {'''
+replace = '''    if false && text.len() > MAX_HIGHLIGHT_BYTES {'''

@@ -13,10 +13,13 @@
 //! - Theme keys are the bare names already present in every bundled theme
 //!   (`keyword`, `string`, `function`, etc.). No `syntax.` prefix needed.
 //!
-//! Adding a language is three steps:
-//!   1. Add the grammar crate to Cargo.toml.
-//!   2. Add a match arm in `language_for_path`.
-//!   3. Add a branch in `build_configuration` with its query string.
+//! Grammars and their queries live in the shared registry, `mae-syntax`
+//! (`shared/syntax`), which the KB site highlights with too. Adding a
+//! language is:
+//!   1. Add it to `mae-syntax` (its grammar crate, `Grammar` variant, names
+//!      and queries).
+//!   2. Add a `Language` variant mapped to it in `languages.rs`.
+//!   3. Add a match arm in `language_for_path`.
 
 pub mod detection;
 pub mod folds;
@@ -45,56 +48,6 @@ use std::collections::HashMap;
 
 use tree_sitter::{Parser, Tree};
 use tree_sitter_highlight::HighlightConfiguration;
-
-/// Highlight groups we recognize. Order matches the theme key table below
-/// and is the order passed to `HighlightConfiguration::configure`.
-///
-/// The names here mirror the capture names used by the Helix/tree-sitter
-/// highlight queries -- `@keyword`, `@string.special`, etc. -- with the
-/// dotted suffixes mostly flattened since our themes currently only
-/// style the top-level name.
-pub(crate) const HIGHLIGHT_NAMES: &[&str] = &[
-    "attribute",
-    "boolean",
-    "comment",
-    "constant",
-    "constant.builtin",
-    "constructor",
-    "embedded",
-    "escape",
-    "function",
-    "function.builtin",
-    "function.macro",
-    "function.method",
-    "keyword",
-    "label",
-    "namespace",
-    "number",
-    "operator",
-    "property",
-    "punctuation",
-    "punctuation.bracket",
-    "punctuation.delimiter",
-    "punctuation.special",
-    "string",
-    "string.escape",
-    "string.special",
-    "string.special.key",
-    "tag",
-    // Markdown / org markup captures -- `@text.title` etc. from
-    // nvim-treesitter-style queries that the bundled grammars ship.
-    "text.emphasis",
-    "text.literal",
-    "text.reference",
-    "text.strong",
-    "text.title",
-    "text.uri",
-    "type",
-    "type.builtin",
-    "variable",
-    "variable.builtin",
-    "variable.parameter",
-];
 
 /// One syntax-highlighted byte range.
 #[derive(Debug, Clone, PartialEq, Eq)]

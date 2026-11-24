@@ -1,0 +1,54 @@
+[package]
+name = "mae-syntax"
+description = "MAE's tree-sitter grammars and highlight queries: one registry for the editor and the KB site"
+# Its own version, not the workspace's: a crate new to the workspace would
+# otherwise go stale in Cargo.lock at every release bump made before it lands
+# on main (the bump's `cargo update -w` cannot see a crate main lacks), and the
+# next build would rewrite the lock. Bump it by hand when its API changes.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Every grammar, the query each is highlighted with, and the configuration
+# builder (ADR-119 D12, principle #8): the editor (mae-core) and the daemon's
+# KB site highlight with the same registry. No I/O.
+[dependencies]
+tree-sitter = "0.26"
+tree-sitter-highlight = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-md = "0.5"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-bash = "0.25"
+tree-sitter-scheme = "0.25"
+tree-sitter-yaml = "0.7"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-hcl = "1.1"
+tree-sitter-containerfile = "0.9"
+# ADR-119 D12: languages the KB site highlights that the editor does not.
+# Licences: MIT (powershell, sequel, nginx), Apache-2.0 (ini).
+tree-sitter-powershell = { version = "0.26", optional = true }
+tree-sitter-ini = { version = "1.4", optional = true }
+tree-sitter-sequel = { version = "0.3", optional = true }
+tree-sitter-nginx = { version = "1.0", optional = true }
+
+[features]
+# The KB site's extra grammars (spike C12: they take the grammars' share of a
+# binary from 4.4 MB to 18.9 MB). The daemon enables it; the editor does not,
+# so its binary does not grow. Purely additive: it adds `Grammar` variants
+# (the enum is `#[non_exhaustive]`, so no other crate's match can depend on
+# the set) and the names `Grammar::from_name` accepts for them, and changes
+# nothing for any other grammar.
+site-grammars = [
+    "dep:tree-sitter-powershell",
+    "dep:tree-sitter-ini",
+    "dep:tree-sitter-sequel",
+    "dep:tree-sitter-nginx",
+]

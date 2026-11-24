@@ -61,28 +61,14 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
 }
 
 /// Parse a language ID string (e.g. "rust", "python") into a `Language`.
+/// The names each grammar answers to are the shared registry's
+/// (`mae_syntax::Grammar::from_name`), so a source block the KB site
+/// highlights and one the editor highlights read the same name alike.
 pub fn language_from_id(id: &str) -> Option<Language> {
-    Some(match id.to_lowercase().as_str() {
-        "rust" => Language::Rust,
-        "toml" => Language::Toml,
-        "markdown" | "md" => Language::Markdown,
-        "python" | "py" => Language::Python,
-        "javascript" | "js" => Language::JavaScript,
-        "typescript" | "ts" => Language::TypeScript,
-        "tsx" => Language::Tsx,
-        "go" | "golang" => Language::Go,
-        "json" | "jsonc" => Language::Json,
-        "bash" | "sh" | "shell" | "zsh" => Language::Bash,
-        "scheme" | "scm" => Language::Scheme,
-        "yaml" | "yml" => Language::Yaml,
-        "org" => Language::Org,
-        "c" => Language::C,
-        "cpp" | "c++" | "cxx" | "cc" => Language::Cpp,
-        "ruby" | "rb" => Language::Ruby,
-        "terraform" | "tf" | "hcl" => Language::Terraform,
-        "dockerfile" => Language::Dockerfile,
-        _ => return None,
-    })
+    if id.to_lowercase() == "org" {
+        return Some(Language::Org);
+    }
+    mae_syntax::Grammar::from_name(id).and_then(Language::from_grammar)
 }
 
 /// Detect language from a shebang line (e.g. `#!/usr/bin/env python3`).

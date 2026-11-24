@@ -591,6 +591,7 @@ fn a_body_has_no_h1_and_its_top_level_headlines_are_h2() {
 fn hidden_namespace_references_leave_every_output_and_the_index_is_published_only() {
     let opts = mae_site::SiteOptions {
         hidden_namespaces: vec!["internal".into()],
+        ..Default::default()
     };
     let site = mae_site::derive_with(&sources(&fixture().join("bundle")), &export(), &opts);
     let all = |s: &str| {

@@ -105,6 +105,21 @@ export function swappable(current, next) {
     const b = assetsOf(next);
     return a.length === b.length && a.every((x, i) => x === b[i]);
 }
+/**
+ * Say `text` through the page's one live region, which the router creates on
+ * first use: navigations and components announce through the same element.
+ */
+export function announce(doc, text) {
+    let live = doc.getElementById(ANNOUNCER_ID);
+    if (live === null) {
+        live = doc.createElement("div");
+        live.id = ANNOUNCER_ID;
+        live.setAttribute("aria-live", "polite");
+        live.className = "mae-visually-hidden";
+        doc.body.append(live);
+    }
+    live.textContent = text;
+}
 /** Install the router on `win`: click and history handling, components. */
 export function start(win) {
     const doc = win.document;
@@ -133,17 +148,6 @@ export function start(win) {
     let shown = pageOf(new URL(win.location.href));
     let inFlight = null;
     let current = null;
-    const announce = (text) => {
-        let live = doc.getElementById(ANNOUNCER_ID);
-        if (live === null) {
-            live = doc.createElement("div");
-            live.id = ANNOUNCER_ID;
-            live.setAttribute("aria-live", "polite");
-            live.className = "mae-visually-hidden";
-            doc.body.append(live);
-        }
-        live.textContent = text;
-    };
     const swapIn = (next) => {
         unmountAll();
         doc.title = next.title;
@@ -187,7 +191,7 @@ export function start(win) {
                 focus.setAttribute("tabindex", "-1");
             focus.focus({ preventScroll: true });
         }
-        announce(doc.title);
+        announce(doc, doc.title);
     };
     const run = async (url, push, scrollY) => {
         inFlight?.abort();
@@ -1125,6 +1129,92 @@ export function explorer(win) {
         },
     };
 }
+// ---------------------------------------------------------------------------
+// Copying a source block (ADR-119 D12; P-109). The daemon's article carries
+// the control's words (`data-copy-*`, from the locale catalogue); this
+// behaviour puts one button before each `pre.org-src`, built with
+// createElement and textContent only (see the file header), so without
+// JavaScript there is none. A click copies the block's code exactly as its
+// text content holds it, consecutive blank lines included, through the async
+// clipboard API; where there is no clipboard, or it refuses, the block's text
+// is selected for the reader to copy instead. Either outcome is announced.
+export const ARTICLE_ID = "mae-article";
+/** The copy button's class (`mae-`: chrome, which content cannot wear). */
+export const COPY_CLASS = "mae-copy";
+/** The words on `article`; null when any is missing (then no control). */
+export function copyWords(article) {
+    const label = article.getAttribute("data-copy-label");
+    const copied = article.getAttribute("data-copy-done");
+    const selected = article.getAttribute("data-copy-selected");
+    if (!label || !copied || !selected)
+        return null;
+    return { label, copied, selected, lang: article.getAttribute("data-copy-lang") };
+}
+/** Select everything inside `el`, for the reader to copy by hand. */
+function selectContents(win, doc, el) {
+    const selection = win.getSelection();
+    if (selection === null)
+        return;
+    const range = doc.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+/**
+ * Copy `code`'s text: to the clipboard when there is one that accepts it,
+ * otherwise by selecting it. Announces and returns which happened.
+ */
+export async function copyBlock(win, doc, code, words) {
+    const text = code.textContent ?? "";
+    const clipboard = win.navigator?.clipboard;
+    if (clipboard && typeof clipboard.writeText === "function") {
+        try {
+            await clipboard.writeText(text);
+            announce(doc, words.copied);
+            return "copied";
+        }
+        catch {
+            // Refused (no permission, document not focused): select instead.
+        }
+    }
+    selectContents(win, doc, code);
+    announce(doc, words.selected);
+    return "selected";
+}
+/** The copy control as a behaviour (P-156): buttons on mount, none after. */
+export function codeCopy(win) {
+    return {
+        mount(doc) {
+            const article = doc.getElementById(ARTICLE_ID);
+            const words = article ? copyWords(article) : null;
+            if (!article || !words)
+                return;
+            const ac = new AbortController();
+            const buttons = [];
+            for (const pre of Array.from(article.querySelectorAll("pre.org-src"))) {
+                const code = Array.from(pre.children).find((c) => c.localName === "code");
+                if (!code)
+                    continue;
+                const button = doc.createElement("button");
+                button.type = "button";
+                button.className = COPY_CLASS;
+                button.textContent = words.label;
+                if (words.lang)
+                    button.setAttribute("lang", words.lang);
+                button.addEventListener("click", () => {
+                    void copyBlock(win, doc, code, words);
+                }, { signal: ac.signal });
+                pre.before(button);
+                buttons.push(button);
+            }
+            return () => {
+                ac.abort();
+                for (const b of buttons)
+                    b.remove();
+            };
+        },
+    };
+}
 // On one of the site's pages: start once, and publish the component registry
 // (D18). A document without the main landmark is not the site's.
 if (typeof window !== "undefined" &&
@@ -1136,5 +1226,6 @@ if (typeof window !== "undefined" &&
         w.mae = { ...(w.mae ?? {}), site: router };
         router.register("theme", themeControls(window));
         router.register("explorer", explorer(window));
+        router.register("copy", codeCopy(window));
     }
 }
