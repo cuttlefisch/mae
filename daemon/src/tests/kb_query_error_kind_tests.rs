@@ -45,6 +45,7 @@ fn config(kb_query_enabled: bool) -> crate::oauth::ResourceServerConfig {
         site_hidden_namespaces: Vec::new(),
         site_home: std::collections::BTreeMap::new(),
         site_title: std::collections::BTreeMap::new(),
+        site_components: Default::default(),
         max_request_body_bytes: 1_048_576,
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,

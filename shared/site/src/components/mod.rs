@@ -423,6 +423,15 @@ impl Components {
         }
     }
 
+    /// The file names `manifest` names, for a loader to read from the
+    /// component directory and pass to [`Components::load`] (H1: the
+    /// manifest, not a naming convention, says what the directory holds).
+    /// Names that are not one plain file name are left out, and the load
+    /// reports them.
+    pub fn named_files(manifest: &str) -> BTreeSet<String> {
+        manifest::named_files(manifest)
+    }
+
     /// Render `slot` for one page: every component in it, in manifest order,
     /// each sanitised. A component that fails contributes nothing and its
     /// error is returned; an empty slot is `""`.

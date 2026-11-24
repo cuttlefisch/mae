@@ -127,12 +127,7 @@ impl<'a> Fields<'a> {
 /// directory loader can never be sent elsewhere), a wrong extension, not
 /// supplied, or too large.
 fn file_problem(name: &str, ext: &[&str], files: &BTreeMap<String, String>) -> Option<String> {
-    let plain = !name.starts_with('.')
-        && !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-    if !plain {
+    if !plain_file_name(name) {
         return Some("is not one plain file name ([A-Za-z0-9._-], not starting with `.`)".into());
     }
     if !ext.iter().any(|x| name.ends_with(x)) {
@@ -146,6 +141,51 @@ fn file_problem(name: &str, ext: &[&str], files: &BTreeMap<String, String>) -> O
         )),
         Some(_) => None,
     }
+}
+
+/// One plain file name in the component directory: `[A-Za-z0-9._-]`, not
+/// starting with `.`. No separator and no dot segment, so a name can never
+/// reach outside the directory.
+fn plain_file_name(name: &str) -> bool {
+    !name.starts_with('.')
+        && !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// The plain file names `text` names (each component's `template`,
+/// `script`, `stylesheet`, `data.file` and `page.template`), for a loader to
+/// read and hand to [`super::Components::load`]. A name that is not plain is
+/// left out: the load then reports it. Nothing is checked here; an
+/// unreadable manifest names nothing.
+pub(super) fn named_files(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Ok(doc) = toml::from_str::<toml::Table>(text) else {
+        return out;
+    };
+    let Some(list) = doc.get("component").and_then(toml::Value::as_array) else {
+        return out;
+    };
+    let mut take = |t: &toml::Table, key: &str| {
+        if let Some(name) = t.get(key).and_then(toml::Value::as_str) {
+            if plain_file_name(name) {
+                out.insert(name.to_string());
+            }
+        }
+    };
+    for t in list.iter().filter_map(toml::Value::as_table) {
+        for key in ["template", "script", "stylesheet"] {
+            take(t, key);
+        }
+        if let Some(d) = t.get("data").and_then(toml::Value::as_table) {
+            take(d, "file");
+        }
+        if let Some(p) = t.get("page").and_then(toml::Value::as_table) {
+            take(p, "template");
+        }
+    }
+    out
 }
 
 /// A component name: `[a-z0-9][a-z0-9-]*`, at most 64. It appears in logs

@@ -203,14 +203,7 @@ async fn main() {
     // and here too — a daemon that fails to start on a config error a
     // separate check command would have caught is the wrong asymmetry, so
     // this validates unconditionally rather than only under `--check-config`.
-    let tenant_issues = config.check_tenants();
-    if !tenant_issues.is_empty() {
-        for issue in &tenant_issues {
-            tracing::error!(issue = %issue, "tenant configuration error");
-        }
-        eprintln!("Error: invalid [[tenant]] configuration (see log for details)");
-        std::process::exit(1);
-    }
+    let site_components = refuse_invalid_config(&config);
     {
         let mut s = state.lock().await;
         s.tenants = Arc::new(tenant::TenantRegistry::from_config(&config.tenant));
@@ -426,7 +419,7 @@ async fn main() {
     spawn_oauth_listener(
         &config,
         &state,
-        doc_store_for_query.clone(),
+        (doc_store_for_query.clone(), site_components),
         daemon_identity_for_oauth.clone(),
     )
     .await;
@@ -507,13 +500,45 @@ async fn main() {
     tracing::info!("mae-daemon stopped");
 }
 
+/// The configuration problems that refuse to start the daemon, checked before
+/// anything is opened: `[[tenant]]` (ADR-060 Phase C) and every KB's slot
+/// components (ADR-119 Amendment 4 H1). `--check-config` and `doctor` report
+/// the same problems through the same functions. Exits 1 on any problem;
+/// otherwise the loaded components, for the site.
+fn refuse_invalid_config(
+    config: &DaemonConfig,
+) -> Arc<mae_daemon::site_components::SiteComponents> {
+    let tenant_issues = config.check_tenants();
+    for issue in &tenant_issues {
+        tracing::error!(issue = %issue, "tenant configuration error");
+    }
+    if !tenant_issues.is_empty() {
+        eprintln!("Error: invalid [[tenant]] configuration (see log for details)");
+        std::process::exit(1);
+    }
+    match mae_daemon::site_components::SiteComponents::load(&config.oauth.site_components) {
+        Ok(c) => Arc::new(c),
+        Err(problems) => {
+            eprintln!("Error: invalid [oauth.site_components]; the daemon will not start:");
+            for p in &problems {
+                tracing::error!(problem = %p, "site component configuration error");
+                eprintln!("  - {p}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Start the OAuth 2.1 resource-server HTTPS listener (ADR-052; `kb/query.*`,
 /// ADR-053/Phase G) when configured. Split out of `main` so the serve path
 /// reads as a sequence of listeners rather than one function holding each.
 async fn spawn_oauth_listener(
     config: &DaemonConfig,
     state: &Arc<Mutex<DaemonState>>,
-    doc_store: Option<Arc<doc_store::DocStore>>,
+    (doc_store, site_components): (
+        Option<Arc<doc_store::DocStore>>,
+        Arc<mae_daemon::site_components::SiteComponents>,
+    ),
     daemon_identity: Option<Arc<mae_mcp::identity::Identity>>,
 ) {
     if !config.oauth.enabled {
@@ -572,6 +597,7 @@ async fn spawn_oauth_listener(
         site_hidden_namespaces: config.oauth.site_hidden_namespaces.clone(),
         site_home: config.oauth.site_home.clone(),
         site_title: config.oauth.site_title.clone(),
+        site_components,
         max_request_body_bytes: config.oauth.max_request_body_bytes,
         kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
         kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
@@ -1374,6 +1400,31 @@ async fn spawn_collab_server(
     identity_for_oauth
 }
 
+/// Every problem `[oauth.site_components]` has (ADR-119 H1): the same load
+/// the daemon runs at startup, for `--check-config` and `doctor`.
+fn site_component_problems(config: &DaemonConfig) -> Vec<String> {
+    mae_daemon::site_components::SiteComponents::load(&config.oauth.site_components)
+        .err()
+        .unwrap_or_default()
+}
+
+/// `doctor`'s line for `[oauth.site_components]`: the problems that would
+/// refuse to start the daemon (ADR-119 H1), counted.
+fn doctor_site_components(config: &DaemonConfig) -> usize {
+    let issues = site_component_problems(config);
+    match (config.oauth.site_components.len(), issues.len()) {
+        (0, _) => println!("  site components: none configured"),
+        (n, 0) => println!("  site components: OK ({n} KB(s))"),
+        (_, k) => {
+            println!("  site components: {k} issue(s); the daemon will not start");
+            for issue in &issues {
+                println!("    - {issue}");
+            }
+        }
+    }
+    issues.len()
+}
+
 fn run_check_config(config: &DaemonConfig) {
     // Every resource this instance claims, in one block, so an operator running
     // two instances can diff the two reports and see any collision — including
@@ -1467,6 +1518,19 @@ fn run_check_config(config: &DaemonConfig) {
     if !tenant_issues.is_empty() {
         eprintln!("Tenant configuration issues:");
         for issue in &tenant_issues {
+            eprintln!("  - {issue}");
+        }
+        std::process::exit(1);
+    }
+    // ADR-119 H1: what would refuse to start the daemon is a check failure here.
+    let component_issues = site_component_problems(config);
+    println!(
+        "  site components: {} KB(s)",
+        config.oauth.site_components.len()
+    );
+    if !component_issues.is_empty() {
+        eprintln!("Site component configuration issues:");
+        for issue in &component_issues {
             eprintln!("  - {issue}");
         }
         std::process::exit(1);
@@ -1919,6 +1983,7 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
     } else {
         println!("  oauth: disabled");
     }
+    problems += doctor_site_components(config);
 
     println!("  yrs version: {}", env!("MAE_YRS_VERSION"));
 

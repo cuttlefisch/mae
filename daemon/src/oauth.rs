@@ -72,6 +72,8 @@ pub struct ResourceServerConfig {
     pub site_home: std::collections::BTreeMap<String, String>,
     /// `config::OAuthConfig::site_title`.
     pub site_title: std::collections::BTreeMap<String, String>,
+    /// `config::OAuthConfig::site_components`, loaded at startup.
+    pub site_components: std::sync::Arc<mae_daemon::site_components::SiteComponents>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.

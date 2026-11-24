@@ -1032,3 +1032,42 @@ fields = { s = "string?", t = "string" }
     assert_eq!(errors, vec![]);
     assert_eq!(html, "<p class=\"site-v\" data-site-s=\"None\">x</p>");
 }
+
+// ---------------------------------------------------------------------------
+// What a loader reads, and what the router must agree with.
+
+/// The loader reads exactly the files a manifest names (H1: a manifest, not
+/// a naming convention); a name that could leave the directory is not read,
+/// and the load reports it.
+#[test]
+fn a_loader_reads_exactly_the_files_the_manifest_names() {
+    let manifest = std::fs::read_to_string(fixture().join("components.toml")).unwrap();
+    let named: Vec<String> = Components::named_files(&manifest).into_iter().collect();
+    assert_eq!(
+        named,
+        [
+            "components.css",
+            "copy-link.html",
+            "copy-link.js",
+            "last-updated.html",
+            "site-changes.html",
+            "state-badge.html",
+            "version-footer.html",
+            "versions.json",
+            "whats-new.html",
+            "whats-new.json",
+        ]
+    );
+    let hostile = "[[component]]\nname = \"x\"\nslot = \"header-row\"\n\
+                   template = \"../etc/passwd.html\"\nscript = \"/abs.js\"\n\
+                   stylesheet = \".hidden.css\"\n[component.data]\nfile = \"a/b.json\"\n";
+    assert!(Components::named_files(hostile).is_empty());
+    let errors = load(hostile, &[]).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "template" && e.reason.contains("plain file name")),
+        "{errors:?}"
+    );
+    assert!(Components::named_files("not toml [").is_empty());
+}
