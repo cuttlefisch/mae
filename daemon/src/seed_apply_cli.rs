@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use mae_daemon::doc_store::DocStore;
-use mae_daemon::seed::{self, ApplyOutcome, ApplyTarget};
+use mae_daemon::seed::{self, ApplyOutcome, ApplyTarget, UpdateOutcome};
 use mae_daemon::storage;
 use mae_daemon::store_lock::StoreLock;
 
@@ -63,9 +63,16 @@ fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// Recompute the plan from git, then apply it. 0 applied (or already), 1
+/// Recompute the plan from git, then apply it (or, with `--update`, update
+/// the KB to it, or show how an update would). 0 applied (or already), 1
 /// refused or failed.
 pub(crate) async fn run_apply(config: &DaemonConfig, args: &SeedArgs) -> i32 {
+    if args.update {
+        return match args.dry_run {
+            true => run_update_dry_run(config, args).await,
+            false => run_update(config, args).await,
+        };
+    }
     match apply(config, args).await {
         Ok(ApplyOutcome::Applied { created, present }) => {
             println!(
@@ -96,6 +103,95 @@ async fn apply(config: &DaemonConfig, args: &SeedArgs) -> Result<ApplyOutcome, S
         now: now(),
     };
     seed::apply(&store.doc_store, &plan, &target)
+        .await
+        .map_err(|e| format!("{} ({:?})", e.detail, e.kind))
+}
+
+/// `kb seed --update --dry-run`: the plan, and how it differs from the KB as
+/// applied. 0 when the apply would go ahead, 1 when it would refuse.
+async fn run_update_dry_run(config: &DaemonConfig, args: &SeedArgs) -> i32 {
+    match update_dry_run(config, args).await {
+        Ok((text, would_apply)) => {
+            print!("{text}");
+            i32::from(!would_apply)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+async fn update_dry_run(config: &DaemonConfig, args: &SeedArgs) -> Result<(String, bool), String> {
+    let opts = plan_options(args);
+    let plan = seed::plan(&opts).map_err(|e| e.to_string())?;
+    if !plan.ok() {
+        return Ok(match args.json {
+            true => (json_text(&seed::render_json(&plan, &opts.exclude)), false),
+            false => (seed::render_text(&plan), false),
+        });
+    }
+    let identity = crate::token_cli::load_identity(config)?;
+    let store = open_exclusive(config)?;
+    let kb_id = args.kb_id.as_deref().unwrap_or_default();
+    let d = seed::update_diff(&store.doc_store, &plan, kb_id, &identity.fingerprint())
+        .await
+        .map_err(|e| format!("{} ({:?})", e.detail, e.kind))?;
+    let would = seed::update_would_apply(&d, args.discard_edits);
+    let text = match args.json {
+        true => json_text(&seed::render_update_json(
+            &plan,
+            &opts.exclude,
+            &d,
+            args.discard_edits,
+        )),
+        false => seed::render_update_text(&plan, &d, args.discard_edits),
+    };
+    Ok((text, would))
+}
+
+fn json_text(v: &serde_json::Value) -> String {
+    format!("{}\n", serde_json::to_string_pretty(v).unwrap_or_default())
+}
+
+/// `kb seed --update`: 0 updated (or already), 1 refused or failed.
+async fn run_update(config: &DaemonConfig, args: &SeedArgs) -> i32 {
+    let kb = args.kb_id.as_deref().unwrap_or_default();
+    match update(config, args).await {
+        Ok(UpdateOutcome::Updated {
+            created,
+            written,
+            present,
+            removed,
+        }) => {
+            println!(
+                "updated: kb={kb} nodes_created={created} nodes_written={written} \
+                 nodes_already_present={present} nodes_removed={removed}"
+            );
+            0
+        }
+        Ok(UpdateOutcome::AlreadyApplied) => {
+            println!("already at this plan: nothing was written");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+async fn update(config: &DaemonConfig, args: &SeedArgs) -> Result<UpdateOutcome, String> {
+    let plan = seed::plan(&plan_options(args)).map_err(|e| e.to_string())?;
+    let identity = crate::token_cli::load_identity(config)?;
+    let store = open_exclusive(config)?;
+    let target = ApplyTarget {
+        kb_id: args.kb_id.as_deref().unwrap_or_default(),
+        plan_hash: args.plan_hash.as_deref().unwrap_or_default(),
+        owner: &identity,
+        now: now(),
+    };
+    seed::update(&store.doc_store, &plan, &target, args.discard_edits)
         .await
         .map_err(|e| format!("{} ({:?})", e.detail, e.kind))
 }

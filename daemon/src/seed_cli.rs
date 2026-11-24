@@ -8,6 +8,12 @@
 //! operator reviewed. Apply and export open the store offline, under its lock
 //! (`seed_apply_cli`).
 //!
+//! `--update` moves a KB an earlier seed made to a new revision
+//! (`mae_daemon::seed::update`). Its dry run compares the plan with the KB as
+//! applied, so it too opens the store (and refuses while a daemon serves it);
+//! its apply needs the reviewed `--plan-hash`, and `--discard-edits` when the
+//! dry run listed nodes edited outside the seed.
+//!
 //! @ai-caution: [security] An operator command, like `token mint`: seeding names
 //! a KB's owner. It must not become an MCP tool or an agent-reachable RPC
 //! (CLAUDE.md principle #16).
@@ -20,6 +26,8 @@ use crate::config::DaemonConfig;
 
 const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag-or-commit>\n\
      \x20      mae-daemon kb seed --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash>\n\
+     \x20      mae-daemon kb seed --update --dry-run --git <repo> --rev <tag-or-commit> --kb-id <id>\n\
+     \x20      mae-daemon kb seed --update --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash> [--discard-edits]\n\
      \x20      mae-daemon kb export --kb-id <id> --out <dir> [--force]\n\
      \x20      mae-daemon kb member add|remove|list --kb-id <id> [--member <SHA256:…>] [--role viewer|editor]\n\
      \x20      mae-daemon kb anchor --kb-id <id> [--public-key <base64>]\n\
@@ -37,7 +45,7 @@ pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
         Some("seed") => match run_seed(&rest[1..]) {
             Step::Exit(code) => code,
-            Step::Apply(args) => crate::seed_apply_cli::run_apply(config, &args).await,
+            Step::Store(args) => crate::seed_apply_cli::run_apply(config, &args).await,
         },
         Some("export") => crate::seed_apply_cli::run_export(config, &rest[1..]).await,
         Some("member") => crate::member_cli::run(config, &rest[1..]).await,
@@ -51,16 +59,20 @@ pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
 }
 
 /// What `kb seed` does after parsing: exit (a dry run, or a usage error), or
-/// apply, which needs the store.
+/// go on to what needs the store (an apply, or anything with `--update`).
 #[derive(Debug)]
 pub(crate) enum Step {
     Exit(i32),
-    Apply(Box<SeedArgs>),
+    Store(Box<SeedArgs>),
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct SeedArgs {
-    dry_run: bool,
+    pub(crate) dry_run: bool,
+    /// Update a KB an earlier seed made, rather than create one.
+    pub(crate) update: bool,
+    /// With `--update`: overwrite nodes edited outside the seed.
+    pub(crate) discard_edits: bool,
     git: Option<PathBuf>,
     rev: Option<String>,
     include: Vec<String>,
@@ -68,7 +80,7 @@ pub(crate) struct SeedArgs {
     max_body_bytes: Option<usize>,
     require_canonical: bool,
     allow_received_times: bool,
-    json: bool,
+    pub(crate) json: bool,
     name: Option<String>,
     owner: Option<String>,
     owner_label: Option<String>,
@@ -89,8 +101,8 @@ fn run_seed(args: &[String]) -> Step {
             return Step::Exit(2);
         }
     };
-    if !parsed.dry_run {
-        return Step::Apply(Box::new(parsed));
+    if !parsed.dry_run || parsed.update {
+        return Step::Store(Box::new(parsed));
     }
     Step::Exit(dry_run(&parsed))
 }
@@ -188,6 +200,8 @@ fn switch<'a>(a: &'a mut SeedArgs, flag: &str) -> Option<&'a mut bool> {
         "--require-canonical" => Some(&mut a.require_canonical),
         "--allow-received-times" => Some(&mut a.allow_received_times),
         "--json" => Some(&mut a.json),
+        "--update" => Some(&mut a.update),
+        "--discard-edits" => Some(&mut a.discard_edits),
         _ => None,
     }
 }
@@ -218,6 +232,12 @@ fn set_value(a: &mut SeedArgs, flag: &str, value: String) -> Result<(), String> 
 /// An apply needs the KB id and the reviewed hash, and takes none of the
 /// ownership flags: the KB is the daemon's (members come with ADR-098).
 fn validate_mode(a: SeedArgs) -> Result<SeedArgs, String> {
+    if a.discard_edits && !a.update {
+        return Err("--discard-edits applies only to --update".into());
+    }
+    if a.update && a.kb_id.is_none() {
+        return Err("--update needs --kb-id <id>: the KB to update".into());
+    }
     if a.dry_run {
         return Ok(a);
     }
@@ -277,7 +297,7 @@ mod tests {
     fn exit(step: Step) -> i32 {
         match step {
             Step::Exit(code) => code,
-            Step::Apply(a) => panic!("expected an exit, got an apply of {a:?}"),
+            Step::Store(a) => panic!("expected an exit, got an apply of {a:?}"),
         }
     }
 
@@ -310,9 +330,56 @@ mod tests {
             "--kb-id=k",
             "--plan-hash=h",
         ])) {
-            Step::Apply(a) => assert_eq!(a.plan_hash.as_deref(), Some("h")),
+            Step::Store(a) => assert_eq!(a.plan_hash.as_deref(), Some("h")),
             Step::Exit(c) => panic!("a complete apply must reach apply, got exit {c}"),
         }
+    }
+
+    /// `--update` names its KB, dry run or not; `--discard-edits` belongs to
+    /// `--update`; an update dry run goes on to the store (it compares with the
+    /// KB), and an update apply still needs the reviewed hash. Kills: an update
+    /// with no KB reaching the store, or `--discard-edits` silently ignored.
+    #[test]
+    fn update_flags_are_checked_before_reading() {
+        for bad in [
+            &["--update", "--dry-run", "--git", "/r", "--rev", "v1"][..],
+            &["--update", "--git", "/r", "--rev", "v1", "--plan-hash", "h"],
+            &["--dry-run", "--git", "/r", "--rev", "v1", "--discard-edits"],
+            &[
+                "--git=/r",
+                "--rev=v1",
+                "--kb-id=k",
+                "--plan-hash=h",
+                "--discard-edits",
+            ],
+            &["--update", "--git=/r", "--rev=v1", "--kb-id=k"],
+            &[
+                "--update=yes",
+                "--dry-run",
+                "--git=/r",
+                "--rev=v1",
+                "--kb-id=k",
+            ],
+        ] {
+            assert_eq!(exit(run_seed(&args(bad))), 2, "{bad:?}");
+        }
+        let dry = run_seed(&args(&[
+            "--update",
+            "--dry-run",
+            "--git=/r",
+            "--rev=v1",
+            "--kb-id=k",
+        ]));
+        assert!(matches!(dry, Step::Store(a) if a.update && a.dry_run));
+        let apply = run_seed(&args(&[
+            "--update",
+            "--git=/r",
+            "--rev=v1",
+            "--kb-id=k",
+            "--plan-hash=h",
+            "--discard-edits",
+        ]));
+        assert!(matches!(apply, Step::Store(a) if a.update && a.discard_edits && !a.dry_run));
     }
 
     #[test]

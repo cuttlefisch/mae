@@ -6,6 +6,7 @@
 use serde_json::{json, Value};
 
 use super::plan::{sha256_hex, PlannedNode, SeedPlan, TimeSource};
+use super::update::{NodeChange, OutsideEdit, UpdateDiff};
 use super::CONTRACT;
 
 /// The JSON report. Stable keys; see `render_text` for the meaning of each.
@@ -89,8 +90,21 @@ fn node_json(n: &PlannedNode) -> Value {
 
 /// The text report.
 pub fn render_text(plan: &SeedPlan) -> String {
+    render(plan, None)
+}
+
+/// The text report of `kb seed --update --dry-run`: the plan, then how it
+/// differs from the KB as applied. `discard_edits` is whether the apply would
+/// be given `--discard-edits`.
+pub fn render_update_text(plan: &SeedPlan, d: &UpdateDiff, discard_edits: bool) -> String {
+    let mut out = render(plan, Some(d));
+    update_sections(d, discard_edits, &mut out);
+    out
+}
+
+fn render(plan: &SeedPlan, update: Option<&UpdateDiff>) -> String {
     let mut out = String::new();
-    summary(plan, &mut out);
+    summary(plan, update, &mut out);
     section(
         &mut out,
         "refusals",
@@ -126,7 +140,7 @@ pub fn render_text(plan: &SeedPlan) -> String {
     out
 }
 
-fn summary(plan: &SeedPlan, out: &mut String) {
+fn summary(plan: &SeedPlan, update: Option<&UpdateDiff>, out: &mut String) {
     let s = &plan.source;
     let body_total: usize = plan.nodes.iter().map(|n| n.file.body.len()).sum();
     let largest = plan.nodes.iter().max_by_key(|n| n.file.body.len());
@@ -134,7 +148,18 @@ fn summary(plan: &SeedPlan, out: &mut String) {
     let by_id = count(plan, |n| n.created_source == TimeSource::GitId);
     let created_received = count(plan, |n| n.created_source == TimeSource::Received);
     let modified_received = count(plan, |n| n.modified_source == TimeSource::Received);
-    let result = if plan.ok() {
+    let result = if let (true, Some(d)) = (plan.ok(), update) {
+        format!(
+            "OK: would update KB '{}' to {} nodes: {} added, {} changed, {} removed, {} \
+             unchanged",
+            d.kb_id,
+            plan.nodes.len(),
+            d.added.len(),
+            d.changed.len(),
+            d.removed.len(),
+            d.unchanged
+        )
+    } else if plan.ok() {
         format!("OK: would create one KB with {} nodes", plan.nodes.len())
     } else {
         format!(
@@ -218,4 +243,103 @@ fn show_line(l: &str) -> String {
 
 fn count(plan: &SeedPlan, pred: impl Fn(&PlannedNode) -> bool) -> usize {
     plan.nodes.iter().filter(|n| pred(n)).count()
+}
+
+/// Whether `kb seed --update` would apply `d`: it refuses while a node is
+/// edited outside the seed, unless `--discard-edits`.
+pub fn update_would_apply(d: &UpdateDiff, discard_edits: bool) -> bool {
+    d.edited.is_empty() || discard_edits
+}
+
+fn update_sections(d: &UpdateDiff, discard_edits: bool, out: &mut String) {
+    let a = &d.applied;
+    out.push_str(&format!(
+        "\n== update of KB '{}' ==\nfrom plan   {} (rev {}, commit {}), applied {}\n",
+        d.kb_id,
+        a.plan_hash,
+        a.rev,
+        a.commit,
+        a.applied_at.map_or("-".into(), crate::rfc3339::utc)
+    ));
+    if let Some(h) = &d.in_progress {
+        out.push_str(&format!(
+            "in progress an update to plan {h} was cut short; only that plan resumes it\n"
+        ));
+    }
+    section(out, "added", d.added.iter().map(change_line));
+    section(out, "changed", d.changed.iter().map(change_line));
+    section(out, "removed", d.removed.iter().map(change_line));
+    let title = "edited outside the seed since its last apply";
+    section(out, title, d.edited.iter().map(edit_line));
+    if !d.edited.is_empty() {
+        out.push_str(if discard_edits {
+            "--discard-edits: the apply overwrites these; each edit stays in its node's history\n"
+        } else {
+            "the apply refuses while these exist; --discard-edits overwrites them (each edit \
+             stays in its node's history)\n"
+        });
+    }
+}
+
+fn change_line(c: &NodeChange) -> String {
+    let mut s = format!("{} {}", c.node_id, c.path);
+    if let Some(from) = &c.from_path {
+        s.push_str(&format!(" (moved from {from})"));
+    }
+    if c.returns {
+        s.push_str(" (its document returns, with its history)");
+    }
+    if !c.fields.is_empty() {
+        s.push_str(&format!(": {}", c.fields.join(", ")));
+    }
+    s
+}
+
+fn edit_line(e: &OutsideEdit) -> String {
+    let mut s = format!("{} {}", e.node_id, e.path);
+    if let Some(f) = &e.fields {
+        s.push_str(&format!(": {}", f.join(", ")));
+    }
+    if !e.editors.is_empty() {
+        s.push_str(&format!("; by {}", e.editors.join(", ")));
+    }
+    if let Some(n) = &e.note {
+        s.push_str(&format!("; {n}"));
+    }
+    s
+}
+
+/// The JSON report of `kb seed --update --dry-run`: [`render_json`] with an
+/// `update` object.
+pub fn render_update_json(
+    plan: &SeedPlan,
+    exclude_requested: &[String],
+    d: &UpdateDiff,
+    discard_edits: bool,
+) -> Value {
+    let mut report = render_json(plan, exclude_requested);
+    let change = |c: &NodeChange| {
+        json!({"node_id": c.node_id, "path": c.path, "from_path": c.from_path,
+               "fields": c.fields, "returns": c.returns})
+    };
+    report["update"] = json!({
+        "kb_id": d.kb_id,
+        "from": {
+            "plan_hash": d.applied.plan_hash,
+            "rev": d.applied.rev,
+            "commit": d.applied.commit,
+            "applied_at": d.applied.applied_at,
+        },
+        "in_progress": d.in_progress,
+        "added": d.added.iter().map(change).collect::<Vec<_>>(),
+        "changed": d.changed.iter().map(change).collect::<Vec<_>>(),
+        "removed": d.removed.iter().map(change).collect::<Vec<_>>(),
+        "unchanged": d.unchanged,
+        "edited_outside_seed": d.edited.iter().map(|e| json!({
+            "node_id": e.node_id, "path": e.path, "fields": e.fields,
+            "editors": e.editors, "note": e.note,
+        })).collect::<Vec<_>>(),
+        "would_apply": update_would_apply(d, discard_edits),
+    });
+    report
 }
