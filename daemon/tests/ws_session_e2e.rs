@@ -258,6 +258,115 @@ async fn a_reply_over_the_outbound_bound_closes_1011_not_silently() {
     assert_eq!(bob.closed().await, (1011, "response_too_large".to_string()));
 }
 
+/// #1003: a paged `kb/join` over a socket whose `max_outbound_bytes` is below
+/// the store's message bound is sized to the socket, not the store. Before,
+/// the first page was filled to the store's bound (~15 MB), so a KB larger
+/// than the socket's cap closed it `1011 response_too_large` and could not be
+/// joined at all. Every page must fit the cap, and the pages together must be
+/// exactly the KB: each node once, with the content it was shared with.
+#[tokio::test]
+async fn a_paged_join_fits_a_lowered_outbound_bound() {
+    const CAP: usize = 64 * 1024;
+    let d = spawn(Opts {
+        max_outbound_bytes: Some(CAP),
+        ..Opts::default()
+    })
+    .await;
+    let mut alice = connect_bearer(&d, &d.token("SHA256:alice", 3600)).await;
+    let nodes = varied_nodes(0x1003, 40, CAP);
+    let total: usize = nodes.iter().map(|(_, _, b)| b.len()).sum();
+    assert!(total > 4 * CAP, "the KB must need several pages: {total}");
+    let refs: Vec<(&str, &str, &str)> = nodes
+        .iter()
+        .map(|(i, t, b)| (i.as_str(), t.as_str(), b.as_str()))
+        .collect();
+    let r = alice.call(1, "kb/share", kb_share("kpage", &refs)).await;
+    assert!(ok(&r), "{r}");
+    let bob_in =
+        json!({"kb_id": "kpage", "member": "SHA256:bob", "role": "viewer", "label": "bob"});
+    assert!(ok(&alice.call(2, "kb/add_member", bob_in).await));
+
+    let mut bob = connect_bearer(&d, &d.token("SHA256:bob", 3600)).await;
+    let (pages, served) = paged_join(&mut bob, "kpage").await;
+    assert!(pages.len() >= 4, "{pages:?}");
+    for (k, len) in pages.iter().enumerate() {
+        assert!(*len <= CAP, "page {k} is {len} bytes, over the cap {CAP}");
+    }
+    let largest = pages.iter().max().unwrap();
+    assert!(
+        *largest > CAP * 3 / 4,
+        "the near-cap node fills its page: {largest}"
+    );
+    let mut want: Vec<(String, String)> = nodes.into_iter().map(|(i, _, b)| (i, b)).collect();
+    want.sort();
+    assert_eq!(served, want, "every node exactly once, with its content");
+    let init = bob
+        .call(
+            1,
+            "initialize",
+            json!({"clientInfo": {"name": "t", "version": "0"}}),
+        )
+        .await;
+    assert_eq!(
+        init["result"]["limits"]["max_outbound_bytes"], CAP,
+        "initialize must announce the bound hello does: {init}"
+    );
+}
+
+/// `count` nodes with seeded sizes from 200 bytes to 12 KB, plus one whose
+/// encoding nearly fills a page of `cap` on its own. Bodies differ per node.
+fn varied_nodes(seed: u64, count: usize, cap: usize) -> Vec<(String, String, String)> {
+    let mut rng = seed;
+    let mut out = Vec::new();
+    for i in 0..count {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let len = 200 + ((rng >> 33) as usize % 12_000);
+        out.push(node(i, len));
+    }
+    // base64 of ~0.62 cap is ~0.83 cap: alone on its page, close to the cap.
+    out.push(node(count, cap * 5 / 8));
+    out
+}
+
+fn node(i: usize, len: usize) -> (String, String, String) {
+    let unit = format!("{i}~");
+    let body: String = unit
+        .repeat(len / unit.len() + 1)
+        .chars()
+        .take(len)
+        .collect();
+    (format!("n:{i:03}"), format!("Node {i}"), body)
+}
+
+/// Join `kb` in pages: each page's raw length, and every `(id, body)` served,
+/// in serving order.
+async fn paged_join(ws: &mut Ws, kb: &str) -> (Vec<usize>, Vec<(String, String)>) {
+    let mut lens = Vec::new();
+    let mut served = Vec::new();
+    let mut after: Option<String> = None;
+    for id in 10..60 {
+        let mut params = json!({"kb_id": kb, "paged": true});
+        if let Some(a) = &after {
+            params["after"] = json!(a);
+        }
+        let r = ws.call(id, "kb/join", params).await;
+        assert!(ok(&r), "page {id}: {r}");
+        lens.push(ws.log.last().unwrap().len());
+        for n in r["result"]["nodes"].as_array().unwrap() {
+            let state = base64_to_update(n["state"].as_str().unwrap()).unwrap();
+            let doc = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
+            served.push((n["id"].as_str().unwrap().to_string(), doc.body()));
+        }
+        match r["result"]["next_after"].as_str() {
+            Some(n) => after = Some(n.to_string()),
+            None => return (lens, served),
+        }
+    }
+    panic!("paging did not terminate");
+}
+
 /// The default outbound bound is derived from the document size limit, and
 /// advertised: at the stock 10 MB limit, `4 * ceil(10485760 / 3)` bytes of
 /// base64 plus a 1 MiB envelope.

@@ -407,6 +407,12 @@ async fn run_session<R, W>(
     // the size limit fits, not a fixed 10 MiB, so a node at the limit can be
     // shared or written in one message.
     let request_cap = doc_store.message_bound();
+    // #1003: the largest reply this session may send. A transport that caps
+    // replies itself (the WebSocket) sets it; otherwise the store's bound.
+    let reply_bound = governor
+        .as_ref()
+        .and_then(governor::SessionGovernor::reply_bound)
+        .unwrap_or(request_cap);
     let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, ReadEnd>>(32);
     tokio::spawn(async move {
         let mut reader = reader;
@@ -515,14 +521,14 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, quota.as_ref(), &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits, self_issue.clone()).await
+                    handle_doc_request_inner(&msg, &doc_store, quota.as_ref(), &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, reply_bound, artifact_store.as_ref(), kb_query_limits, self_issue.clone()).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
                     ).await
                 };
 
-                augment_initialize(&msg, &mut response, &broadcaster, session_id, request_cap);
+                augment_initialize(&msg, &mut response, &broadcaster, session_id, request_cap, reply_bound);
                 if governor::write_json(&mut writer, &response, write_timeout).await.is_err() {
                     warn!(session = session_id, "write error; closing client");
                     break;
@@ -601,18 +607,20 @@ fn augment_initialize(
     response: &mut JsonRpcResponse,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
-    message_cap: usize,
+    request_cap: usize,
+    reply_bound: usize,
 ) {
     if !msg.contains("\"initialize\"") {
         return;
     }
     // ADR-022 Amendment 1 E4: the same two limits the socket's hello carries,
     // so a client packs `kb/share` batches against the daemon's real request
-    // cap. A paged `kb/join` fills each reply up to the same bound.
+    // cap. A paged `kb/join` fills each reply up to the session's reply bound
+    // (#1003), which over a WebSocket is the socket's own outbound cap.
     if let Some(result) = response.result.as_mut().filter(|r| r.is_object()) {
         result["limits"] = serde_json::json!({
-            "max_frame_bytes": message_cap,
-            "max_outbound_bytes": message_cap,
+            "max_frame_bytes": request_cap,
+            "max_outbound_bytes": reply_bound,
         });
     }
     let Some(info) = response
@@ -893,6 +901,7 @@ async fn handle_doc_request(
         None,
         session_docs,
         Transport::Hub,
+        doc_store.message_bound(),
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
         None,
@@ -1778,6 +1787,7 @@ async fn handle_doc_request_inner(
     auth_pubkey: Option<&[u8; 32]>,
     session_docs: &mut HashSet<String>,
     transport: Transport,
+    reply_bound: usize,
     artifact_store: &dyn crate::artifact_store::ArtifactStore,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
@@ -1999,12 +2009,10 @@ async fn handle_doc_request_inner(
             kb_membership::handle_kb_join(
                 doc_store,
                 broadcaster,
-                session_id,
+                (session_id, auth_principal, auth_pubkey, transport),
                 auth_label,
-                auth_principal,
-                auth_pubkey,
                 session_docs,
-                transport,
+                reply_bound,
                 id,
                 &params,
             )

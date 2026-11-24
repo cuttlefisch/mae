@@ -47,6 +47,7 @@ async fn state_vector_as(
         None,
         docs,
         Transport::Hub,
+        store.message_bound(),
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
         None,

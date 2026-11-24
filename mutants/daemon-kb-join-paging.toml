@@ -1,0 +1,26 @@
+# A paged `kb/join` fills each page to the session's reply bound when that is
+# below the store's message bound (#1003): over a WebSocket, a reply above
+# `max_outbound_bytes` closes the socket 1011. One mutant per half of
+# `JoinPage::from_params`'s `min`. Tests: daemon/tests/ws_session_e2e.rs and
+# daemon/src/collab_handler/tests/collab_handler_paged_transfer_tests.rs.
+
+[[mutant]]
+id = "daemon-kb-join-paging/session-bound-ignored"
+runner = "daemon"
+targets = ["--test", "ws_session_e2e"]
+filter = "test(a_paged_join_fits_a_lowered_outbound_bound)"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_membership.rs"
+find = '''        let bound = doc_store.message_bound().min(reply_bound);'''
+replace = '''        let _ = reply_bound;
+        let bound = doc_store.message_bound();'''
+
+[[mutant]]
+id = "daemon-kb-join-paging/min-is-max"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_sessions_reply_bound_lowers_pages_and_never_raises_them)"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_membership.rs"
+find = '''        let bound = doc_store.message_bound().min(reply_bound);'''
+replace = '''        let bound = doc_store.message_bound().max(reply_bound);'''
