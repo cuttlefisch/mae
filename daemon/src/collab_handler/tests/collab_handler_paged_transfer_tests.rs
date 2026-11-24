@@ -249,6 +249,24 @@ async fn a_sessions_reply_bound_lowers_pages_and_never_raises_them() {
     );
 }
 
+/// A reply bound too small for any node leaves a page budget of 0. The join
+/// still ends, one node per page (a page always carries one), every node
+/// served once and in order: no loop, no skip, no duplicate at `next_after`.
+#[tokio::test]
+async fn a_reply_bound_with_no_room_pages_one_node_at_a_time_and_ends() {
+    let s = store(Some(CAP));
+    let bc = test_broadcaster();
+    let mut alice = session(&s, &bc, ALICE);
+    share_in_batches(&mut alice).await;
+    let mut bob = session(&s, &bc, BOB);
+    let baseline = page_ids(&paged_join(&mut bob, &[]).await);
+    let mut bob = session_bounded(&s, &bc, BOB, Some(1));
+    let pages = page_ids(&paged_join(&mut bob, &[]).await);
+    assert_eq!(pages.len(), NODES, "{pages:?}");
+    assert!(pages.iter().all(|p| p.len() == 1), "{pages:?}");
+    assert_eq!(pages.concat(), baseline.concat());
+}
+
 #[tokio::test]
 async fn a_page_after_the_first_still_reconciles_from_the_members_state_vector() {
     // ADR-022's crash case on a later page: the member sends its state vector
