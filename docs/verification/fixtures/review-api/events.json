@@ -1,7 +1,7 @@
 {
   "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
   "method": "kb/review.events",
-  "description": "The KB's event chain, paged, owner and auditor only (it names principals). Each line is an export line (Amendment 4 D9): `canonical` is the base64 of the event's RFC 8785 bytes, entry_hash = SHA-256(\"maereview/v1\\n\" || canonical), sig = Ed25519(daemon key, \"maereview-sig/v1\\n\" || entry_hash raw 32 bytes), and prev_hash is the previous line's entry_hash (64 zeros for seq 1). THESE FIXTURES VERIFY: they are signed with a fixed TEST key (seed bytes 0x01..0x20), whose public key is `header.daemon_key`. A real verifier takes the daemon key from an out-of-band anchor, never from the export.",
+  "description": "The KB's event chain, paged, owner and auditor only (it names principals). Each line is an export line (Amendment 4 E10): `canonical` is the base64 of the event's RFC 8785 bytes, entry_hash = SHA-256(\"maereview/v1\\n\" || canonical), sig = Ed25519(daemon key, \"maereview-sig/v1\\n\" || entry_hash raw 32 bytes), and prev_hash is the previous line's entry_hash (64 zeros for seq 1). THESE FIXTURES VERIFY: they are signed with a fixed TEST key (seed bytes 0x01..0x20), whose public key is `header.daemon_key`. A real verifier takes the daemon key from an out-of-band anchor, never from the export.",
   "transport": {
     "http": "POST /",
     "headers": {
@@ -14,7 +14,7 @@
       "name": "page 1",
       "request": {
         "jsonrpc": "2.0",
-        "id": 54,
+        "id": 56,
         "method": "kb/review.events",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -23,7 +23,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 54,
+        "id": 56,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "header": {
@@ -63,7 +63,7 @@
       "name": "page 2 (last)",
       "request": {
         "jsonrpc": "2.0",
-        "id": 55,
+        "id": 57,
         "method": "kb/review.events",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -73,7 +73,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 55,
+        "id": 57,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "header": {
@@ -115,7 +115,7 @@
       "case": "a member who is not owner or auditor",
       "request": {
         "jsonrpc": "2.0",
-        "id": 56,
+        "id": 58,
         "method": "kb/review.events",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f"
@@ -123,7 +123,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 56,
+        "id": 58,
         "error": {
           "code": -32603,
           "message": "the event chain is readable by the owner and the auditor only",

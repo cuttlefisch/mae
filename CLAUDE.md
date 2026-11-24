@@ -815,7 +815,11 @@ event log, in daemon tables outside the CRDT (ADR-106's placement). The daemon e
 author (authors counted since the last approved revision, which needs `apply_update` to record its
 principal) and refuses agent principals; named sets publish atomically; entry into force and
 derogation are recorded acts; revisions survive purge as the document-control record. Folds in
-ADR-101/103's agent-edits-pending-review.
+ADR-101/103's agent-edits-pending-review. Amendment 4 settles its open decisions: seven revision states
+(`superseded` and `derogated` replace `historical`), a rejection or withdrawal ends the whole request, the
+signed PDF is the record of approval, signed originals enter by `mae-daemon kb import` under a required
+SHA256SUMS manifest, and revisions are never deleted; it pins the second-factor check, every method's
+shape, the event-log export and all refusal kinds, with fixtures in `docs/verification/fixtures/review-api/`.
 
 **ADR-114** (*accepted, design*) — **node kinds are an open, declared, multilingual vocabulary.** A
 node's `kind` is stored as written and never coerced to `note`; a KB may declare its kinds (immutable

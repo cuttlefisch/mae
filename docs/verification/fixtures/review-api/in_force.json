@@ -14,7 +14,7 @@
       "name": "page 1",
       "request": {
         "jsonrpc": "2.0",
-        "id": 51,
+        "id": 53,
         "method": "kb/review.in_force",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -23,7 +23,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 51,
+        "id": 53,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "rows": [
@@ -64,7 +64,7 @@
       "name": "page 2 (last)",
       "request": {
         "jsonrpc": "2.0",
-        "id": 52,
+        "id": 54,
         "method": "kb/review.in_force",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -74,7 +74,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 52,
+        "id": 54,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "rows": [
@@ -103,7 +103,7 @@
       "case": "not a reader",
       "request": {
         "jsonrpc": "2.0",
-        "id": 53,
+        "id": 55,
         "method": "kb/review.in_force",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f"
@@ -111,7 +111,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 53,
+        "id": 55,
         "error": {
           "code": -32603,
           "message": "not a member of this KB",

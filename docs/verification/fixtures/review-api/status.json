@@ -14,7 +14,7 @@
       "name": "in force, with a newer draft in review",
       "request": {
         "jsonrpc": "2.0",
-        "id": 47,
+        "id": 49,
         "method": "kb/review.status",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -23,7 +23,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 47,
+        "id": 49,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
@@ -102,7 +102,7 @@
       "case": "unknown node",
       "request": {
         "jsonrpc": "2.0",
-        "id": 48,
+        "id": 50,
         "method": "kb/review.status",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -111,7 +111,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 48,
+        "id": 50,
         "error": {
           "code": -32603,
           "message": "no such node in this KB",

@@ -1,7 +1,7 @@
 {
   "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
   "method": "kb/review.attach_signed_pdf",
-  "description": "Binds an uploaded blob (blob_upload.json) to a revision as its signed PDF: the controlled record of approval (Amendment 4 D3). Write-once. Approved, in-force, superseded or derogated revisions only; by a listed approver who is a person, with a fresh second factor when the KB requires one. The daemon does not verify the PDF's signatures.",
+  "description": "Binds an uploaded blob (blob_upload.json) to a revision as its signed PDF: the controlled record of approval (Amendment 4 E3). Write-once. Approved, in-force, superseded or derogated revisions only; by a listed approver who is a person, with a fresh second factor when the KB requires one. The daemon does not verify the PDF's signatures.",
   "transport": {
     "http": "POST /",
     "headers": {

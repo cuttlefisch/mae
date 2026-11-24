@@ -14,7 +14,7 @@
       "name": "assign",
       "request": {
         "jsonrpc": "2.0",
-        "id": 61,
+        "id": 63,
         "method": "kb/review.set_code",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -24,7 +24,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 61,
+        "id": 63,
         "result": {
           "event_id": "ev-0000000013",
           "doc_code": "PRO-2"
@@ -37,7 +37,7 @@
       "case": "number already used for that prefix",
       "request": {
         "jsonrpc": "2.0",
-        "id": 62,
+        "id": 64,
         "method": "kb/review.set_code",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -47,7 +47,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 62,
+        "id": 64,
         "error": {
           "code": -32603,
           "message": "PRO-2 is already assigned",

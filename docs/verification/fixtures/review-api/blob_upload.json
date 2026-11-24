@@ -1,5 +1,5 @@
 {
-  "$comment": "ADR-115 P1 as built (daemon/src/oauth_blobs.rs). Not JSON-RPC: the HTTP route that every attachment's bytes go through first (ADR-113 O3). PDFs are stored exactly as they arrive, so the answer's sha256 is the sha256 of the uploaded file. Refusal bodies are {error, error_description, kind, ...data}.",
+  "$comment": "ADR-115 P1 as built on branch feat/kb-attachment-store, not yet on main (daemon/src/oauth_blobs.rs). Not JSON-RPC: the HTTP route that every attachment's bytes go through first (ADR-113 O3). PDFs are stored exactly as they arrive, so the answer's sha256 is the sha256 of the uploaded file. Refusal bodies are {error, error_description, kind, ...data}.",
   "route": "POST /kb/<kb_id>/blobs",
   "request": {
     "method": "POST",
@@ -43,8 +43,8 @@
       "response": {
         "status": 413,
         "body": {
-          "error": "invalid_request",
-          "error_description": "upload exceeds the attachment cap",
+          "error": "payload_too_large",
+          "error_description": "an attachment may be at most 104857600 bytes",
           "kind": "quota_exceeded",
           "size": 209715200,
           "limit": 104857600

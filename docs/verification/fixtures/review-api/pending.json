@@ -14,7 +14,7 @@
       "name": "one open request",
       "request": {
         "jsonrpc": "2.0",
-        "id": 49,
+        "id": 51,
         "method": "kb/review.pending",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -23,7 +23,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 49,
+        "id": 51,
         "result": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "requests": [
@@ -85,7 +85,7 @@
       "case": "unknown cursor",
       "request": {
         "jsonrpc": "2.0",
-        "id": 50,
+        "id": 52,
         "method": "kb/review.pending",
         "params": {
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
@@ -94,7 +94,7 @@
       },
       "response": {
         "jsonrpc": "2.0",
-        "id": 50,
+        "id": 52,
         "error": {
           "code": -32602,
           "message": "cursor is not one this method issued",
