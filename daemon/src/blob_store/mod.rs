@@ -48,6 +48,8 @@ pub mod svg;
 pub mod upload;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;

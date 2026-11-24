@@ -28,9 +28,9 @@ const CAP: u64 = 4096;
 
 /// A storage quota for every principal (or none), and request charging that
 /// admits or refuses everything.
-struct TestQuota {
-    storage: Option<u64>,
-    refuse_requests: bool,
+pub(super) struct TestQuota {
+    pub(super) storage: Option<u64>,
+    pub(super) refuse_requests: bool,
 }
 
 impl QuotaCharger for TestQuota {
@@ -49,22 +49,22 @@ impl QuotaCharger for TestQuota {
     }
 }
 
-struct People {
-    editor: Identity,
-    viewer: Identity,
+pub(super) struct People {
+    pub(super) editor: Identity,
+    pub(super) viewer: Identity,
     /// An editor of `kb-b` only.
     other_editor: Identity,
     stranger: Identity,
     e2e_member: Identity,
 }
 
-struct Harness {
+pub(super) struct Harness {
     addr: SocketAddr,
     /// Connections the server has finished with, everything they held dropped.
     closed: tokio::sync::watch::Receiver<usize>,
     daemon: Arc<Identity>,
     routes: Arc<BlobRoutes>,
-    people: People,
+    pub(super) people: People,
     _dir: tempfile::TempDir,
 }
 
@@ -104,6 +104,10 @@ fn config() -> ResourceServerConfig {
 }
 
 async fn harness_with(quota: TestQuota, max_pixels: u64) -> Harness {
+    harness_cap(quota, max_pixels, CAP).await
+}
+
+pub(super) async fn harness_cap(quota: TestQuota, max_pixels: u64, cap: u64) -> Harness {
     let doc_store = fresh_doc_store().await;
     let owner = Arc::new(Identity::generate("owner"));
     doc_store.set_signer(Arc::clone(&owner));
@@ -149,7 +153,7 @@ async fn harness_with(quota: TestQuota, max_pixels: u64) -> Harness {
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(BlobStore::open(&dir.path().join("blobs")).unwrap());
-    let routes = Arc::new(BlobRoutes::new(store, CAP, max_pixels));
+    let routes = Arc::new(BlobRoutes::new(store, cap, max_pixels));
     let daemon = Arc::new(Identity::generate("daemon"));
     let self_issue = mae_daemon::oauth_self_issue::SelfIssueConfig {
         identity: Arc::clone(&daemon),
@@ -243,7 +247,7 @@ impl Harness {
         Reply::parse(&out)
     }
 
-    async fn upload(&self, who: &Identity, kb: &str, body: &[u8], extra: &str) -> Reply {
+    pub(super) async fn upload(&self, who: &Identity, kb: &str, body: &[u8], extra: &str) -> Reply {
         let head = format!(
             "POST /kb/{kb}/blobs HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}{extra}",
             self.token(who),
@@ -252,7 +256,14 @@ impl Harness {
         self.raw(&head, body).await
     }
 
-    async fn fetch(&self, method: &str, who: &Identity, kb: &str, sha: &str, extra: &str) -> Reply {
+    pub(super) async fn fetch(
+        &self,
+        method: &str,
+        who: &Identity,
+        kb: &str,
+        sha: &str,
+        extra: &str,
+    ) -> Reply {
         let head = format!(
             "{method} /kb/{kb}/blobs/{sha} HTTP/1.1\r\nAuthorization: Bearer {}{extra}",
             self.token(who)
@@ -264,7 +275,7 @@ impl Harness {
         self.routes.store.list_all().unwrap()
     }
 
-    fn body_bytes(&self) -> u64 {
+    pub(super) fn body_bytes(&self) -> u64 {
         self.routes
             .counters
             .body_bytes
@@ -273,11 +284,11 @@ impl Harness {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Reply {
-    status: u16,
+pub(super) struct Reply {
+    pub(super) status: u16,
     /// Lowercased names, in order, without `date` (the only header that varies).
     headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(super) body: Vec<u8>,
 }
 
 impl Reply {
@@ -323,7 +334,7 @@ impl Reply {
             .map(|(_, v)| v.as_str())
     }
 
-    fn json(&self) -> serde_json::Value {
+    pub(super) fn json(&self) -> serde_json::Value {
         serde_json::from_slice(&self.body)
             .unwrap_or_else(|_| panic!("not JSON: {}", String::from_utf8_lossy(&self.body)))
     }
