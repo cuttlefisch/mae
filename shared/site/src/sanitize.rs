@@ -5,6 +5,8 @@
 //! closed enums, so this admits exactly what the renderer can write and
 //! nothing a page could add (raw HTML, export blocks, event handlers). A
 //! test holds the two in step (every fixture page passes through unchanged).
+//! The one addition is the derivation's own: a highlighted token's class
+//! (`org-code-<role>`), on `span` only ([`is_token_class`]).
 //!
 //! `id` is kept only in mae-org's anchor forms (`id-`, `cid-`, `h-`/`h`,
 //! `t-N`, `r-N`, `fn-N`, `fnr-N…`), so content can never spell an id the
@@ -74,10 +76,14 @@ pub(crate) const TAG_ATTRS: &[(&str, &[&str])] = &[
     ("div", &["data-org-block", "data-org-params"]),
 ];
 
-/// Whether one class token is mae-org's: `org-…` or `language-…`. Any other
-/// is dropped, so content cannot wear a class the chrome styles or scripts
-/// key on.
+/// Whether one class token is mae-org's: `org-…` or `language-…`, but not
+/// `org-code-…`, which only a highlighted token wears ([`is_token_class`]).
+/// Any other is dropped, so content cannot wear a class the chrome styles or
+/// scripts key on.
 pub fn is_content_class(c: &str) -> bool {
+    if c.starts_with("org-code-") {
+        return false;
+    }
     ["org-", "language-"].iter().any(|p| {
         c.strip_prefix(p).is_some_and(|r| {
             !r.is_empty()
@@ -86,6 +92,18 @@ pub fn is_content_class(c: &str) -> bool {
                 })
         })
     })
+}
+
+/// Whether `c` on a `tag` element is a highlighted token's class (D12): one
+/// of the nine `org-code-<role>` classes, on a `span`. The derivation writes
+/// them only on spans inside a source block's `code`; ammonia's filter sees
+/// an element's name and not its parent, so `span` is as narrow as this
+/// allow-list can say.
+pub fn is_token_class(tag: &str, c: &str) -> bool {
+    tag == "span"
+        && crate::highlight::CodeRole::ALL
+            .iter()
+            .any(|r| r.class() == c)
 }
 
 /// A URL whose target host the browser would take from the URL itself
@@ -132,12 +150,12 @@ fn builder() -> ammonia::Builder<'static> {
         .url_relative(ammonia::UrlRelative::PassThrough)
         .link_rel(None)
         .strip_comments(true)
-        .attribute_filter(|_, attr, value| match attr {
+        .attribute_filter(|tag, attr, value| match attr {
             "id" if !is_content_anchor(value) => None,
             "class" => {
                 let kept: Vec<&str> = value
                     .split_ascii_whitespace()
-                    .filter(|c| is_content_class(c))
+                    .filter(|c| is_content_class(c) || is_token_class(tag, c))
                     .collect();
                 (!kept.is_empty()).then(|| kept.join(" ").into())
             }

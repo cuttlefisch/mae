@@ -534,6 +534,7 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
     .await;
     let opts = mae_site::SiteOptions {
         hidden_namespaces: vec!["internal".into()],
+        ..Default::default()
     };
     let SitePage::Index(entries) = site::view(
         &store,

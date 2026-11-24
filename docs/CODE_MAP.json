@@ -1404,6 +1404,10 @@
           "kind": "mod"
         },
         {
+          "name": "highlight",
+          "kind": "mod"
+        },
+        {
           "name": "order",
           "kind": "mod"
         },

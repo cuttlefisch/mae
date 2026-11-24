@@ -829,6 +829,7 @@ async fn site_route(
         },
         &mae_site::SiteOptions {
             hidden_namespaces: config.site_hidden_namespaces.clone(),
+            ..Default::default()
         },
     )
     .await;

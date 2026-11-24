@@ -547,6 +547,7 @@ Source: `shared/site/src/lib.rs`
 | `assets` | mod |
 | `derive` | mod |
 | `explorer` | mod |
+| `highlight` | mod |
 | `order` | mod |
 | `sanitize` | mod |
 | `strings` | mod |
