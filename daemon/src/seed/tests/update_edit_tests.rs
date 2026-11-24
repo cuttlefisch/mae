@@ -226,26 +226,58 @@ async fn a_returning_node_edited_while_removed_is_an_outside_edit() {
 /// update, though its content (and so its plan hash) is the same: a clone.
 /// Kills: no repository check.
 #[tokio::test]
-async fn a_plan_from_another_repository_is_refused() {
+async fn a_plan_is_judged_by_its_history_not_its_path() {
+    // A plan is judged by its history, not its repository's path: an
+    // unrelated repository, and a history that holds the applied commit
+    // without descending from it, are refused and write nothing; a clone of
+    // the same history (a repository moved, or given by another path)
+    // updates the KB.
     let r = fixture_repo(&fixture_files());
     let (store, owner, _) = seeded(&r).await;
     let rev = v2(&r);
+    let fp = owner.fingerprint();
+    let before = high_waters(&store).await;
+    let refused = |plan: &SeedPlan| {
+        let (store, plan, owner) = (store.clone(), plan.clone(), owner.clone());
+        async move {
+            let hash = plan.plan_hash().unwrap();
+            let err = update_diff(&store, &plan, KB, &owner.fingerprint())
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind, ApplyRefusalKind::DifferentRepo, "{err}");
+            let err = update(&store, &plan, &target(&owner, &hash), None)
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind, ApplyRefusalKind::DifferentRepo, "{err}");
+            assert!(err.detail.contains("new kb-id"), "{err}");
+        }
+    };
+
+    // Unrelated: a repository whose very first commit differs. (The fixture
+    // commits deterministically, so the same files at the same time ARE the
+    // same history, and are accepted, rightly.)
+    let mut files = fixture_files();
+    files[0].1.push_str("\nunrelated\n");
+    let other = fixture_repo(&files);
+    refused(&other.plan("HEAD")).await;
+
+    // Orphan: a clone holds the applied commit, but this branch does not
+    // descend from it.
     let clone = tempfile::tempdir().unwrap();
     let src = r.path().to_str().unwrap();
     git_in(clone.path(), &["clone", "-q", src, "."], T);
-    let plan = plan(&plan_opts(clone.path(), &rev)).unwrap();
-    let hash = plan.plan_hash().unwrap();
-    assert_eq!(Some(&hash), r.plan(&rev).plan_hash().as_ref());
-
-    let before = high_waters(&store).await;
-    let fp = owner.fingerprint();
-    let err = update_diff(&store, &plan, KB, &fp).await.unwrap_err();
-    assert_eq!(err.kind, ApplyRefusalKind::DifferentRepo, "{err}");
-    let err = update(&store, &plan, &target(&owner, &hash), None)
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind, ApplyRefusalKind::DifferentRepo, "{err}");
-    assert!(err.detail.contains(src), "{err}");
+    git_in(clone.path(), &["checkout", "-q", "--orphan", "orphan"], T);
+    git_in(clone.path(), &["commit", "-q", "-m", "orphan"], T + 2000);
+    refused(&plan(&plan_opts(clone.path(), "orphan")).unwrap()).await;
     assert_eq!(high_waters(&store).await, before);
-    update_with(&store, &owner, &r, &rev, None).await.unwrap();
+
+    // The same history at another path: accepted.
+    git_in(clone.path(), &["checkout", "-q", &rev], T);
+    let moved = plan(&plan_opts(clone.path(), &rev)).unwrap();
+    let hash = moved.plan_hash().unwrap();
+    assert_eq!(Some(&hash), r.plan(&rev).plan_hash().as_ref());
+    assert!(update_diff(&store, &moved, KB, &fp).await.is_ok());
+    update(&store, &moved, &target(&owner, &hash), None)
+        .await
+        .expect("a moved repository of the same history updates the KB");
 }

@@ -1053,8 +1053,12 @@ release, the page is rebuilt from the blob recorded for it, so keep the reposito
 available), never by times. A page an earlier update removed is compared, when it returns, with its
 content at the removal, and one the seed never wrote with the new revision's content.
 
-The plan must be read from the repository the KB was seeded from, given to `--git` exactly as it was
-recorded (the path as written then): a clone elsewhere, even with the same content, is refused.
+The plan must come from the same history the KB was seeded from: the commit last applied must be
+the new revision or in its history, in the repository given to `--git`. A path is not an identity, so
+a repository moved on disk, or a clone of it, is accepted (the record then takes the new path). An
+unrelated repository, or a history rewritten past the applied commit (a force-push), is refused; seed
+it under a new kb-id instead. Because the refresh needs the applied commit, keep the history: don't
+seed from a shallow clone that drops it.
 
 Like the first apply, the update is safe to re-run: its intent is recorded before the first write,
 and a re-run with the same plan after a crash finishes it, checking first that no node was written

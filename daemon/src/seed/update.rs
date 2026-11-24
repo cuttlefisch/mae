@@ -309,18 +309,36 @@ async fn load_applied(
 
 /// The plan must read the repository the KB was seeded from, compared as
 /// recorded: the path as the operator gave it.
+/// The plan must come from the same history the KB was seeded from: the
+/// commit last applied is the new revision or in its history, in the
+/// repository the plan was read from. A path is not an identity: a
+/// repository moved on disk, or given by a relative path from another
+/// directory, is the same history and is accepted (the record then takes
+/// the new path); an unrelated repository, or a history rewritten past the
+/// applied commit, is refused. Its recourse is a new kb-id.
 fn check_repo(plan: &SeedPlan, record: &SeedRecord) -> Result<(), ApplyError> {
-    if plan.source.repo == record.repo {
+    if plan.source.repo == record.repo && plan.source.commit == record.commit {
         return Ok(());
     }
-    Err(refuse(
-        ApplyRefusalKind::DifferentRepo,
-        format!(
-            "KB '{}' was seeded from the repository {:?}, not {:?}: give --git exactly as \
-             recorded",
-            record.kb_id, record.repo, plan.source.repo
-        ),
-    ))
+    let repo = super::git::GitRepo::new(&plan.source.repo);
+    let refused = |why: String| {
+        Err(refuse(
+            ApplyRefusalKind::DifferentRepo,
+            format!(
+                "KB '{}' was seeded from commit {} ({:?}); {why}. A rewritten or unrelated \
+                 history needs a new kb-id",
+                record.kb_id, record.commit, record.repo
+            ),
+        ))
+    };
+    match repo.is_ancestor(&record.commit, &plan.source.commit) {
+        Ok(true) => Ok(()),
+        Ok(false) => refused(format!(
+            "it is not in the history of {} in {:?}",
+            plan.source.commit, plan.source.repo
+        )),
+        Err(e) => refused(format!("{:?} does not hold it: {e}", plan.source.repo)),
+    }
 }
 
 async fn check_collection(store: &DocStore, kb_id: &str, owner_fp: &str) -> Result<(), ApplyError> {
@@ -420,6 +438,13 @@ async fn begin(
     t: &ApplyTarget<'_>,
     discard_edits: Option<&str>,
 ) -> Result<Vec<SeedUpdateNode>, ApplyError> {
+    // @ai-caution: [seed-update] The edit check, `place` and the writes are
+    // separate reads of the documents. Nothing can write in between only
+    // because the whole update runs under `open_exclusive` (the store lock,
+    // and no daemon serving): an edit that landed after this check would be
+    // taken as the base and overwritten unreviewed. Keep the update an
+    // operator command under that lock, or carry the checked versions into
+    // `place` and compare them at the write.
     let edited = edits::fresh(store, t.kb_id, plan, &applied.rows).await?;
     edits::check_discard(&edited, discard_edits)?;
     let mut nodes = Vec::new();
