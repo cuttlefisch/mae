@@ -111,11 +111,18 @@ export function assetsOf(doc) {
 /**
  * Whether `next` can be swapped into `current`: it is one of the site's pages
  * (it has the main landmark), and it loads exactly the assets this document
- * already has. A page from a newer daemon (other asset names) or from the
- * backend (no landmark) is a full navigation instead.
+ * already has, for the same KB. A page from a newer daemon (other asset
+ * names), from another KB, or from the backend (no landmark) is a full
+ * navigation instead.
  */
 export function swappable(current, next) {
     if (next.getElementById(MAIN_ID) === null)
+        return false;
+    // Another KB is another site: its components, and the context its
+    // behaviours read, are its own, even when two KBs share a component
+    // directory and so load the same assets.
+    const kb = (d) => d.getElementById(MAIN_ID)?.getAttribute("data-mae-kb") ?? null;
+    if (kb(current) !== kb(next))
         return false;
     const a = assetsOf(current);
     const b = assetsOf(next);

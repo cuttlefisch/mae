@@ -327,4 +327,17 @@ describe("swappable", () => {
     const other = page({ title: "B", body: "", assets: ASSETS.replace("router-1", "router-2") });
     expect(swappable(a, parse(other) as unknown as Document)).toBe(false);
   });
+  it("is false across KBs, even with the same assets (a shared component directory)", () => {
+    const win = new Window();
+    const parse = (s: string) => new win.DOMParser().parseFromString(s, "text/html") as unknown as Document;
+    const inKb = (html: string, kb: string | null) => {
+      const d = parse(html);
+      if (kb !== null) d.getElementById("mae-main")!.setAttribute("data-mae-kb", kb);
+      return d;
+    };
+    expect(swappable(inKb(A, "one"), inKb(B, "one"))).toBe(true);
+    expect(swappable(inKb(A, "one"), inKb(B, "two"))).toBe(false);
+    expect(swappable(inKb(A, "one"), inKb(B, null))).toBe(false);
+    expect(swappable(inKb(A, null), inKb(B, "two"))).toBe(false);
+  });
 });

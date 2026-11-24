@@ -393,9 +393,58 @@ impl ErrorLog {
     }
 }
 
+/// The KB IDs the site's configuration names (`site_components`,
+/// `site_home`, `site_title`) that no KB in `doc_store` has, each once,
+/// sorted. A well-formed ID with a typo loads cleanly and the KB it meant
+/// serves without what was configured for it, so startup warns about each
+/// one (Amendment 4 H1). It cannot refuse: KBs are created at run time, so
+/// an operator may configure one before creating it.
+pub async fn unmatched_kb_ids<'a>(
+    doc_store: &crate::doc_store::DocStore,
+    ids: impl IntoIterator<Item = &'a String>,
+) -> Vec<String> {
+    let mut ids: Vec<&String> = ids.into_iter().collect();
+    ids.sort();
+    ids.dedup();
+    let mut out = Vec::new();
+    for id in ids {
+        if !doc_store.has_doc(&format!("kbc:{id}")).await {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// H1's typo check: a configured ID that names no KB is reported, once,
+    /// whichever map named it; an ID that names a KB is not.
+    #[tokio::test]
+    async fn a_configured_kb_id_that_names_no_kb_is_reported() {
+        let store = crate::doc_store::DocStore::new(
+            Arc::new(crate::storage::SqliteBackend::open_memory().unwrap()),
+            500,
+        );
+        let coll = mae_sync::kb::KbCollectionDoc::new_owned("real-kb", "SHA256:o", "o");
+        store
+            .share_doc(
+                "kbc:real-kb",
+                &coll.encode_state(),
+                crate::doc_editors::Attribution::Principal("SHA256:o"),
+            )
+            .await
+            .unwrap();
+        let ids: Vec<String> = ["real-kb", "real-kbb", "real-kb", "real-kbb", "Real-kb"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            unmatched_kb_ids(&store, &ids).await,
+            ["Real-kb".to_string(), "real-kbb".to_string()]
+        );
+        assert!(unmatched_kb_ids(&store, &ids[..1]).await.is_empty());
+    }
 
     #[test]
     fn rate_limit_logs_once_per_interval_with_the_count_it_stands_for() {

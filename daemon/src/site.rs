@@ -152,7 +152,9 @@ pub struct ComponentsFor {
 pub struct SiteLimits {
     /// Nodes in the KB: more, and the KB is [`SitePage::TooLarge`].
     pub max_scan_nodes: usize,
-    /// Bytes of one node's title or body: more, and the KB is too large.
+    /// Bytes of one node's title, of its body, or of its properties (keys and
+    /// values together, which now reach the page source): more, and the KB is
+    /// too large.
     pub max_body_bytes: usize,
 }
 
@@ -261,7 +263,15 @@ async fn readable_sources(
             continue;
         };
         let (title, body) = (doc.title(), doc.body());
-        if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
+        let props: usize = doc
+            .properties()
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+        if [title.len(), body.len(), props]
+            .iter()
+            .any(|n| *n > limits.max_body_bytes)
+        {
             return Err(Refused::TooLarge);
         }
         if let Some(text) = page_source(&node_id, &doc) {

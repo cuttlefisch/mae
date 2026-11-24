@@ -557,6 +557,24 @@ async fn spawn_oauth_listener(
     // any other daemon just falls through to the ordinary JWKS path
     // (`oauth::handle_request`), where it fails as an unknown key like any
     // other bogus `kid`.
+    // Amendment 4 H1: a KB ID with a typo in the site's configuration loads
+    // cleanly and the KB it meant serves without its components, home page
+    // or title. KBs are created at run time, so this warns, never refuses.
+    if let Some(store) = &doc_store {
+        let o = &config.oauth;
+        let ids = o
+            .site_components
+            .keys()
+            .chain(o.site_home.keys())
+            .chain(o.site_title.keys());
+        for kb_id in mae_daemon::site_components::unmatched_kb_ids(store, ids).await {
+            warn!(
+                kb_id = %kb_id,
+                "[oauth] site configuration names a KB this daemon does not have \
+                 (a typo, or a KB not created yet): it has no effect until that KB exists"
+            );
+        }
+    }
     let self_issue = if config.oauth.self_issued_tokens_enabled {
         daemon_identity.map(|identity| mae_daemon::oauth_self_issue::SelfIssueConfig {
             identity,

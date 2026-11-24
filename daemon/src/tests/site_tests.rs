@@ -198,6 +198,43 @@ async fn a_node_body_over_the_byte_bound_makes_the_kb_too_large() {
     ));
 }
 
+/// Properties count against the same bound as a title or body: they reach the
+/// page source too, so a node with huge properties and a tiny body is as
+/// large as one with a huge body.
+#[tokio::test]
+async fn a_nodes_properties_over_the_byte_bound_make_the_kb_too_large() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-props",
+        &[("a", "A", "small"), ("b", "B", "small")],
+    )
+    .await;
+    let mut node = KbNodeDoc::new("b", "B", "small", &[]);
+    let big = "y".repeat(2_000);
+    let _ = node.set_properties(&[("NOTE".to_string(), big)].into_iter().collect());
+    store
+        .share_doc(
+            &mae_sync::kb_node_doc_name("kb-props", "b"),
+            &node.encode_state(),
+            BY,
+        )
+        .await
+        .unwrap();
+    let tight = site::SiteLimits {
+        max_scan_nodes: 500,
+        max_body_bytes: 1_000,
+    };
+    assert_eq!(
+        site::page(&store, "kb-props", "a", Some(READER), tight).await,
+        SitePage::TooLarge
+    );
+    assert!(matches!(
+        site::page(&store, "kb-props", "a", Some(READER), LIMITS).await,
+        SitePage::Found { .. }
+    ));
+}
+
 /// A body that declares another page's ID cannot take that page's address:
 /// the core withholds every holder of a duplicated ID, so no page serves
 /// the claimant's content at the victim's address.
