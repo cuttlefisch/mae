@@ -24,6 +24,9 @@ mae-crypto = { path = "../crypto" }
 # #156 F9: zeroize key material on drop (ContentKey + DH/scalar intermediates). Same
 # version the dalek siblings already pull, so no new transitive cost.
 zeroize = { version = "1", features = ["zeroize_derive"] }
+# ADR-115 D4: NFC for the attachment NAME collision key (portable_name::fold_key).
+# Already in both lock files (mae-crypto, mae-site, the daemon).
+unicode-normalization = "0.1.25"
 
 [dev-dependencies]
 tempfile = "3"

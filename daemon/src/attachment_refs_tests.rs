@@ -6,7 +6,7 @@ use super::*;
 
 use mae_sync::kb::history::VersionKind;
 use mae_sync::kb::{AttachmentRef, KbCollectionDoc, KbNodeDoc, ATTACHMENTS_ROOT};
-use mae_sync::yrs::{Map, Transact};
+use mae_sync::yrs::{Any, Map, Transact};
 
 use crate::storage::SqliteBackend;
 use std::sync::Arc;
@@ -53,23 +53,33 @@ async fn edit(store: &DocStore, kb: &str, id: &str, f: impl FnOnce(&mut KbNodeDo
         .unwrap();
 }
 
-/// A hostile peer's entry under a bad name, carrying hash `seed`.
-async fn put_malformed(store: &DocStore, kb: &str, id: &str, seed: u8) {
+/// A peer's raw entry at `name`, carrying hash `seed` and `fields` besides.
+async fn put_raw(
+    store: &DocStore,
+    kb: &str,
+    id: &str,
+    name: &str,
+    seed: u8,
+    fields: &[(&str, Any)],
+) {
+    let mut entry: std::collections::HashMap<String, Any> = fields
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    entry.insert("sha256".into(), Any::from(h(seed).as_str()));
     edit(store, kb, id, |d| {
         let sv = d.state_vector();
         let map = d.doc().get_or_insert_map(ATTACHMENTS_ROOT);
-        let entry = [(
-            "sha256".to_string(),
-            mae_sync::yrs::Any::from(h(seed).as_str()),
-        )];
-        map.insert(
-            &mut d.doc().transact_mut(),
-            "bad/name.png",
-            mae_sync::yrs::Any::Map(std::sync::Arc::new(entry.into_iter().collect())),
-        );
+        map.insert(&mut d.doc().transact_mut(), name, Any::Map(Arc::new(entry)));
         d.encode_diff(&sv).unwrap()
     })
     .await;
+}
+
+/// A hostile peer's entry under a bad name, carrying hash `seed` and nothing
+/// else.
+async fn put_malformed(store: &DocStore, kb: &str, id: &str, seed: u8) {
+    put_raw(store, kb, id, "bad/name.png", seed, &[]).await;
 }
 
 #[tokio::test]
@@ -113,12 +123,13 @@ async fn the_live_set_is_every_node_and_every_history_version_of_the_kb() {
     let frozen = versions[0].node().unwrap().unwrap();
     assert_eq!(frozen.attachments["d.png"], png(1));
 
-    // Removing an entry releases its hash; a malformed entry adds none.
+    // Removing an entry releases its hash; a malformed entry holding one
+    // still counts (the sweep's reader fails safe).
     edit(&store, "kb", "n2", |d| d.remove_attachment("f.png")).await;
     put_malformed(&store, "kb", "n2", 7).await;
     assert_eq!(
         store.referenced_blobs("kb").await.unwrap().hashes,
-        set(&[1, 2, 3])
+        set(&[1, 2, 3, 7])
     );
 
     // A node dropped from the manifest keeps its document until it is
@@ -130,7 +141,7 @@ async fn the_live_set_is_every_node_and_every_history_version_of_the_kb() {
         .unwrap();
     assert_eq!(
         store.referenced_blobs("kb").await.unwrap().hashes,
-        set(&[1, 2, 3])
+        set(&[1, 2, 3, 7])
     );
 
     // The other KB's set is its own.
@@ -142,4 +153,34 @@ async fn the_live_set_is_every_node_and_every_history_version_of_the_kb() {
         store.referenced_blobs("none").await.unwrap(),
         ReferencedBlobs::default()
     );
+}
+
+/// The sweep reads a node document failing safe: an entry the display reader
+/// rejects, for its NAME or for one field's shape, still holds its blob when
+/// it carries a hash, so a newer peer's image is never collected.
+#[tokio::test]
+async fn an_entry_the_reader_rejects_still_holds_its_blob() {
+    let store = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
+    put_node(&store, "kb", "n", &[("ok.png", 1)]).await;
+    let shape = [
+        ("size", Any::Number(5.0)),
+        ("media_type", Any::from("image/png")),
+    ];
+    put_raw(&store, "kb", "n", "CON.png", 2, &shape).await;
+    let string_size = [
+        ("size", Any::from("5")),
+        ("media_type", Any::from("image/png")),
+    ];
+    put_raw(&store, "kb", "n", "s.png", 3, &string_size).await;
+
+    let name = mae_sync::kb_node_doc_name("kb", "n");
+    let doc = KbNodeDoc::from_bytes(&store.encode_state(&name).await.unwrap()).unwrap();
+    assert_eq!(
+        doc.attachments().len(),
+        1,
+        "the display reader rejects both"
+    );
+    let live = store.referenced_blobs("kb").await.unwrap();
+    assert!(live.complete());
+    assert_eq!(live.hashes, set(&[1, 2, 3]));
 }

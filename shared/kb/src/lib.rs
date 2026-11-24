@@ -578,16 +578,26 @@ impl Node {
     /// `Node` that lost its map (an org re-ingest, which cannot express it)
     /// must not be able to delete it from a shared document.
     #[cfg(feature = "crdt")]
+    ///
+    /// The whole map is copied at once (`copy_attachments`), not entry by
+    /// entry through `set_attachment`: a pair of NAMEs two peers bound
+    /// concurrently that fold to one key is part of the converged map, and
+    /// `set_attachment`'s collision rule would drop one of the two.
     fn write_attachments(&self, doc: &mut mae_sync::kb::KbNodeDoc) {
-        for (name, a) in &self.attachments {
-            let entry = mae_sync::kb::AttachmentRef {
-                sha256: a.sha256.clone(),
-                size: a.size,
-                media_type: a.media_type.clone(),
-            };
-            if let Err(e) = doc.set_attachment(name, &entry) {
-                tracing::warn!(node = %self.id, name = %name, error = %e, "attachment not carried");
-            }
+        let entries = self
+            .attachments
+            .iter()
+            .map(|(name, a)| {
+                let entry = mae_sync::kb::AttachmentRef {
+                    sha256: a.sha256.clone(),
+                    size: a.size,
+                    media_type: a.media_type.clone(),
+                };
+                (name.clone(), entry)
+            })
+            .collect();
+        if let Err((name, e)) = doc.copy_attachments(&entries) {
+            tracing::warn!(node = %self.id, name = %name, error = %e, "attachment not carried");
         }
     }
 

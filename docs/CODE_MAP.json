@@ -1484,6 +1484,10 @@
           "kind": "mod"
         },
         {
+          "name": "portable_name",
+          "kind": "mod"
+        },
+        {
           "name": "text",
           "kind": "mod"
         },

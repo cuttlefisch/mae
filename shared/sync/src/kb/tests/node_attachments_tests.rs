@@ -4,13 +4,16 @@
 //! the expense of a valid entry; the NAME rule is one plain file name.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use proptest::prelude::*;
 use yrs::{Any, Doc, Map, ReadTxn, Text, Transact};
 
 use super::*;
 use crate::kb::history::{decode_content, encode_content};
+
+/// The NAME rule, collisions, the sweep's reader and the per-entry type check.
+#[path = "node_attachment_names_tests.rs"]
+mod names;
 
 /// A node document stored by the code before the map existed (commit
 /// 6c77b740, `KbNodeDoc::new_with_client_id` and three v2 setters), with the
@@ -538,68 +541,6 @@ fn a_writer_refuses_a_bad_name_or_entry_and_writes_nothing() {
     assert!(n.rename_attachment("a.png", "..").is_err());
     assert_eq!(n.state_vector(), sv2);
     assert_ne!(sv, sv2);
-}
-
-// --- the NAME rule ---------------------------------------------------------
-
-#[test]
-fn the_name_rule_on_named_cases() {
-    for ok in [
-        "a.png",
-        "ñandú.jpg",
-        "v1..2.png",
-        ".hidden",
-        "a b.png",
-        "😀",
-        "x:y.png",
-        &"x".repeat(255),
-    ] {
-        assert_eq!(validate_attachment_name(ok), Ok(()), "{ok:?}");
-    }
-    for bad in [
-        "",
-        ".",
-        "..",
-        "a/b",
-        "/abs",
-        "a\\b",
-        "a\nb",
-        "a\u{7f}",
-        "a\u{85}b",
-        "\u{0}",
-        &"x".repeat(256),
-    ] {
-        assert!(validate_attachment_name(bad).is_err(), "{bad:?}");
-    }
-    // 255 BYTES, not characters.
-    assert!(validate_attachment_name(&"ñ".repeat(128)).is_err());
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(2048))]
-
-    /// An accepted NAME is exactly one file directly inside the attachment
-    /// directory, on every platform an export runs on; a refused one is
-    /// refused for a stated reason.
-    #[test]
-    fn an_accepted_name_is_one_file_in_its_directory(
-        parts in prop::collection::vec(
-            prop::sample::select(&["a", ".", "/", "\\", "\u{0}", "\n", "\u{85}", "ñ", "😀", " ", ":"][..]),
-            0..8,
-        ),
-        pad in 0usize..3,
-    ) {
-        let name = format!("{}{}", parts.concat(), "x".repeat(pad * 127));
-        let accepted = validate_attachment_name(&name).is_ok();
-        let dir = Path::new("/attach/dir");
-        let joined = dir.join(&name);
-        let one_file = joined.parent() == Some(dir)
-            && joined.file_name().and_then(|f| f.to_str()) == Some(name.as_str())
-            && !name.contains('\\')
-            && !name.chars().any(char::is_control)
-            && name.len() <= MAX_ATTACHMENT_NAME_BYTES;
-        prop_assert_eq!(accepted, one_file, "{:?}", name);
-    }
 }
 
 // --- history content -------------------------------------------------------

@@ -14,7 +14,9 @@
 //!
 //! And the `attachments` root (ADR-115 D4), reported as `attachments`: every
 //! entry a plain-file NAME bound to `{sha256, size, media_type}` of the right
-//! shapes. Extra fields in an entry are not a violation.
+//! shapes. Extra fields in an entry are not a violation. Unlike the other
+//! fields it is checked entry by entry: a map that already holds one bad entry
+//! does not let a writer add another.
 
 use std::collections::BTreeSet;
 
@@ -25,6 +27,8 @@ use crate::SyncError;
 
 const TEXTS: &[&str] = &["title", "body"];
 const STRING_ARRAYS: &[&str] = &["tags", "links", "aliases"];
+/// How a bad `attachments` entry is reported.
+const ATTACHMENTS: &str = "attachments";
 const SCALARS: &[&str] = &[
     "id", "kind", "todo", "prio", "source", "src_v", "schema_v", "created",
 ];
@@ -96,8 +100,8 @@ impl KbNodeDoc {
             bad.insert("org_header");
         }
         drop(txn);
-        if self.has_rejected_attachment() {
-            bad.insert("attachments");
+        if !self.rejected_attachment_names().is_empty() {
+            bad.insert(ATTACHMENTS);
         }
         bad
     }
@@ -107,6 +111,10 @@ impl KbNodeDoc {
     /// mistyped there. `None` when the update keeps every field's type, or
     /// only touches fields that were already wrong, so a legacy document
     /// stays writable. `Err` when either does not decode.
+    ///
+    /// `attachments` is judged per entry: the update introduces a bad entry
+    /// when a NAME is rejected after it that was not rejected before, even if
+    /// another NAME already was.
     pub fn field_type_introduced(
         base: &[u8],
         update: &[u8],
@@ -119,10 +127,12 @@ impl KbNodeDoc {
             KbNodeDoc::from_bytes(base)?
         };
         let before = doc.field_type_violations();
+        let rejected_before = doc.rejected_attachment_names();
         doc.apply_update(update)?;
+        let new_bad_entry = !doc.rejected_attachment_names().is_subset(&rejected_before);
         Ok(doc
             .field_type_violations()
             .into_iter()
-            .find(|k| !before.contains(k)))
+            .find(|k| !before.contains(k) || (*k == ATTACHMENTS && new_bad_entry)))
     }
 }

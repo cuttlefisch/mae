@@ -19,13 +19,27 @@
 //!
 //! Each entry is one plain value, replaced whole: a rename is a remove and an
 //! insert, a new image under the same name is a new value, and two writers of
-//! one name resolve by the map's own last-writer-wins, identically on every
-//! peer. Different names merge.
+//! one name resolve by the map's own last-writer-wins. "Last" is yrs's
+//! deterministic order of the two writes by client id, not wall time, so every
+//! peer picks the same winner. Different names merge.
 //!
-//! The reader is tolerant: an entry with a bad name or a bad shape is reported
-//! and left out, never repaired; an entry with fields this version does not
-//! know is read for the fields it does and the rest reported, so a newer
-//! client's additive field does not hide an image from an older one.
+//! A NAME is one portable file name ([`validate_attachment_name`]), and no two
+//! NAMEs of one node may be one file on a case- or normalization-insensitive
+//! filesystem: a writer refuses the second ([`AttachmentError::NameCollides`]).
+//! Two peers can still create such a pair concurrently, each write valid on
+//! its own; the reader keeps both, and an export must refuse or disambiguate
+//! them (ADR-115 P4).
+//!
+//! There are two readers, failing in opposite directions:
+//! - the display reader ([`KbNodeDoc::read_attachments`]) is tolerant: an
+//!   entry with a bad name or a bad shape is reported and left out, never
+//!   repaired; an entry with fields this version does not know is read for the
+//!   fields it does and the rest reported, so a newer client's additive field
+//!   does not hide an image from an older one;
+//! - the sweep's reader ([`KbNodeDoc::referenced_hashes`]) fails safe: any
+//!   entry holding a hash where `sha256` would be counts, whatever else about
+//!   it is rejected, so a garbage collector never deletes bytes a peer this
+//!   version does not understand still binds.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -34,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use yrs::{Any, Map, Out, ReadTxn, Transact};
 
 use super::KbNodeDoc;
+use crate::portable_name::{fold_key, is_format_char, is_windows_device_name, WINDOWS_FORBIDDEN};
 
 /// The root map's name in a node document.
 pub const ATTACHMENTS_ROOT: &str = "attachments";
@@ -77,6 +92,9 @@ pub enum AttachmentError {
     NotAMap,
     /// A rename's source has no valid entry.
     NoSuchAttachment,
+    /// Another NAME of the node is the same file once case and Unicode
+    /// normalization are ignored ([`fold_key`]).
+    NameCollides { existing: String },
 }
 
 impl std::fmt::Display for AttachmentError {
@@ -88,6 +106,10 @@ impl std::fmt::Display for AttachmentError {
             Self::MediaType => f.write_str("media_type is not a lowercase type/subtype"),
             Self::NotAMap => f.write_str("entry is not a map"),
             Self::NoSuchAttachment => f.write_str("no such attachment"),
+            Self::NameCollides { existing } => write!(
+                f,
+                "attachment name is the same file as {existing:?} on a case-insensitive filesystem"
+            ),
         }
     }
 }
@@ -95,14 +117,27 @@ impl std::fmt::Display for AttachmentError {
 impl std::error::Error for AttachmentError {}
 
 /// Whether `name` is one plain file name, as `[[attachment:NAME]]` names a
-/// file in the node's attachment directory (ADR-115 E2):
+/// file in the node's attachment directory (ADR-115 E2), the same file on
+/// Linux, macOS and Windows (principle #13), since an export writes it on any
+/// of them:
 /// - not empty, and at most [`MAX_ATTACHMENT_NAME_BYTES`] bytes of UTF-8;
 /// - not `.` or `..`;
-/// - no `/`, and no `\` (a separator on Windows, where an export may run);
-/// - no control character (Unicode `Cc`: C0, DEL and C1, NUL among them).
+/// - no `/`, and no `\` (a separator on Windows);
+/// - no control character (Unicode `Cc`: C0, DEL and C1, NUL among them);
+/// - no format character (Unicode `Cf`: bidi controls, zero-width
+///   characters), which would make two different names look the same;
+/// - none of `< > : " | ? *`, which Windows refuses;
+/// - no trailing `.` or space, which Windows strips (`a.png.` would be
+///   written as `a.png`);
+/// - not a Windows device name, case-insensitively, with or without an
+///   extension (`CON`, `nul.png`, `Com1.tar.gz`; see
+///   [`is_windows_device_name`]).
 ///
 /// `..` inside a longer name (`v1..2.png`) is allowed: with no separator it
 /// cannot leave the directory.
+///
+/// Two NAMEs of one node that fold to one key are refused by the writers, not
+/// here: that needs the node's other NAMEs.
 pub fn validate_attachment_name(name: &str) -> Result<(), AttachmentError> {
     if name.is_empty() {
         return Err(AttachmentError::Name("is empty"));
@@ -119,11 +154,47 @@ pub fn validate_attachment_name(name: &str) -> Result<(), AttachmentError> {
     if name.chars().any(char::is_control) {
         return Err(AttachmentError::Name("contains a control character"));
     }
+    if name.chars().any(is_format_char) {
+        return Err(AttachmentError::Name(
+            "contains an invisible format character",
+        ));
+    }
+    if name.contains(WINDOWS_FORBIDDEN) {
+        return Err(AttachmentError::Name(
+            "contains a character Windows refuses (< > : \" | ? *)",
+        ));
+    }
+    if name.ends_with(['.', ' ']) {
+        return Err(AttachmentError::Name("ends in a dot or a space"));
+    }
+    if is_windows_device_name(name) {
+        return Err(AttachmentError::Name("is a Windows device name"));
+    }
     Ok(())
 }
 
 fn valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// A hash where `sha256` would be in one stored entry, for the sweep: 64 hex
+/// digits, lowercased (the store's spelling; an uppercase one is counted
+/// rather than trusted to be meaningless). Reads a plain map or a nested
+/// shared map, whatever else the entry holds.
+fn entry_hash<T: ReadTxn>(txn: &T, value: &Out) -> Option<String> {
+    let hash = match value {
+        Out::Any(Any::Map(m)) => match m.get(SHA256_KEY) {
+            Some(Any::String(s)) => s.to_string(),
+            _ => return None,
+        },
+        Out::YMap(m) => match m.get(txn, SHA256_KEY) {
+            Some(Out::Any(Any::String(s))) => s.to_string(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| hash.to_ascii_lowercase())
 }
 
 /// RFC 6838 `restricted-name`, lowercase: an alphanumeric first character,
@@ -286,6 +357,24 @@ impl KbNodeDoc {
         out
     }
 
+    /// Every blob hash the map binds, for a garbage collector (ADR-115 D5):
+    /// the opposite of [`read_attachments`](Self::read_attachments). An entry
+    /// that reader rejects (a bad NAME, a size stored as a string, a shape a
+    /// newer peer writes) still counts if it holds a hash where `sha256` would
+    /// be, because leaving it out would delete bytes that peer still binds.
+    ///
+    /// @ai-caution: [data-loss] Never filter this through the NAME rule or
+    /// [`AttachmentRef::validate`]. A missed hash is a deleted image.
+    pub fn referenced_hashes(&self) -> std::collections::BTreeSet<String> {
+        let txn = self.doc.transact();
+        let Some(map) = txn.get_map(ATTACHMENTS_ROOT) else {
+            return Default::default();
+        };
+        map.iter(&txn)
+            .filter_map(|(_, value)| entry_hash(&txn, &value))
+            .collect()
+    }
+
     /// The acceptable entries, by NAME. Empty for a document without the map.
     pub fn attachments(&self) -> BTreeMap<String, AttachmentRef> {
         self.read_attachments().entries
@@ -308,6 +397,7 @@ impl KbNodeDoc {
     ) -> Result<Vec<u8>, AttachmentError> {
         validate_attachment_name(name)?;
         attachment.validate()?;
+        self.check_no_collision(name, name)?;
         if self.attachment(name).as_ref() == Some(attachment) {
             return Ok(self.doc.transact_mut().encode_update_v1());
         }
@@ -315,6 +405,45 @@ impl KbNodeDoc {
         let mut txn = self.doc.transact_mut();
         map.insert(&mut txn, name, attachment.to_any());
         Ok(txn.encode_update_v1())
+    }
+
+    /// Write a whole map, read from another document of this same node, into
+    /// this one: rebirth, or minting a fresh lineage from a projected node.
+    /// Each NAME and entry is checked on its own but not against the others,
+    /// because the map is a copy of what peers already converged on, and that
+    /// can hold a pair two peers bound concurrently that fold to one key.
+    /// [`set_attachment`](Self::set_attachment) would refuse the second, and a
+    /// copy that dropped it would delete an image. Returns the first entry
+    /// refused, after writing every other.
+    ///
+    /// @ai-caution: [data-loss] Only for copying an existing node map. A NEW
+    /// NAME goes through `set_attachment`, which keeps the collision rule.
+    #[must_use = "dropping this update silently prevents the attachments from syncing to peers"]
+    pub fn copy_attachments(
+        &mut self,
+        entries: &BTreeMap<String, AttachmentRef>,
+    ) -> Result<Vec<u8>, (String, AttachmentError)> {
+        if entries.is_empty() {
+            return Ok(self.doc.transact_mut().encode_update_v1());
+        }
+        let map = self.doc.get_or_insert_map(ATTACHMENTS_ROOT);
+        let mut txn = self.doc.transact_mut();
+        let mut refused = None;
+        for (name, attachment) in entries {
+            match validate_attachment_name(name).and_then(|()| attachment.validate()) {
+                Ok(()) => {
+                    map.insert(&mut txn, name.as_str(), attachment.to_any());
+                }
+                Err(e) => {
+                    refused.get_or_insert((name.clone(), e));
+                }
+            }
+        }
+        let update = txn.encode_update_v1();
+        match refused {
+            Some(r) => Err(r),
+            None => Ok(update),
+        }
     }
 
     /// Remove whatever `name` holds, acceptable or not (so a malformed entry
@@ -343,6 +472,8 @@ impl KbNodeDoc {
         let entry = self
             .attachment(from)
             .ok_or(AttachmentError::NoSuchAttachment)?;
+        // `from` goes away, so a case-only rename (`a.png` to `A.png`) is fine.
+        self.check_no_collision(to, from)?;
         if from == to {
             return Ok(self.doc.transact_mut().encode_update_v1());
         }
@@ -353,15 +484,48 @@ impl KbNodeDoc {
         Ok(txn.encode_update_v1())
     }
 
-    /// Whether the map holds an entry a writer must not introduce: a bad name
-    /// or a bad shape (unknown extra fields are fine, so a newer client's
-    /// additive field never trips an older daemon). For
-    /// `field_type_violations`.
-    pub(super) fn has_rejected_attachment(&self) -> bool {
+    /// Refuse to bind `name` when it is not bound yet and another NAME of
+    /// the node, other than `leaving`, folds to the same key: the two would be
+    /// one file on a case- or normalization-insensitive filesystem. Rebinding
+    /// a NAME already present introduces no pair, so it is allowed even while
+    /// a pair two peers made concurrently exists. Every stored NAME counts,
+    /// rejected entries too.
+    fn check_no_collision(&self, name: &str, leaving: &str) -> Result<(), AttachmentError> {
+        let txn = self.doc.transact();
+        let Some(map) = txn.get_map(ATTACHMENTS_ROOT) else {
+            return Ok(());
+        };
+        if map.contains_key(&txn, name) {
+            return Ok(());
+        }
+        let key = fold_key(name);
+        // The least such NAME, so the error is the same whatever order the
+        // map (a hash map) iterates in.
+        match map
+            .keys(&txn)
+            .filter(|k| *k != leaving && fold_key(k) == key)
+            .min()
+        {
+            Some(existing) => Err(AttachmentError::NameCollides {
+                existing: existing.to_string(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// The NAMEs of the entries a writer must not introduce: a bad name or a
+    /// bad shape (unknown extra fields are fine, so a newer client's additive
+    /// field never trips an older daemon). For the field-type check, which
+    /// compares them entry by entry.
+    pub(super) fn rejected_attachment_names(&self) -> std::collections::BTreeSet<String> {
         self.read_attachments()
             .problems
-            .iter()
-            .any(|p| matches!(p, AttachmentProblem::Rejected { .. }))
+            .into_iter()
+            .filter_map(|p| match p {
+                AttachmentProblem::Rejected { name, .. } => Some(name),
+                AttachmentProblem::UnknownFields { .. } => None,
+            })
+            .collect()
     }
 }
 

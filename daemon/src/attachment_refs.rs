@@ -14,9 +14,17 @@
 //! that has them. The grace period for unbound uploads is the sweep's own
 //! (it reads the store's upload times, P1).
 //!
+//! A node document is read by the sweep's own reader
+//! ([`KbNodeDoc::referenced_hashes`]), which fails safe: an entry the display
+//! reader rejects (a bad NAME, a size stored as a string, a newer peer's
+//! shape) still counts when it holds a hash. A history version holds only
+//! entries its canonical encoding accepts, so its map is read as it is.
+//!
 //! @ai-caution: [data-loss] A holder that cannot be read is listed in
 //! `unreadable`, never skipped: a missed reference is a deleted image. A sweep
 //! must collect nothing in a KB whose set is not [`ReferencedBlobs::complete`].
+//! Never read a node document here through the tolerant display reader
+//! (`attachments()`): it drops what it rejects.
 
 use std::collections::BTreeSet;
 
@@ -65,9 +73,7 @@ impl DocStore {
                 Err(_) => None,
             };
             match read {
-                Some(doc) => out
-                    .hashes
-                    .extend(doc.attachments().into_values().map(|a| a.sha256)),
+                Some(doc) => out.hashes.extend(doc.referenced_hashes()),
                 None => out.unreadable.push(name),
             }
         }

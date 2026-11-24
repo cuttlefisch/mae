@@ -429,6 +429,13 @@ fn unrepresented_detail(fields: &[&str]) -> String {
     if fields.contains(&"kind") {
         out.push_str(" (the kind is the KIND property's value)");
     }
+    // @ai-caution: [kb-truth] When ADR-115 P4 replaces this refusal by writing
+    // the files: two NAMEs of one node can fold to one key
+    // (`mae_sync::portable_name::fold_key`) although every writer refuses the
+    // second, because two peers can bind them concurrently and the reader keeps
+    // both. They are one file on APFS and NTFS, so writing both loses one image
+    // silently. The export must refuse such a node naming both NAMEs, unless a
+    // defined disambiguation exists by then; it must never pick one.
     if fields.contains(&"attachments") {
         out.push_str(" (exporting attachment files is not built yet, ADR-115 P4)");
     }

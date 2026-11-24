@@ -3533,6 +3533,7 @@ dependencies = [
  "similar",
  "tempfile",
  "tracing",
+ "unicode-normalization",
  "yrs",
  "zeroize",
 ]

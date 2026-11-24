@@ -91,9 +91,11 @@ pub const CONTRACT: &str = "org-literal-v1";
 /// normalization-insensitive filesystem (APFS, NTFS, many mounts) share this
 /// key: NFC, then lowercase. A seed refuses such paths, and so does an export,
 /// so one node's file can never overwrite another's.
+///
+/// The same key as an attachment NAME's collision key (ADR-115 D4), so a
+/// node's file and its attachments' files fold one way.
 pub fn path_fold_key(path: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    path.nfc().collect::<String>().to_lowercase()
+    mae_sync::portable_name::fold_key(path)
 }
 
 /// The largest body a node may have: ADR-109 D6's client cap (`kb_max_node_bytes`,

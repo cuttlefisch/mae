@@ -178,4 +178,16 @@ mod bridge {
         let back = Node::from_crdt_doc(&doc, NodeKind::Note, crate::NodeSource::Federation);
         assert_eq!(back.attachments, n.attachments);
     }
+
+    /// A node whose map holds two NAMEs that fold to one key (two peers bound
+    /// them concurrently; every writer refuses the second) mints a lineage
+    /// with both: the copy is not a new binding, and dropping one would delete
+    /// an image.
+    #[test]
+    fn a_fresh_lineage_carries_a_concurrent_collision_pair() {
+        let n = node_with("n", &[("Photo.png", 1), ("photo.png", 2)]);
+        let doc = n.to_crdt_doc().unwrap();
+        assert_eq!(doc.attachment("Photo.png"), Some(sync_ref(1)));
+        assert_eq!(doc.attachment("photo.png"), Some(sync_ref(2)));
+    }
 }

@@ -2823,7 +2823,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -2912,6 +2911,7 @@ dependencies = [
  "sha2 0.11.0",
  "similar",
  "tracing",
+ "unicode-normalization",
  "yrs",
  "zeroize",
 ]

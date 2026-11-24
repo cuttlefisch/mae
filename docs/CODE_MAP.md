@@ -583,6 +583,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb` | mod |
 | `membership` | mod |
 | `op_set` | mod |
+| `portable_name` | mod |
 | `text` | mod |
 | `wire` | mod |
 | `SyncError` | enum |

@@ -985,10 +985,10 @@ impl KbNodeDoc {
         if let Some(header) = &mat.org_header {
             let _ = doc.set_org_header(header);
         }
-        // Every entry `materialize` read is valid, so none is refused here.
-        for (name, attachment) in &mat.attachments {
-            let _ = doc.set_attachment(name, attachment);
-        }
+        // Every entry `materialize` read is valid, so none is refused here, and
+        // a pair two peers bound concurrently is copied whole (not through
+        // `set_attachment`, whose collision rule would drop one of the two).
+        let _ = doc.copy_attachments(&mat.attachments);
         // The creation time is a fact about the node, not about this lineage:
         // without it the reborn node reads as undated and its `version` (which
         // digests `created_at`) changes although no content did.
