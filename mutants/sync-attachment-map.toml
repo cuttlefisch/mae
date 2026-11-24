@@ -1,7 +1,8 @@
 # A node's attachments map (ADR-115 D4, P2a): its place in the version, the
-# NAME rule (portable, no Windows device names, one file per NAME per node),
-# the tolerant reader and the sweep's fail-safe one, last-writer-wins on one
-# NAME, and the projection's rows on remove. Format: tools/mutate/README.md.
+# NAME rule (portable, no Windows device names, one file per NAME per node,
+# by Unicode case folding), the tolerant reader and the sweep's fail-safe one
+# (at any depth), rebirth's raw copy, last-writer-wins on one NAME, and the
+# projection's rows on remove. Format: tools/mutate/README.md.
 
 [[mutant]]
 id = "sync-attachment-map/version-omits-map"
@@ -74,10 +75,17 @@ filter = "test(the_sweep_reader_counts_what_the_display_reader_rejects)"
 ref = "the sweep's reader fails safe: a rejected entry holding a hash still counts (D4, D5)"
 [[mutant.edit]]
 file = "shared/sync/src/kb/node/attachments.rs"
-find = '''            .filter_map(|(_, value)| entry_hash(&txn, &value))'''
-replace = '''            .filter_map(|(name, value)| {
-                entry_hash(&txn, &value).filter(|_| read_entry(name, &value).is_ok())
-            })'''
+find = '''        for (name, value) in map.iter(txn) {
+            walk.string(name);
+            walk.push(Pending::Out(value), 1)?;
+        }'''
+replace = '''        for (name, value) in map.iter(txn) {
+            if read_entry(name, &value).is_err() {
+                continue;
+            }
+            walk.string(name);
+            walk.push(Pending::Out(value), 1)?;
+        }'''
 
 [[mutant]]
 id = "sync-attachment-map/windows-device-name-admitted"
@@ -104,3 +112,46 @@ find = '''        if map.contains_key(&txn, name) {
 replace = '''        if true || map.contains_key(&txn, name) {
             return Ok(());
         }'''
+
+[[mutant]]
+id = "sync-attachment-map/sweep-walk-one-level"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(the_sweep_reader_finds_a_hash_wherever_an_entry_holds_it)"
+ref = "the sweep's reader finds a hash at any depth, under any key, in any container (D4, D5)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''    fn push(&mut self, item: Pending, depth: usize) -> Result<(), UnwalkableAttachments> {
+        if depth > MAX_REFERENCE_DEPTH {'''
+replace = '''    fn push(&mut self, item: Pending, depth: usize) -> Result<(), UnwalkableAttachments> {
+        if depth > 1 {
+            return Ok(());
+        }
+        if depth > MAX_REFERENCE_DEPTH {'''
+
+[[mutant]]
+id = "sync-attachment-map/rebirth-copies-validated-only"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(rebirth_carries_every_entry_of_the_root_as_stored)"
+ref = "rebirth copies the attachments root raw, entries a reader rejects included (D4, ADR-107)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node.rs"
+find = '''        let _ = doc.copy_raw_attachments(self)?;'''
+replace = '''        let _ = doc.copy_attachments(&mat.attachments);'''
+
+[[mutant]]
+id = "sync-attachment-map/fold-by-lowercase"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(names_fold_by_unicode_default_case_folding)"
+ref = "the one-file key uses full default case folding (C+F), not lowercase (D4)"
+[[mutant.edit]]
+file = "shared/sync/src/portable_name.rs"
+find = '''    let decomposed: String = name.nfd().collect();
+    CaseMapper::new()
+        .fold_string(&decomposed)
+        .nfc()
+        .collect::<String>()'''
+replace = '''    let _ = CaseMapper::new;
+    name.nfc().collect::<String>().to_lowercase()'''
