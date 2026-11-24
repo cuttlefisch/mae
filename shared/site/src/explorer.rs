@@ -6,8 +6,8 @@
 //! and a page with none is in `untagged`, once. Every published page is
 //! therefore listed at least once, and nothing else is.
 //!
-//! It lists the whole KB, so it is one of the bulk outputs a query-only
-//! member is refused (D7); the caller decides who may have it.
+//! It holds titles only, which every reader of the KB may have, a
+//! query-only member included (Amendment 3 G2).
 
 use crate::derive::{PageRef, Site};
 use crate::order::cmp_text;

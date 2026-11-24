@@ -1,7 +1,9 @@
-//! Who may have the outputs that list a whole KB (ADR-119 D7, Amendment 3):
-//! the explorer, the content index, the tag index and tag pages. A query-only
-//! member (ADR-067) reads pages one at a time and gets none of them; a member
-//! with full replication gets them all; a stranger gets nothing.
+//! Who may have a whole KB's content at once (ADR-119 D7, Amendment 3 G2):
+//! the live site's content index, which holds every page's text. A
+//! query-only member (ADR-067) is refused it and nothing else: pages one at
+//! a time, the explorer and tag listings (titles, as `kb/query.titles` gives
+//! them) are theirs. A member with full replication gets everything; a
+//! stranger gets nothing.
 //!
 //! Membership here is the real signed op-log of an anchored KB, not the
 //! unsigned member list, because replication policy exists only there: the
@@ -119,10 +121,11 @@ async fn view(store: &DocStore, v: View, who: &str) -> SitePage {
     site::view(store, KB, &v, Some(who), LIMITS, &Default::default()).await
 }
 
-/// Every view that lists the KB.
-fn listing_views() -> [View; 5] {
+/// Every view any reader of the KB gets, query-only or not.
+fn reader_views() -> [View; 6] {
     [
-        View::Index,
+        View::Page("a".into()),
+        View::Page("b".into()),
         View::Tags,
         View::Tag("t".into()),
         View::Explorer,
@@ -130,16 +133,20 @@ fn listing_views() -> [View; 5] {
     ]
 }
 
-/// The explorer a page names, or `None`; panics on anything but a page.
-async fn page_explorer(store: &DocStore, who: &str) -> Option<site::ExplorerRef> {
-    match view(store, View::Page("a".into()), who).await {
-        SitePage::Found { explorer, .. } => explorer,
-        other => panic!("{who} reads page a: {other:?}"),
+/// Whether `who` gets the content index, checked as a copy: page b's text.
+async fn gets_the_content(store: &DocStore, who: &str) -> bool {
+    match view(store, View::Index, who).await {
+        SitePage::Index(all) => {
+            assert!(all.iter().any(|e| e.text.contains("B.")), "{all:?}");
+            true
+        }
+        SitePage::NotFound => false,
+        other => panic!("{who}: {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn a_query_only_member_reads_pages_but_nothing_that_lists_the_kb() {
+async fn a_query_only_member_reads_everything_but_the_content_index() {
     let store = fresh_doc_store().await;
     let owner = seed(&store).await;
     let full = Identity::generate("full").fingerprint();
@@ -162,33 +169,18 @@ async fn a_query_only_member_reads_pages_but_nothing_that_lists_the_kb() {
     )
     .await;
 
-    for who in [owner.fp.as_str(), full.as_str()] {
-        for v in listing_views() {
-            assert_ne!(
-                view(&store, v.clone(), who).await,
-                SitePage::NotFound,
-                "{v:?}"
-            );
-        }
-        assert!(page_explorer(&store, who).await.is_some(), "{who}");
-    }
-
-    // The query-only member: each page, without the explorer or tag links;
-    // every listing is the one not-found a stranger gets.
-    let SitePage::Found { tags, explorer, .. } =
-        view(&store, View::Page("a".into()), &query_only).await
-    else {
-        panic!("a query-only member reads a page");
-    };
-    assert_eq!((tags, explorer), (vec![("t".to_string(), None)], None));
-    assert!(matches!(
-        view(&store, View::Page("b".into()), &query_only).await,
-        SitePage::Found { .. }
-    ));
-    for v in listing_views() {
+    assert!(gets_the_content(&store, &owner.fp).await);
+    assert!(gets_the_content(&store, &full).await);
+    assert!(!gets_the_content(&store, &query_only).await);
+    assert!(!gets_the_content(&store, &stranger).await);
+    // The rest: the query-only member gets exactly what a full member does
+    // (pages, their explorer and tag links, the listings), a stranger nothing.
+    for v in reader_views() {
+        let full_answer = view(&store, v.clone(), &full).await;
+        assert_ne!(full_answer, SitePage::NotFound, "{v:?}");
         assert_eq!(
             view(&store, v.clone(), &query_only).await,
-            SitePage::NotFound,
+            full_answer,
             "{v:?}"
         );
         assert_eq!(
@@ -197,17 +189,13 @@ async fn a_query_only_member_reads_pages_but_nothing_that_lists_the_kb() {
             "{v:?}"
         );
     }
-    assert_eq!(
-        view(&store, View::Page("a".into()), &stranger).await,
-        SitePage::NotFound
-    );
 }
 
-/// A full member restricted to query-only loses the listings at once, and
-/// regains them when the restriction is lifted: the gate reads the op-log on
-/// every request, never a decision made earlier.
+/// A full member restricted to query-only loses the content index at once,
+/// and regains it when the restriction is lifted: the gate reads the op-log
+/// on every request, never a decision made earlier.
 #[tokio::test]
-async fn restricting_a_member_takes_the_listings_away_and_lifting_it_gives_them_back() {
+async fn restricting_a_member_takes_the_content_away_and_lifting_it_gives_it_back() {
     let store = fresh_doc_store().await;
     let owner = seed(&store).await;
     let member = Identity::generate("member").fingerprint();
@@ -219,12 +207,7 @@ async fn restricting_a_member_takes_the_listings_away_and_lifting_it_gives_them_
         ReplicationPolicy::Full,
     )
     .await;
-    assert!(page_explorer(&store, &member).await.is_some());
-    assert!(matches!(
-        view(&store, View::Explorer, &member).await,
-        SitePage::Explorer(_)
-    ));
-
+    assert!(gets_the_content(&store, &member).await);
     admit(
         &store,
         &owner,
@@ -233,15 +216,11 @@ async fn restricting_a_member_takes_the_listings_away_and_lifting_it_gives_them_
         ReplicationPolicy::QueryOnly,
     )
     .await;
-    assert_eq!(page_explorer(&store, &member).await, None);
-    for v in listing_views() {
-        assert_eq!(
-            view(&store, v.clone(), &member).await,
-            SitePage::NotFound,
-            "{v:?}"
-        );
-    }
-
+    assert!(!gets_the_content(&store, &member).await);
+    assert!(matches!(
+        view(&store, View::Explorer, &member).await,
+        SitePage::Explorer(_)
+    ));
     admit(
         &store,
         &owner,
@@ -250,9 +229,5 @@ async fn restricting_a_member_takes_the_listings_away_and_lifting_it_gives_them_
         ReplicationPolicy::Full,
     )
     .await;
-    assert!(page_explorer(&store, &member).await.is_some());
-    assert!(matches!(
-        view(&store, View::Explorer, &member).await,
-        SitePage::Explorer(_)
-    ));
+    assert!(gets_the_content(&store, &member).await);
 }

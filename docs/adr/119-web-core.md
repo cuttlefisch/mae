@@ -787,19 +787,27 @@ are the owner's.
   in most KBs nearly every page is a `note`, so it would be one group); an operator setting per KB (a
   mode per KB to build and test, for a choice nobody has asked to vary).
 
-### G2. Who may list a KB *(owner, 2026-11-24)*
+### G2. A query-only member is refused the KB's content in bulk, not its titles *(owner, 2026-11-24)*
 
-- D7 refuses query-only members (ADR-067) the explorer. The same holds for every other output that
-  lists the whole KB, since together they hand over what ADR-067 withholds: the content index
-  (`index.json`), the tag index and each tag page. All of them answer a query-only member with the one
-  not-found (A5).
-- A query-only member's pages have no explorer box (the owner's choice: no notice in its place), and
-  write their tags as text, not as links to tag pages they cannot open.
-- The gate is `kb_query::may_list_whole_kb`: a member whose replication policy is `Full`, read from
+- ADR-067 withholds a durable bulk copy of a KB's **content** (its precedents are Confluence's "Export
+  Space" and Drive's "disable download"), not its titles. The content index (`index.json`) holds every
+  page's text, so a query-only member is refused it, with the one not-found (A5). Before this it was
+  served to them; that is fixed here.
+- The explorer, the tag index and tag pages hold titles only, and a query-only member gets them as any
+  reader does. `kb/query.titles`, `kb/query.list` and `kb/query.graph` already give every reader all
+  titles, deliberately (they give query-only members backlinks and a graph view), so refusing them on
+  the site would withhold nothing.
+- **This reverses the owner's first choice the same morning** (no explorer for a query-only member,
+  following D7's list, which named the explorer payload as a bulk asset). An independent review found
+  the RPC path above; with that evidence the owner chose to refuse content only. D7's list is read
+  accordingly: search shards hold content and stay refused; the explorer and the graph's edge list hold
+  titles and links, which the query surface already serves.
+- The gate is `kb_query::may_copy_whole_kb`: a member whose replication policy is `Full`, read from
   `member_role`, the lookup `kb_access` decides on, on every request. A restriction applied while a
-  member reads takes the listings away at their next request; lifting it gives them back.
-- Before this, the content index and the tag pages were served to query-only members. That is fixed
-  here.
+  member reads takes the content index away at their next request; lifting it gives it back.
+- **Residual, accepted:** a query-only member can still read every page they can reach, one request
+  at a time, by following links and the explorer. That is ADR-067's own stated limit: it stops the
+  default path to a bulk copy, not a client that reads everything it is allowed to read live.
 
 ### G3. A to Z means a reader's order
 
@@ -823,7 +831,8 @@ four locales; `eo`'s await the same speaker's review as the rest of its strings.
   published view is derived from published revisions only (V9), and that publication events write
   change-index rows.
 - **ADR-074 Amendment 1, C2 and C4:** notices, cursors and ETags are scoped per view.
-- **ADR-067:** query-only members are refused the bulk derived assets (D7).
+- **ADR-067:** query-only members are refused the bulk derived assets that hold content (D7, read as
+  Amendment 3 G2 reads it), not those that hold titles.
 - **ADR-053:** its search caps stay the only search surface for query-only members. Full members get
   search shards, which hold nothing they could not already read.
 - **ADR-111 and ADR-052:** how the live app authenticates page loads (D16): an unauthenticated shell,

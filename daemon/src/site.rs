@@ -29,13 +29,12 @@ use mae_sync::kb::{Encryption, KbNodeDoc};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SitePage {
     /// A page: its title (raw text), its sanitised article HTML, its
-    /// backlinks, and its tags as `(tag, href)`, with no href for a reader
-    /// refused the tag pages ([`may_list`](crate::kb_query::may_list_whole_kb)).
+    /// backlinks, its tags as `(tag, href)`, and where its explorer loads.
     Found {
         title: String,
         html: String,
         backlinks: Vec<mae_site::Backlink>,
-        tags: Vec<(String, Option<String>)>,
+        tags: Vec<(String, String)>,
         toc: Vec<mae_site::TocEntry>,
         explorer: Option<ExplorerRef>,
     },
@@ -60,7 +59,8 @@ pub enum SitePage {
 /// Where a page's explorer loads its data from, and which version of it this
 /// page was derived with: the browser runtime fetches it once and again only
 /// when a page names another version (D6: chrome is not embedded in pages).
-/// Present only for a reader who may list the whole KB (D7).
+/// It lists titles only, which every reader of the KB may have (ADR-119
+/// Amendment 3 G2; `kb/query.titles` gives the same).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerRef {
     pub src: String,
@@ -159,7 +159,7 @@ pub async fn view(
     limits: SiteLimits,
     opts: &mae_site::SiteOptions,
 ) -> SitePage {
-    let (sources, addressing, may_list) =
+    let (sources, addressing, may_copy) =
         match readable_sources(doc_store, kb_id, principal, limits).await {
             Ok(v) => v,
             Err(refused) => return refused.into(),
@@ -172,7 +172,7 @@ pub async fn view(
             &derive_with(&sources, &addressing, &opts),
             &addressing,
             view,
-            may_list,
+            may_copy,
         )
     })
     .await;
@@ -195,8 +195,8 @@ impl From<Refused> for SitePage {
 }
 
 /// The KB's pages as sources, once the read gate admits `principal` and the
-/// KB is within `limits`, and whether `principal` may have the outputs that
-/// list the whole KB (D7); otherwise the answer to give.
+/// KB is within `limits`, and whether `principal` may have the whole KB's
+/// content at once (D7, G2); otherwise the answer to give.
 async fn readable_sources(
     doc_store: &DocStore,
     kb_id: &str,
@@ -212,7 +212,7 @@ async fn readable_sources(
     if !matches!(encryption, Encryption::None) {
         return Err(Refused::NotFound);
     }
-    let may_list = kb_query::may_list_whole_kb(doc_store, kb_id, &coll, principal).await;
+    let may_copy = kb_query::may_copy_whole_kb(doc_store, kb_id, &coll, principal).await;
     let nodes = coll.list_nodes();
     if nodes.len() > limits.max_scan_nodes {
         return Err(Refused::TooLarge);
@@ -237,29 +237,27 @@ async fn readable_sources(
             });
         }
     }
-    Ok((sources, addressing, may_list))
+    Ok((sources, addressing, may_copy))
 }
 
-/// The answer to `view` from a derived KB. A reader who may not list the
-/// whole KB (`may_list`, D7) gets pages only: every output that lists the KB
-/// (the explorer, the content index, the tag index and tag pages) is the
-/// same not-found as anything else, and their pages neither point to the
-/// explorer nor link their tags.
-fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_list: bool) -> SitePage {
+/// The answer to `view` from a derived KB. A reader who may not have the
+/// whole KB's content at once (`may_copy`, a query-only member, D7 and G2)
+/// is refused the content index, which holds every page's text, as the one
+/// not-found. Everything else is theirs: pages one at a time, and the
+/// explorer and tag listings, which hold titles only.
+fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: bool) -> SitePage {
     let explorer = || {
-        may_list.then(|| {
-            let json = explorer_json(&mae_site::explorer::explorer(site));
-            explorer_ref(&json, addressing)
-        })
+        let json = explorer_json(&mae_site::explorer::explorer(site));
+        Some(explorer_ref(&json, addressing))
     };
     match view {
-        View::Index | View::Tags | View::Tag(_) | View::Explorer if !may_list => SitePage::NotFound,
+        View::Index if !may_copy => SitePage::NotFound,
         // The declared node when this reader has it as a page; otherwise the
         // tag index. Unpublished, withheld and undeclared all answer alike, so
         // the home address says nothing about a node the reader cannot see.
         View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {
-            Some(id) => answer(site, addressing, View::Page(id), may_list),
-            None => answer(site, addressing, View::Tags, may_list),
+            Some(id) => answer(site, addressing, View::Page(id), may_copy),
+            None => answer(site, addressing, View::Tags, may_copy),
         },
         View::Page(id) => match site.pages.get(&id) {
             Some(p) => SitePage::Found {
@@ -269,7 +267,7 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_list: 
                 tags: p
                     .tags
                     .iter()
-                    .map(|t| (t.clone(), may_list.then(|| addressing.tag_href(t))))
+                    .map(|t| (t.clone(), addressing.tag_href(t)))
                     .collect(),
                 toc: p.toc.clone(),
                 explorer: explorer(),
@@ -403,7 +401,7 @@ pub fn document<'a>(
     title: &str,
     article: &str,
     backlinks: &[mae_site::Backlink],
-    tags: &[(String, Option<String>)],
+    tags: &[(String, String)],
     toc: &[mae_site::TocEntry],
     explorer: Option<&ExplorerRef>,
 ) -> String {
@@ -502,8 +500,7 @@ pub fn listing_document<'a>(
 /// The explorer's box sits between the header and `main`, empty and `hidden`:
 /// the router's behaviour fills it from `data-src` and shows it, so without
 /// JavaScript it is absent, never broken. It carries the words the behaviour
-/// needs (its name, the untagged group's). No box for a reader who may not
-/// list the whole KB (D7).
+/// needs (its name, the untagged group's).
 fn shell(
     chrome: Chrome<'_>,
     title: &str,
@@ -586,20 +583,19 @@ fn theme_controls(words: &Words) -> String {
 /// A page's tags, each linking to its tag page (P-70); nothing when untagged.
 /// The list's name is the catalogue's; on a fallback the list is marked and
 /// each tag, which is content, gets the page's language back.
-fn tags_list(words: &Words, tags: &[(String, Option<String>)]) -> String {
+fn tags_list(words: &Words, tags: &[(String, String)]) -> String {
     if tags.is_empty() {
         return String::new();
     }
     let items: String = tags
         .iter()
-        .map(|(t, href)| match href {
-            Some(href) => format!(
+        .map(|(t, href)| {
+            format!(
                 "<li{}><a href=\"{}\">{}</a></li>",
                 words.unmark,
                 escape(href),
                 escape(t)
-            ),
-            None => format!("<li{}>{}</li>", words.unmark, escape(t)),
+            )
         })
         .collect();
     format!(
@@ -709,10 +705,10 @@ mod tests {
         (site, live)
     }
 
-    /// Every view that lists the KB: what D7 withholds from a query-only member.
-    fn listing_views() -> [View; 5] {
+    /// Every view a reader may have whether or not they may copy the KB.
+    fn title_views() -> [View; 5] {
         [
-            View::Index,
+            View::Page("a".into()),
             View::Tags,
             View::Tag("t".into()),
             View::Explorer,
@@ -720,47 +716,37 @@ mod tests {
         ]
     }
 
-    /// D7, Amendment 3: a reader who may not list the KB gets each page and
-    /// nothing that lists the KB, as the one not-found; its pages neither
-    /// point to the explorer nor link their tags.
+    /// D7, Amendment 3 G2: a reader who may not copy the KB (query-only) is
+    /// refused the content index, which holds every page's text, and nothing
+    /// else: pages, the explorer and tag listings hold what they may read.
     #[test]
-    fn a_reader_who_may_not_list_the_kb_gets_pages_and_nothing_that_lists_it() {
+    fn a_reader_who_may_not_copy_the_kb_is_refused_its_content_index_only() {
         let (site, live) = kb();
-        for v in listing_views() {
+        assert_eq!(answer(&site, &live, View::Index, false), SitePage::NotFound);
+        let SitePage::Index(all) = answer(&site, &live, View::Index, true) else {
+            panic!("the content index");
+        };
+        // What makes it a copy: page b's text is in it.
+        assert!(all.iter().any(|e| e.text.contains("to a")), "{all:?}");
+        for v in title_views() {
             assert_eq!(
+                answer(&site, &live, v.clone(), false),
+                answer(&site, &live, v.clone(), true),
+                "{v:?}"
+            );
+            assert_ne!(
                 answer(&site, &live, v.clone(), false),
                 SitePage::NotFound,
                 "{v:?}"
             );
-            assert_ne!(
-                answer(&site, &live, v.clone(), true),
-                SitePage::NotFound,
-                "{v:?}"
-            );
         }
-        for v in [View::Page("a".into()), View::Home(Some("a".into()))] {
-            let SitePage::Found { tags, explorer, .. } = answer(&site, &live, v, false) else {
-                panic!("a page is still a page");
-            };
-            assert_eq!(explorer, None);
-            assert_eq!(tags, [("t".to_string(), None)]);
-        }
-        // And the chrome writes neither the box nor a tag link.
-        let SitePage::Found { tags, explorer, .. } =
-            answer(&site, &live, View::Page("a".into()), false)
-        else {
-            panic!()
-        };
-        let html = document("en-US", "a", "", &[], &tags, &[], explorer.as_ref());
-        assert!(!html.contains("mae-explorer"), "{html}");
-        assert!(!html.contains("/tags/"), "{html}");
     }
 
-    /// A reader who may list it: every page and listing names the explorer's
+    /// Every page and listing names the explorer's
     /// data and its version, which is the hash of exactly what
     /// `explorer.json` answers, so a changed KB is a changed version.
     #[test]
-    fn a_reader_who_may_list_the_kb_gets_the_explorer_at_the_version_it_answers() {
+    fn every_page_names_the_explorer_at_the_version_it_answers() {
         let (site, live) = kb();
         let SitePage::Explorer(json) = answer(&site, &live, View::Explorer, true) else {
             panic!("the explorer");
@@ -779,10 +765,7 @@ mod tests {
         for view in [View::Page("a".into()), View::Tags, View::Tag("t".into())] {
             let got = match answer(&site, &live, view.clone(), true) {
                 SitePage::Found { explorer, tags, .. } => {
-                    assert_eq!(
-                        tags,
-                        [("t".to_string(), Some("/kb/kb-1/tags/t".to_string()))]
-                    );
+                    assert_eq!(tags, [("t".to_string(), "/kb/kb-1/tags/t".to_string())]);
                     explorer
                 }
                 SitePage::Listing { explorer, .. } => explorer,

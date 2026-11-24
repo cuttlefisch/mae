@@ -886,10 +886,6 @@ fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
         href: "/kb/k/x".into(),
     }];
     let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
-    let linked: Vec<(String, Option<String>)> = tags
-        .iter()
-        .map(|(t, h)| (t.clone(), Some(h.clone())))
-        .collect();
     let items = vec![("kappa page".to_string(), "/kb/k/kappa".to_string())];
     let explorer = site::ExplorerRef {
         src: "/kb/k/explorer.json".into(),
@@ -901,7 +897,7 @@ fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
             "lambda title",
             "<p>mu body</p>",
             &backlinks,
-            &linked,
+            &tags,
             &toc,
             Some(&explorer),
         ),
@@ -949,13 +945,9 @@ fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
 #[test]
 fn a_catalogued_locale_marks_nothing() {
     let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
-    let linked: Vec<(String, Option<String>)> = tags
-        .iter()
-        .map(|(t, h)| (t.clone(), Some(h.clone())))
-        .collect();
     for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
         let pages = [
-            site::document(locale, "T", "<p>x</p>", &[], &linked, &[], None),
+            site::document(locale, "T", "<p>x</p>", &[], &tags, &[], None),
             site::listing_document(locale, &site::Listing::Tag("iota".into()), &tags, None),
         ];
         for page in pages {
