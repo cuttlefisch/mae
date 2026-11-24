@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.187] - 2026-11-24
+## [0.14.188] - 2026-11-24
 
 
 
@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 
 - *(site)* The graph's occupancy grid counts an edge on a cell boundary exactly ([be81588](https://github.com/cuttlefisch/mae/commit/be8158874e8186892ea511a844e0c70aa055ab5d))
 - *(daemon)* A query-only member is refused the KB's content in bulk, not its titles ([84a4c84](https://github.com/cuttlefisch/mae/commit/84a4c84095fffd6cd123e8b94171d17eeb207269))
+- *(daemon)* The store lock waits out a child's fork-to-exec window before refusing ([07f263d](https://github.com/cuttlefisch/mae/commit/07f263de9ade498efa4085e71ccba29a6c73aec5))
 
 ### Documentation
 
@@ -33,6 +34,7 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* The lock records mae-site's unicode-normalization dependency ([03aa2d4](https://github.com/cuttlefisch/mae/commit/03aa2d498a9db5de43b388ffd9a14c1115831999))
 - *(adr)* Regenerate the ADR KB checksum for ADR-119's status line ([717644c](https://github.com/cuttlefisch/mae/commit/717644cc8234143f5ccbd44fe1c1d2a13d597270))
+- Bump version to 0.14.187 ([9d0a435](https://github.com/cuttlefisch/mae/commit/9d0a435ffa5fed3cdf2b8afbde022a22adff8a55))
 
 ## [0.14.186] - 2026-11-23
 
