@@ -42,6 +42,7 @@ graph TD
     mae_core --> mae_snippets
     mae_core --> mae_spell
     mae_core --> mae_sync
+    mae_core --> mae_syntax
     mae_core --> mae_mcp
     mae_crypto[mae-crypto]
     mae_crypto_wasm --> mae_crypto
@@ -77,6 +78,7 @@ graph TD
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
     mae_sync --> mae_crypto
+    mae_syntax[mae-syntax]
 ```
 
 ## mae
@@ -591,6 +593,14 @@ Source: `shared/sync/src/lib.rs`
 | `SyncOverallStatus` | enum |
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
+
+## mae-syntax
+
+Source: `shared/syntax/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `HIGHLIGHT_NAMES` | const |
 
 ## Scheme API
 
