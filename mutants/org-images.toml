@@ -1,0 +1,57 @@
+# Attachment and file links through the resolver, and the attachment
+# directory (ADR-115 D6, Amendment 1 E2/E3) in mae-org:
+# shared/org/src/render/links.rs and shared/org/src/semantics/attach.rs.
+# Tests: shared/org/tests/render_attachments.rs and
+# shared/org/tests/attach_dir.rs.
+
+[[mutant]]
+id = "org-images/described-link-is-an-image"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "render_attachments"]
+filter = "test(a_described_link_is_never_an_image)"
+ref = "ADR-115 E1"
+[[mutant.edit]]
+file = "shared/org/src/render/links.rs"
+find = '''        let no_desc = desc.is_empty() && link.description().is_none() && !self.in_link;'''
+replace = '''        let no_desc = !self.in_link;'''
+
+[[mutant]]
+id = "org-images/described-resolved-link-renders-img"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "render_attachments"]
+filter = "test(a_described_link_is_never_an_image)"
+ref = "ADR-115 E3"
+[[mutant.edit]]
+file = "shared/org/src/render/links.rs"
+find = '''                Some(src) if no_desc && has_image_extension(name) => Target::Image(Image {'''
+replace = '''                Some(src) if has_image_extension(name) => Target::Image(Image {'''
+
+[[mutant]]
+id = "org-images/placeholder-state-renders-img"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "render_attachments"]
+filter = "test(every_other_state_is_a_labelled_placeholder_never_an_img)"
+ref = "ADR-115 E3"
+[[mutant.edit]]
+file = "shared/org/src/render/links.rs"
+find = '''            Some(state) => Target::Attachment(state.as_str(), name.to_string()),'''
+replace = '''            Some(_) => Target::Image(Image {
+                src: "/x".to_string(),
+                alt: name.to_string(),
+                width: None,
+                height: None,
+            }),'''
+
+[[mutant]]
+id = "org-images/attach-id-not-inherited"
+runner = "editor"
+targets = ["-p", "mae-org", "--test", "attach_dir"]
+filter = "test(a_link_takes_the_nearest_id_up_the_outline)"
+ref = "ADR-115 E2"
+[[mutant.edit]]
+file = "shared/org/src/semantics/attach.rs"
+find = '''        let Some(id) = props.get("ID", headline.as_ref()) else {'''
+replace = '''        let own = headline
+            .as_ref()
+            .and_then(|h| crate::views::Headline::cast(h.clone())?.property_drawer()?.get("ID"));
+        let Some(id) = own else {'''

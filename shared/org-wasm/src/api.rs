@@ -18,6 +18,11 @@
 //!  "render": {"headline_ids": "explicit" | "slug", "images": false,
 //!             "property_drawers": false, "toplevel_hlevel": 1},
 //!  "resolver": {"targets": {"KB id": {"href": "/x.html", "title": "X"}},
+//!               "attachments": {"attachment:x.png": {"state": "resolved",
+//!                                                    "url": "/kb/k/blobs/…",
+//!                                                    "media_type": "image/png",
+//!                                                    "width": 640, "height": 480},
+//!                               "file:y.pdf": {"state": "missing"}},
 //!               "placeholder": "[?]"},
 //!  "node": "KB id",
 //!  "path": "id:x?rel=r",
@@ -28,11 +33,24 @@
 //! ```
 //!
 //! Spans in results are UTF-8 BYTE offsets into `text`.
+//!
+//! `resolver.attachments` (ADR-115 E3) maps an `attachment:` or `file`-type
+//! link's target exactly as the semantics give it (`links[].target`) to
+//! what the host found:
+//! `state` is `resolved` (with `url` and `media_type`, strings, and
+//! optionally `width` and `height`, integers from 0 to 4294967295), or
+//! `missing`, `forbidden`, `too_large` or `unsupported` (no other key). An
+//! unknown state, a missing or extra key and a value of the wrong type are
+//! errors. A resolved one renders `<img>` for a description-less link to
+//! an image extension and `<a href>` for any other; any other state the
+//! labelled placeholder. An `attachment:` link's `links[].attach_dir` and `attach_id` say
+//! where org-attach keeps its file; the host builds and checks any path.
 
 use crate::json::{parse, Json};
 use mae_org::{
-    json_string, ArchivedTrees, HeadlineIds, LinkTypes, ParseOptions, RenderOptions, Resolved,
-    Resolver, SemanticsOptions, TodoSequence, TreeFormat,
+    json_string, ArchivedTrees, AttachmentState, HeadlineIds, LinkTypes, ParseOptions,
+    RenderOptions, Resolved, ResolvedAttachment, Resolver, SemanticsOptions, TodoSequence,
+    TreeFormat,
 };
 
 /// An operation, by its ABI number.
@@ -412,7 +430,7 @@ fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
     let Some(j) = j.filter(|j| **j != Json::Null) else {
         return Ok(r);
     };
-    known_keys(j, &["targets", "placeholder"], "resolver")?;
+    known_keys(j, &["targets", "attachments", "placeholder"], "resolver")?;
     if let Some(p) = opt_str(j.get("placeholder"), "placeholder")? {
         r.placeholder = p;
     }
@@ -444,5 +462,63 @@ fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
         }
         Some(_) => return Err("resolver.targets must be an object".into()),
     }
+    match j.get("attachments") {
+        None | Some(Json::Null) => {}
+        Some(Json::Obj(kv)) => {
+            for (target, v) in kv {
+                let state = attachment_state(target, v)?;
+                r.attachments.insert(target.clone(), state);
+            }
+        }
+        Some(_) => return Err("resolver.attachments must be an object".into()),
+    }
     Ok(r)
+}
+
+/// One `resolver.attachments` value.
+fn attachment_state(target: &str, v: &Json) -> Result<AttachmentState, String> {
+    let what = format!("resolver attachment {target:?}");
+    let Json::Obj(_) = v else {
+        return Err(format!("{what} must be an object"));
+    };
+    let state = opt_str(v.get("state"), "state")?.ok_or_else(|| format!("{what} has no state"))?;
+    let simple = match state.as_str() {
+        "resolved" => None,
+        "missing" => Some(AttachmentState::Missing),
+        "forbidden" => Some(AttachmentState::Forbidden),
+        "too_large" => Some(AttachmentState::TooLarge),
+        "unsupported" => Some(AttachmentState::Unsupported),
+        other => {
+            return Err(format!(
+                "{what}: state {other:?}: resolved, missing, forbidden, too_large or unsupported"
+            ))
+        }
+    };
+    if let Some(s) = simple {
+        known_keys(v, &["state"], &what)?;
+        return Ok(s);
+    }
+    known_keys(v, &["state", "url", "media_type", "width", "height"], &what)?;
+    let url = opt_str(v.get("url"), "url")?.ok_or_else(|| format!("{what} has no url"))?;
+    let media_type = opt_str(v.get("media_type"), "media_type")?
+        .ok_or_else(|| format!("{what} has no media_type"))?;
+    let mut file = ResolvedAttachment::new(url, media_type);
+    if let Some(w) = dimension(v.get("width"), "width")? {
+        file = file.with_width(w);
+    }
+    if let Some(h) = dimension(v.get("height"), "height")? {
+        file = file.with_height(h);
+    }
+    Ok(AttachmentState::Resolved(file))
+}
+
+/// An image's `width` or `height`: an integer from 0 to `u32::MAX`.
+fn dimension(j: Option<&Json>, what: &str) -> Result<Option<u32>, String> {
+    match j {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Num(n)) if n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(n) => {
+            Ok(Some(*n as u32))
+        }
+        Some(_) => Err(format!("{what} must be an integer from 0 to {}", u32::MAX)),
+    }
 }

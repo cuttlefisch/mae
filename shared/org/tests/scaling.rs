@@ -141,6 +141,17 @@
 //! - render: N radio links and targets: 17.23 ms -> 147.56 ms for x8 bytes, normalised x8.6
 //! - render: N headline nodes with titles: 17.25 ms -> 167.52 ms for x8 bytes, normalised x9.2
 //!
+//! The headline holding a position (2026-11-24): an attachment link's
+//! directory, babel's header-args at an inline src block or call, and
+//! `{{{property}}}` each look one up per item. Asking rowan for the token
+//! at an offset tests the root's children one by one, so under N
+//! top-level headlines each was quadratic (x60.0, x47.6, x47.8) until
+//! `inherit::HeadlineIndex` (one pass, then a binary search):
+//! - sem: N attachment links under N headlines, one id: 7.87 ms -> 70.14 ms for x8 bytes, normalised x8.5
+//! - sem: N attachment links under a √N-deep outline: 4.62 ms -> 45.57 ms for x14 bytes, normalised x5.5
+//! - render: N inline src blocks under N headlines: 5.03 ms -> 60.91 ms for x8 bytes, normalised x11.5
+//! - render: N property macros under N headlines: 10.36 ms -> 100.71 ms for x8 bytes, normalised x9.4
+//!
 //! `replace_body` (review round 3, 2026-11-01; before, its rendering check
 //! rendered every node's page and 8,000 nodes took 12.8 s):
 //! - splice: N nodes with links: 60.52 ms -> 654.95 ms for x9 bytes, normalised x10.1
@@ -503,6 +514,29 @@ const SEMANTIC_FAMILIES: &[Family] = &[
     ("sem: footnote chain of N", footnote_chain, 2_000),
     ("sem: N headline ids, half duplicates", headline_ids, 2_000),
     (
+        "sem: N attachment links under N headlines, one id",
+        |n| {
+            let heads: String = (0..n)
+                .map(|i| format!("* h{i}\n[[attachment:a{i}.png]] [[attachment:b{i}.png]]\n"))
+                .collect();
+            format!(":PROPERTIES:\n:ID: abcdef\n:END:\n#+PROPERTY: ID kw\n{heads}")
+        },
+        2_000,
+    ),
+    // N links under a sawtooth outline about √N deep, the ID only at the
+    // file level: each link's ID is inherited through its whole chain.
+    (
+        "sem: N attachment links under a √N-deep outline",
+        |n| {
+            let k = (n as f64).sqrt() as usize;
+            let heads: String = (0..n)
+                .map(|i| format!("{} h{i}\n[[attachment:a{i}.png]]\n", "*".repeat(1 + i % k)))
+                .collect();
+            format!(":PROPERTIES:\n:ID: abcdef\n:END:\n{heads}")
+        },
+        2_000,
+    ),
+    (
         "sem: N links in one paragraph",
         |n| {
             format!(
@@ -852,6 +886,31 @@ const RENDER_FAMILIES: &[Family] = &[
                     format!(
                         "* H{i} [[id:t{i}]]\n:PROPERTIES:\n:ID: n{i}\n:ALIASES: a{i}, b\n:END:\n"
                     )
+                })
+                .collect()
+        },
+        1_000,
+    ),
+    // The headline holding a position (babel's header-args, the property
+    // macro's entry): one lookup per item, N headlines to look among.
+    (
+        "render: N inline src blocks under N headlines",
+        |n| {
+            let heads: String = (0..n)
+                .map(|i| format!("* h{i}\nsrc_sh{{echo {i}}} and call_f()\n"))
+                .collect();
+            format!(
+                "#+PROPERTY: header-args :exports code\n#+name: f\n#+begin_src sh\necho\n#+end_src\n{heads}"
+            )
+        },
+        1_000,
+    ),
+    (
+        "render: N property macros under N headlines",
+        |n| {
+            (0..n)
+                .map(|i| {
+                    format!("* h{i}\n:PROPERTIES:\n:P: v{i}\n:END:\n{{{{{{property(P)}}}}}}\n")
                 })
                 .collect()
         },

@@ -33,7 +33,21 @@ export interface Request {
    * one holding a character reference (`&#…`, `&name;`) is refused like any unsafe href.
    */
   /** `custom_ids`: the target page's CUSTOM_ID -> anchor (its `Rendered.custom_ids`); `[[id:X::#C]]` goes to `href#anchor` when C is there, else to `href` alone. */
-  resolver?: { targets?: Record<string, { href: string; title?: string | null; custom_ids?: Record<string, string> }>; placeholder?: string };
+  /**
+   * `attachments`: an `attachment:` or `file`-type link's target exactly as `links[].target` gives
+   * it (`attachment:x.png`, `file:y.pdf`) -> what the host found (ADR-115 E3). Its `url` is
+   * validated as an `href` is; a refused one leaves the link unresolved. `resolved` renders
+   * `<img>` for a description-less link to an image extension, else
+   * `<a class="org-link" href>` showing the description, or the NAME without one; any other state
+   * renders `<span class="org-attachment" data-state="…">` showing the same; a target not here
+   * renders as before. A link with a `::search` part, or inside another link's description, is
+   * never looked up.
+   */
+  resolver?: {
+    targets?: Record<string, { href: string; title?: string | null; custom_ids?: Record<string, string> }>;
+    attachments?: Record<string, AttachmentState>;
+    placeholder?: string;
+  };
   /** For `text`: the KB node whose title and body to read. */
   node?: string;
   /** For `classifyLink`: the link path. */
@@ -221,7 +235,15 @@ export interface SemanticsResult {
     links: {
       from: string | null; kind: string; path: string; target: string; fragment: string | null;
       search: string | null; rel: string; weight: number; confidence: number;
-      attrs: { key: string; value: string }[]; description: string | null; span: Span;
+      attrs: { key: string; value: string }[]; description: string | null;
+      /**
+       * For an `attachment:` link, org-attach's directory relative to the Org file's own
+       * (`data/ab/cdef…/`, ADR-115 E2) and the `:ID:` it comes from; null otherwise, and under a
+       * `:DIR:`/`:ATTACH_DIR:`. Built from the ID as written and never joined with the NAME: check
+       * any path you build from them.
+       */
+      attach_dir: string | null; attach_id: string | null;
+      span: Span;
     }[];
     transclusions: { from: string | null; member: string; role: string; args: string | null; span: Span }[];
     diagnostics: ({ kind: string; span: Span } & Record<string, unknown>)[];
@@ -231,6 +253,11 @@ export interface SemanticsResult {
   diagnostics: { kind: string; start: number; end: number }[];
   line_ending: 'lf' | 'crlf' | 'cr';
 }
+
+/** What the host found for an attachment or file link (`resolver.attachments`). */
+export type AttachmentState =
+  | { state: 'resolved'; url: string; media_type: string; width?: number | null; height?: number | null }
+  | { state: 'missing' | 'forbidden' | 'too_large' | 'unsupported' };
 
 export interface LinkClass {
   kind: string; target: string; fragment: string | null; search: string | null; rel: string;

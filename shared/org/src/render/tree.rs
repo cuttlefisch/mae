@@ -204,10 +204,15 @@ pub enum Attr {
     /// A link target: a resolver-supplied href, an `http:`/`https:`/
     /// `mailto:` URL, or `#ID` of an id in the same output.
     Href,
-    /// An `http:`/`https:` image URL (only with images enabled).
+    /// An image URL: an `http:`/`https:` URL (only with images enabled),
+    /// or a [`super::ResolvedAttachment::url`] validated as a resolver href.
     Src,
     /// An image's alternative text (any text).
     Alt,
+    /// A resolved image's width: decimal digits (a `u32`).
+    Width,
+    /// A resolved image's height: decimal digits (a `u32`).
+    Height,
     /// A list item's counter: decimal digits.
     Value,
     /// A header cell's scope: `col`.
@@ -224,7 +229,14 @@ pub enum Attr {
     /// `#+begin_details En Windows`): trimmed, non-empty, at most 512 bytes,
     /// no control characters. Only alongside `data-org-block`.
     DataOrgParams,
+    /// An attachment placeholder's state: one of [`DATA_STATES`].
+    DataState,
 }
+
+/// The values [`Attr::DataState`] takes: what the host found for an
+/// attachment or file link it cannot show or offer (every
+/// [`super::AttachmentState`] but `resolved`).
+pub const DATA_STATES: &[&str] = &["missing", "forbidden", "too_large", "unsupported"];
 
 impl Attr {
     /// The HTML attribute name.
@@ -235,6 +247,8 @@ impl Attr {
             Attr::Href => "href",
             Attr::Src => "src",
             Attr::Alt => "alt",
+            Attr::Width => "width",
+            Attr::Height => "height",
             Attr::Value => "value",
             Attr::Scope => "scope",
             Attr::DataOrgRel => "data-org-rel",
@@ -242,6 +256,7 @@ impl Attr {
             Attr::DataOrgC => "data-org-c",
             Attr::DataOrgBlock => "data-org-block",
             Attr::DataOrgParams => "data-org-params",
+            Attr::DataState => "data-state",
         }
     }
 
@@ -254,6 +269,7 @@ impl Attr {
             Attr::DataOrgC => "dataOrgC",
             Attr::DataOrgBlock => "dataOrgBlock",
             Attr::DataOrgParams => "dataOrgParams",
+            Attr::DataState => "dataState",
             other => other.as_str(),
         }
     }
@@ -269,15 +285,19 @@ pub const ATTRIBUTES: &[(Option<Tag>, Attr)] = &[
     (Some(Tag::A), Attr::DataOrgC),
     (Some(Tag::Img), Attr::Src),
     (Some(Tag::Img), Attr::Alt),
+    (Some(Tag::Img), Attr::Width),
+    (Some(Tag::Img), Attr::Height),
     (Some(Tag::Li), Attr::Value),
     (Some(Tag::Th), Attr::Scope),
     (Some(Tag::Div), Attr::DataOrgBlock),
     (Some(Tag::Div), Attr::DataOrgParams),
+    (Some(Tag::Span), Attr::DataState),
 ];
 
 /// The fixed classes (besides `org-level-N` and `language-L`).
 pub const CLASSES: &[&str] = &[
     "org-archived",
+    "org-attachment",
     "org-center",
     "org-checkbox",
     "org-citation",

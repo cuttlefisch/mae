@@ -70,11 +70,18 @@ pub(crate) const TAGS: &[&str] = &[
 /// writes it on. `class` and `id` go on any tag, each filtered by value.
 pub(crate) const TAG_ATTRS: &[(&str, &[&str])] = &[
     ("a", &["href", "data-org-rel", "data-org-w", "data-org-c"]),
-    ("img", &["src", "alt"]),
+    ("img", &["src", "alt", "width", "height"]),
     ("li", &["value"]),
     ("th", &["scope"]),
     ("div", &["data-org-block", "data-org-params"]),
+    ("span", &["data-state"]),
 ];
+
+/// Whether `value` is an image dimension as mae-org writes one: decimal
+/// digits of a `u32`.
+fn is_dimension(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u32>().is_ok()
+}
 
 /// Whether one class token is mae-org's: `org-…` or `language-…`, but not
 /// `org-code-…`, which only a highlighted token wears ([`is_token_class`]).
@@ -160,6 +167,9 @@ fn builder() -> ammonia::Builder<'static> {
                 (!kept.is_empty()).then(|| kept.join(" ").into())
             }
             "href" | "src" if is_protocol_relative(value) => None,
+            // An attachment placeholder's state: only mae-org's four.
+            "data-state" if !mae_org::DATA_STATES.contains(&value) => None,
+            "width" | "height" if !is_dimension(value) => None,
             _ => Some(value.into()),
         });
     b
@@ -201,6 +211,11 @@ mod tests {
             .map(|(_, a)| a.as_str())
             .collect();
         assert_eq!(generic, BTreeSet::from(["class", "id"]));
+        // Every data-state value mae-org writes passes the filter.
+        for s in mae_org::DATA_STATES {
+            let html = format!("<span class=\"org-attachment\" data-state=\"{s}\">x</span>");
+            assert_eq!(sanitize_fragment(&html), html);
+        }
         // Every class mae-org writes passes the class filter.
         for c in mae_org::CLASSES {
             assert!(
@@ -208,5 +223,38 @@ mod tests {
                 "{c} would be stripped"
             );
         }
+    }
+
+    /// An image's size and an attachment placeholder's state pass as
+    /// mae-org writes them; any other value is dropped, and neither
+    /// attribute survives on another tag.
+    #[test]
+    fn image_sizes_and_attachment_states_pass_only_in_their_form() {
+        let ok = "<p><img src=\"/b/a\" alt=\"a.png\" width=\"640\" height=\"0\"></p>";
+        assert_eq!(sanitize_fragment(ok), ok);
+        for bad in ["-1", "1.5", "10px", "", "99999999999", " 1"] {
+            let html = format!("<img src=\"/x\" alt=\"x\" width=\"{bad}\" height=\"{bad}\">");
+            let out = sanitize_fragment(&html);
+            assert!(
+                !out.contains("width") && !out.contains("height"),
+                "{bad:?}: {out}"
+            );
+        }
+        for bad in [
+            "resolved",
+            "MISSING",
+            "missing ",
+            "x\" onclick=\"y",
+            "broken",
+        ] {
+            let html = format!("<span data-state=\"{bad}\">x</span>");
+            assert!(!sanitize_fragment(&html).contains("data-state"), "{bad:?}");
+        }
+        let elsewhere = "<div data-state=\"missing\">x</div><a href=\"/x\" width=\"3\">y</a>";
+        let out = sanitize_fragment(elsewhere);
+        assert!(
+            !out.contains("data-state") && !out.contains("width"),
+            "{out}"
+        );
     }
 }
