@@ -1015,6 +1015,7 @@ systemctl --user stop mae-daemon
 mae-daemon kb seed --update --dry-run --git /srv/notes --rev v1.1 --kb-id notes   # --json for a gate
 # 2. Review the diff (below). Then apply exactly that plan.
 mae-daemon kb seed --update --git /srv/notes --rev v1.1 --kb-id notes --plan-hash <plan_hash>
+#    (add --discard-edits <edits_hash> only if the dry run listed edits outside the seed, below)
 systemctl --user start mae-daemon
 ```
 
@@ -1027,9 +1028,12 @@ from, and these sections, one node per line (`<id> <path>`):
   `tags`, `properties`, `org_header`, …) and `(moved from <path>)` for a move.
 - `removed`: pages the revision no longer has.
 - `edited outside the seed since its last apply`: nodes whose content is not what the seed last
-  wrote, with the fields that differ and who wrote them (from the daemon's edit record).
+  wrote, with the fields that differ and who wrote them (from the daemon's edit record), then
+  `edits_hash`, the token that discards exactly these edits. A returning page whose document was
+  written while it was out of the KB is listed here too (`returns: …`).
 
-Its exit status is 0 when the apply would go ahead and 1 when it would refuse.
+Its exit status is 0 when the apply would go ahead and 1 when it would refuse. `--json` carries the
+same as `update.edits_hash`, and per edit its `version` and whether the apply `discarded` it.
 
 The update keeps the KB id, its owner, members, policy and signed membership log, every identity
 binding, and every node's document, address (so its page URL) and history. A changed node is
@@ -1039,14 +1043,25 @@ written as a first seed writes it; a removed page leaves the KB's node list (its
 history are kept, and its last content is kept as a version, `kind: delete`).
 
 **Edits outside the seed.** If any node was edited after the last apply, the update refuses and names
-them. Give `--discard-edits` to overwrite them with the repository's content; each edit stays in its
-node's history, so nothing is lost. An edit is detected by comparing the node with what the seed
-wrote (a digest kept in the seed record; for a KB seeded before this release, the page is rebuilt
-from the blob recorded for it, so keep the repository's history available), never by times.
+them. To overwrite them with the repository's content, give `--discard-edits <edits_hash>` from the
+dry run; each edit stays in its node's history, so nothing is lost. The hash covers each listed node
+at the content the dry run saw, so if anything is edited between the dry run and the apply (the
+daemon may have run in between), the apply refuses with `the edits changed since the dry run: run it
+again`: an edit is never discarded without having been shown. An edit is detected by comparing the
+node with what the seed wrote (a digest kept in the seed record; for a KB seeded before this
+release, the page is rebuilt from the blob recorded for it, so keep the repository's history
+available), never by times. A page an earlier update removed is compared, when it returns, with its
+content at the removal, and one the seed never wrote with the new revision's content.
+
+The plan must be read from the repository the KB was seeded from, given to `--git` exactly as it was
+recorded (the path as written then): a clone elsewhere, even with the same content, is refused.
 
 Like the first apply, the update is safe to re-run: its intent is recorded before the first write,
 and a re-run with the same plan after a crash finishes it, checking first that no node was written
-in the meantime. Readers see each node old or new, and the KB's node list switches from the old
+in the meantime. If one was, the resume refuses until you run the dry run again (it judges each node
+against the cut-short update, so pages it already wrote are not reported as edits) and give its
+`edits_hash`. A page written after the update already wrote it is listed as `kept by the update`:
+the resume does not overwrite it, and the next update reports it. Readers see each node old or new, and the KB's node list switches from the old
 set to the new one in one step. Until the update finishes, another plan is refused and so is
 `kb export`. After it finishes, a re-run writes nothing (`already at this plan`). An end-to-end
 encrypted KB, a KB no seed made and a seed whose first apply never finished are refused.
