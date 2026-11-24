@@ -825,7 +825,9 @@ than picked. Behaviour reads a class joined in the Cozo projection, never a raw 
 ship as a frozen, versioned vocabulary (`mae-builtin/1`) so peers on different releases agree.
 Evidence in `docs/research/114-kind-vocabulary-prior-art.md`.
 
-**ADR-115** (*proposed, design*) — **a KB's attachments live in a per-KB, content-addressed store,
+**ADR-115** (*accepted 2026-11-24, design; Amendment 1 pins the link form `[[attachment:NAME]]`, the
+org-attach `data/<ID[0:2]>/<ID[2:]>/` layout, mae-org's data-map image resolver and the build order,
+mae-org's resolver first*) — **a KB's attachments live in a per-KB, content-addressed store,
 never in node text.** Bytes are immutable sha256-named files, deduplicated per KB only, with
 metadata and references in SQLite; access is the KB's own `kb_access` (no hash-as-capability, no
 existence oracle); upload and download stream over new HTTPS routes under a per-blob cap and a new
