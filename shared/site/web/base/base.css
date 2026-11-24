@@ -37,6 +37,136 @@ a:visited {
   background: var(--ui-panel);
 }
 
+/* The page's layout. Narrow: one column, the content first, then the side
+   panels, then the explorer (P-42: nothing wider than the window). Wide: the
+   header across the top, the explorer on the left, the content in the centre,
+   the panels on the right. The side columns are `auto`, sized by their
+   occupant: a page without the explorer (a reader allowed only queries) or
+   without panels gives their room to the content, and the explorer never
+   moves for what follows it (P-47). */
+body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "header"
+    "main"
+    "panels"
+    "explorer";
+  align-items: start;
+}
+
+#mae-header {
+  grid-area: header;
+}
+
+#mae-main {
+  grid-area: main;
+  min-width: 0;
+}
+
+#mae-panels {
+  grid-area: panels;
+  min-width: 0;
+}
+
+.mae-explorer {
+  grid-area: explorer;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0.5rem 1rem;
+}
+
+/* The daemon ships the explorer hidden and the router's behaviour shows it
+   once its list has loaded: without JavaScript, or when the list fails, it is
+   absent (fail closed). */
+.mae-explorer[hidden] {
+  display: none;
+}
+
+@media (min-width: 50rem) {
+  body {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "header header header"
+      "explorer main panels";
+  }
+
+  #mae-panels {
+    width: 18rem;
+  }
+
+  /* In view while the page scrolls (P-43), scrolling inside itself: only its
+     own list ever scrolls to reveal the current page (P-44, P-45). */
+  .mae-explorer {
+    position: sticky;
+    top: 0;
+    width: 16rem;
+    max-height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+.mae-explorer summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.mae-explorer details + details {
+  margin-top: 0.5rem;
+}
+
+.mae-explorer ul {
+  margin: 0.375rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* At least 6 px between consecutive entries (P-40). */
+.mae-explorer li + li {
+  margin-top: max(6px, 0.375rem);
+}
+
+/* An entry: normal weight, at most two lines, wrapping anywhere rather than
+   clipped sideways (P-40 to P-42). The clamp hides only the visible text: the
+   link's text, its accessible name, is always the full title. Its start
+   padding is the room the current entry's bar takes. */
+.mae-explorer a {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: normal;
+  padding-inline-start: 0.75rem;
+}
+
+/* The current entry and a keyboard-focused one, in full (P-41). */
+.mae-explorer a[aria-current="page"],
+.mae-explorer a:focus-visible {
+  display: block;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+  overflow: visible;
+}
+
+/* The current page: bold, and a bar that is not colour alone (P-39, P-40).
+   The bar is the link colour, the one text role the palette tests hold to
+   4.5:1 on the page in every palette and both modes (3:1 is required). */
+.mae-explorer a[aria-current="page"] {
+  font-weight: bold;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 0.25rem solid;
+  border-inline-start-color: var(--ui-link);
+}
+
+.mae-explorer a:focus-visible {
+  outline: 2px solid;
+  outline-color: var(--ui-link);
+  outline-offset: -2px;
+}
+
 /* The site's header: its title, then the mode and palette controls (P-91,
    P-93), which wrap below it on a narrow window. */
 #mae-header {
