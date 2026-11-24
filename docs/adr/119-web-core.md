@@ -840,7 +840,9 @@ components or what a "version" is without a build. Both are the owner's (H1, H2)
   - its template file;
   - its optional behaviour script;
   - the exact `data-` keys and ARIA states its markup needs, which is all A2's sanitiser extension
-    admits for it;
+    admits for it. Its classes must start with `site-`, so it can wear neither the chrome's (`mae-`) nor
+    content's (`org-`, `language-`);
+  - an optional stylesheet, served like a behaviour;
   - for a page-emitting component, its page name and its data file (H2).
 - **Loaded once, at startup.** Every template is compiled, every script and data file is read and
   validated, and every declared attribute is checked against the sanitiser's rules before the daemon
@@ -852,10 +854,13 @@ components or what a "version" is without a build. Both are the owner's (H1, H2)
 - **What a template sees (P-154):**
   - the page's own data: ID, title, file-level properties, dates, tags and URL;
   - the site settings: locale, base path and KB ID;
-  - its own validated data file (H2).
+  - its own validated data file (H2);
+  - for any other node ID, only whether it is published in this view, and its address. That is what
+    P-163's "what's-new link, omitted if unpublished" needs. It tells the reader nothing they could not
+    learn by following the link.
 
-  Never another page. A component cannot read the KB beyond the page it renders, so a template cannot
-  widen what a reader sees.
+  Never another page's content. A component cannot read the KB beyond the page it renders, so a
+  template cannot widen what a reader sees.
 - **Behaviours** are served like the runtime's own assets, under content-addressed names, as
   `script-src 'self'` requires. Each runs once per navigation and is cleaned up before the next (P-156),
   under the router's single Trusted Types policy: a behaviour builds DOM, and cannot inject HTML.
