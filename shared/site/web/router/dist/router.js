@@ -28,6 +28,22 @@ export const PANELS_ID = "mae-panels";
 export const HEADER_ID = "mae-header";
 export const ANNOUNCER_ID = "mae-announcer";
 export const EXPLORER_ID = "mae-explorer";
+/** The left-panel footer's and page footer's slot boxes (D18, P-153). */
+export const LEFT_FOOTER_ID = "mae-left-footer";
+export const FOOTER_ID = "mae-footer";
+/**
+ * The `<meta name>`s a document-head slot may write (mae_site's
+ * `HEAD_META_NAMES`; a Rust test holds the two lists equal): swapped with the
+ * page, so a description or robots line never outlives its page.
+ */
+export const HEAD_META_NAMES = [
+    "application-name",
+    "author",
+    "description",
+    "generator",
+    "keywords",
+    "robots",
+];
 /**
  * The URL the router should fetch for a click on a link, or `null` when the
  * browser should handle it: a modified or non-primary click, a new window, a
@@ -120,6 +136,30 @@ export function announce(doc, text) {
     }
     live.textContent = text;
 }
+/** The context `init` gets on `root`, read from what the shell wrote. */
+export function context(root, signal) {
+    const main = root.getElementById(MAIN_ID);
+    const kb = main?.getAttribute("data-mae-kb") ?? null;
+    const base = main?.getAttribute("data-mae-base") ?? null;
+    const url = main?.getAttribute("data-mae-url") ?? null;
+    if (!main || kb === null || base === null || url === null) {
+        return { root, page: null, site: null, signal };
+    }
+    return {
+        root,
+        page: { id: main.getAttribute("data-mae-page"), url, kb },
+        site: { kb, base, locale: root.documentElement.lang },
+        signal,
+    };
+}
+/** A behaviour as `register` checks it: an operator's script is not typed. */
+function checked(b) {
+    const r = b;
+    if (!r || typeof r.id !== "string" || r.id === "" || typeof r.init !== "function") {
+        throw new TypeError("mae.site.register takes { id: string, init(ctx) }");
+    }
+    return r;
+}
 /** Install the router on `win`: click and history handling, components. */
 export function start(win) {
     const doc = win.document;
@@ -127,19 +167,45 @@ export function start(win) {
     // The only HTML sink on the page; see the file header.
     const policy = tt?.createPolicy("mae-router", { createHTML: (s) => s });
     const parse = (html) => new win.DOMParser().parseFromString((policy ? policy.createHTML(html) : html), "text/html");
+    // Behaviours by id, and what each left running on the page on screen. One
+    // that throws is reported and skipped: an operator's component never stops
+    // the router's own controls, or another component, from running.
     const behaviours = new Map();
-    let cleanups = [];
-    const mountAll = () => {
-        for (const b of behaviours.values()) {
-            const c = b.mount(doc);
+    const running = new Map();
+    const report = (e) => win.console?.error?.(e);
+    const mountOne = (b) => {
+        const ac = new AbortController();
+        let cleanup = null;
+        try {
+            const c = b.init(context(doc, ac.signal));
             if (typeof c === "function")
-                cleanups.push(c);
+                cleanup = c;
+        }
+        catch (e) {
+            report(e);
+        }
+        running.set(b.id, { ac, cleanup });
+    };
+    const unmountOne = (id) => {
+        const r = running.get(id);
+        if (!r)
+            return;
+        running.delete(id);
+        r.ac.abort();
+        try {
+            r.cleanup?.();
+        }
+        catch (e) {
+            report(e);
         }
     };
+    const mountAll = () => {
+        for (const b of behaviours.values())
+            mountOne(b);
+    };
     const unmountAll = () => {
-        for (const c of cleanups)
-            c();
-        cleanups = [];
+        for (const id of Array.from(running.keys()))
+            unmountOne(id);
     };
     win.history.scrollRestoration = "manual";
     // The page this document shows, by path and query: a history move within it
@@ -152,6 +218,7 @@ export function start(win) {
         unmountAll();
         doc.title = next.title;
         doc.documentElement.lang = next.documentElement.lang;
+        swapHeadMeta(doc, next);
         const main = doc.getElementById(MAIN_ID);
         const nextMain = next.getElementById(MAIN_ID);
         if (main && nextMain)
@@ -171,10 +238,14 @@ export function start(win) {
             else if (theirs)
                 at()?.[place](doc.adoptNode(theirs));
         };
+        // Body order: header, explorer, left-panel footer, main, panels, footer.
         const mainOf = () => doc.getElementById(MAIN_ID);
-        region(EXPLORER_ID, "before", mainOf, keepExplorer);
-        region(HEADER_ID, "before", () => doc.getElementById(EXPLORER_ID) ?? mainOf());
+        const byId = (id) => () => doc.getElementById(id);
+        region(LEFT_FOOTER_ID, "before", mainOf);
+        region(EXPLORER_ID, "before", () => byId(LEFT_FOOTER_ID)() ?? mainOf(), keepExplorer);
+        region(HEADER_ID, "before", () => byId(EXPLORER_ID)() ?? byId(LEFT_FOOTER_ID)() ?? mainOf());
         region(PANELS_ID, "after", mainOf);
+        region(FOOTER_ID, "after", () => byId(PANELS_ID)() ?? mainOf());
         mountAll();
     };
     const settle = (url, scrollY) => {
@@ -270,15 +341,32 @@ export function start(win) {
         void navigate(url, false, state?.scrollY ?? null);
     });
     return {
-        register(name, b) {
-            behaviours.set(name, b);
-            const c = b.mount(doc);
-            if (typeof c === "function")
-                cleanups.push(c);
+        register(b) {
+            const behaviour = checked(b);
+            unmountOne(behaviour.id);
+            behaviours.set(behaviour.id, behaviour);
+            mountOne(behaviour);
         },
         navigate: (url, push) => navigate(url, push),
         pending: () => current,
     };
+}
+/**
+ * Replace `doc`'s slot-written `<meta name>`s (HEAD_META_NAMES) with `next`'s,
+ * before the title, where the shell writes them.
+ */
+function swapHeadMeta(doc, next) {
+    const sel = HEAD_META_NAMES.map((n) => `meta[name="${n}"]`).join(",");
+    for (const m of Array.from(doc.head.querySelectorAll(sel)))
+        m.remove();
+    const title = doc.head.querySelector("title");
+    for (const m of Array.from(next.head.querySelectorAll(sel))) {
+        const mine = doc.adoptNode(m);
+        if (title)
+            title.before(mine);
+        else
+            doc.head.append(mine);
+    }
 }
 /** The storage key of each part of a choice (MAE's own names). */
 export function storageKey(part, palette) {
@@ -577,7 +665,8 @@ export function themeControls(win) {
         // No media queries: the mode stays as painted.
     }
     return {
-        mount(doc) {
+        id: "theme",
+        init({ root: doc }) {
             const data = win.mae?.theme;
             const box = doc.getElementById(THEME_ID);
             const toggle = doc.getElementById(MODE_TOGGLE_ID);
@@ -1091,8 +1180,9 @@ export function explorer(win) {
         mark(b, click);
     };
     return {
+        id: "explorer",
         idle: () => loading,
-        mount(doc) {
+        init({ root: doc }) {
             loading = null;
             const click = clicked;
             clicked = null;
@@ -1184,7 +1274,8 @@ export async function copyBlock(win, doc, code, words) {
 /** The copy control as a behaviour (P-156): buttons on mount, none after. */
 export function codeCopy(win) {
     return {
-        mount(doc) {
+        id: "copy",
+        init({ root: doc }) {
             const article = doc.getElementById(ARTICLE_ID);
             const words = article ? copyWords(article) : null;
             if (!article || !words)
@@ -1216,7 +1307,14 @@ export function codeCopy(win) {
     };
 }
 // On one of the site's pages: start once, and publish the component registry
-// (D18). A document without the main landmark is not the site's.
+// (D18) as `window.mae.site`. A document without the main landmark is not the
+// site's.
+//
+// Order: the shell loads this module before every component's behaviour, and
+// module scripts run in document order once the document is parsed, so
+// `mae.site.register` exists before any component's script runs. A component
+// registered after start runs on the page on screen at once, then on every
+// page after it.
 if (typeof window !== "undefined" &&
     typeof document !== "undefined" &&
     document.getElementById(MAIN_ID) !== null) {
@@ -1224,8 +1322,8 @@ if (typeof window !== "undefined" &&
     if (!w.mae?.site) {
         const router = start(window);
         w.mae = { ...(w.mae ?? {}), site: router };
-        router.register("theme", themeControls(window));
-        router.register("explorer", explorer(window));
-        router.register("copy", codeCopy(window));
+        router.register(themeControls(window));
+        router.register(explorer(window));
+        router.register(codeCopy(window));
     }
 }

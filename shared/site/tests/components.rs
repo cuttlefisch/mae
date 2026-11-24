@@ -1072,6 +1072,25 @@ fn a_loader_reads_exactly_the_files_the_manifest_names() {
     assert!(Components::named_files("not toml [").is_empty());
 }
 
+/// The router swaps the document head's `<meta name>`s with the page; it
+/// must name exactly the ones the head's sanitiser admits, or a slot's
+/// description outlives its page (or the chrome's viewport is dropped).
+#[test]
+fn the_router_swaps_exactly_the_head_metas_the_sanitiser_admits() {
+    let router = mae_site::assets::ROUTER_JS;
+    let list = router
+        .split("HEAD_META_NAMES = [")
+        .nth(1)
+        .and_then(|r| r.split(']').next())
+        .expect("the router's HEAD_META_NAMES");
+    let names: Vec<&str> = list
+        .split(',')
+        .map(|n| n.trim().trim_matches('"'))
+        .filter(|n| !n.is_empty())
+        .collect();
+    assert_eq!(names, mae_site::components::HEAD_META_NAMES);
+}
+
 /// P-154: a derived page carries its file-level properties, `ID` left out,
 /// under mae-org's canonical keys (`:state:` and `:State:` are `STATE`),
 /// with hidden references removed (P-13), and its dates from `CREATED` and

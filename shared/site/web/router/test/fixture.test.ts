@@ -9,7 +9,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
 import { describe, expect, it } from "vitest";
-import { themeControls } from "../src/router";
+import { context, themeControls } from "../src/router";
 import { treeOf } from "./a11y";
 
 const DIR = path.join(
@@ -60,7 +60,7 @@ function run(scenario: Scenario, steps: Step[]): Document {
   });
   for (const [k, v] of Object.entries(scenario.storage)) win.localStorage.setItem(k, v);
   new Function("window", PREPAINT)(win);
-  themeControls(dom).mount(dom.document);
+  themeControls(dom).init(context(dom.document, new AbortController().signal));
   for (const s of steps) {
     if (s.focus) (win.document.querySelector(s.focus) as unknown as HTMLElement).focus();
     if (s.key) {

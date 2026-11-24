@@ -244,8 +244,9 @@ describe("navigation", () => {
     const { doc, router } = setup("https://site.example/kb/k/a", A, () => ({ body: B }));
     let mounts = 0;
     let cleanups = 0;
-    router.register("counter", {
-      mount: () => {
+    router.register({
+      id: "counter",
+      init: () => {
         mounts += 1;
         return () => (cleanups += 1);
       },
