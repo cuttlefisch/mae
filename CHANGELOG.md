@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.192] - 2026-11-24
+
+
+
+
+### Bug Fixes
+
+- *(shell)* Copied terminal text is the text as written, not padded screen rows ([2bbff9c](https://github.com/cuttlefisch/mae/commit/2bbff9c2716c193cea52b782b1e7a0eb0f41b91f))
+
 ## [0.14.191] - 2026-11-24
 
 
@@ -38,6 +47,10 @@ All notable changes to this project will be documented in this file.
 - *(site)* Declared mutants for the live site's component wiring ([a9e5bdb](https://github.com/cuttlefisch/mae/commit/a9e5bdb65c3abee09cfcdc37c61444e8255ea4bd))
 - *(site)* The palette-menu fixture in fr-FR, and a bless switch to regenerate it ([f0715c2](https://github.com/cuttlefisch/mae/commit/f0715c2e75c824c3c2fe5cecef7282a4f6d8393b))
 - *(mutants)* The body-bound mutant anchors on the bound that now covers properties too ([14d3d69](https://github.com/cuttlefisch/mae/commit/14d3d693354a511d06bdc3d8a861449e53e60131))
+
+### Miscellaneous
+
+- Bump version to 0.14.191 ([0aa5e47](https://github.com/cuttlefisch/mae/commit/0aa5e471fd0497ed67679c4c4950ed7838ed1c73))
 
 ## [0.14.190] - 2026-11-24
 
