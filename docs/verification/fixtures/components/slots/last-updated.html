@@ -1,0 +1,7 @@
+{# P-163. Omitted when UPDATED is absent or not an ISO date. #}
+{% if "UPDATED" in page.properties %}
+{% set d = iso_date(page.properties.UPDATED) %}
+{% if d %}
+<p class="site-last-updated">Last updated <time datetime="{{ d.iso }}">{{ d.iso }}</time></p>
+{% endif %}
+{% endif %}
