@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.194] - 2026-11-24
+
+
+
+
+### Features
+
+- *(org)* Attachment images through the resolver, and org-attach's directory in the semantics (ADR-115 E2/E3) ([973d158](https://github.com/cuttlefisch/mae/commit/973d158fb49c2e7604ea025d02547e65234bb8c1))
+- *(org)* Described attachment and file links resolve through Resolver.attachments (ADR-115 E3) ([bce43e6](https://github.com/cuttlefisch/mae/commit/bce43e6af7cbb5a910067f12cc0f9bddcdbb4850))
+
+### Performance
+
+- *(org)* Find the headline holding a position by binary search, not a descent from the root ([8ea24df](https://github.com/cuttlefisch/mae/commit/8ea24df424dca93570eb88008c884a37e6c5b9a0))
+
+### Documentation
+
+- *(adr-115)* Accepted, with the link form, the layout and the build order pinned ([6c77b74](https://github.com/cuttlefisch/mae/commit/6c77b740d1b53fc358a0c7736fb0056fa2d07769))
+- *(adr-115)* E2 as built, matching Emacs on :DIR:, file link forms and ::search ([75d6a2c](https://github.com/cuttlefisch/mae/commit/75d6a2c806cc8530051a9a7b04b61309b2f2b9e0))
+
+### Miscellaneous
+
+- *(org)* Mae-org and mae-org-wasm 0.11.0 ([f789faf](https://github.com/cuttlefisch/mae/commit/f789faf10e7915f2c27fd91f372a0c88c170a5c9))
+- *(org)* Mae-org 0.11.0 release notes, revised for Resolver.attachments ([c0378c5](https://github.com/cuttlefisch/mae/commit/c0378c5c019e85ebe1df30841fad2b136d7fdc74))
+
 ## [0.14.193] - 2026-11-24
 
 
@@ -27,6 +51,10 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* Pin kb seed --update against a fresh seed ([146e5a7](https://github.com/cuttlefisch/mae/commit/146e5a7af8386f86a9cbd6a81ac26946a8de628a))
 - *(daemon)* Keep the seed update test under the function ceiling ([0fa2898](https://github.com/cuttlefisch/mae/commit/0fa28983861d1068581109a8a2418d2c20865ff5))
+
+### Miscellaneous
+
+- Bump version to 0.14.193 ([96107de](https://github.com/cuttlefisch/mae/commit/96107dee25886ab38a54d1735d65f19403cdc56d))
 
 ## [0.14.192] - 2026-11-24
 
