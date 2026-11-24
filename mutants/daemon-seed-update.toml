@@ -1,0 +1,64 @@
+# `kb seed --update` (daemon/src/seed/update.rs, its record in
+# daemon/src/storage_seed_update.rs): one mutant per guard of stored data.
+# Tests: daemon/src/seed/tests/update_tests.rs.
+
+[[mutant]]
+id = "daemon-seed-update/outside-edits-unseen"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_edit_outside_the_seed_refuses_the_update_until_discarded)"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''            r.seed_version.is_none() || now != r.seed_version'''
+replace = '''            false && (r.seed_version.is_none() || now != r.seed_version)'''
+
+[[mutant]]
+id = "daemon-seed-update/discard-edits-assumed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_edit_outside_the_seed_refuses_the_update_until_discarded)"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''    if !edited.is_empty() && !discard_edits {'''
+replace = '''    if !edited.is_empty() && !true {'''
+
+[[mutant]]
+id = "daemon-seed-update/removed-node-kept"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_update_reaches_a_fresh_seed_of_the_new_revision)"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''            let _ = coll.remove_node(&u.row.node_id);'''
+replace = '''            let _ = &u.row.node_id;'''
+
+# The record marked applied before any node is written (the finish guard,
+# which refuses while a node is not done, is taken out with it).
+[[mutant]]
+id = "daemon-seed-update/applied-before-writes"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_crash_at_every_step_then_a_rerun_converges)"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''    crash::at(crash::Step::Begun)?;
+    write(store, t, plan, &nodes).await'''
+replace = '''    store.seed_update_finish(t.kb_id, t.now).await.map_err(storage)?;
+    crash::at(crash::Step::Begun)?;
+    write(store, t, plan, &nodes).await'''
+[[mutant.edit]]
+file = "daemon/src/storage_seed_update.rs"
+find = '''    if open.read::<i64, _>(0)? != 0 {'''
+replace = '''    if false && open.read::<i64, _>(0)? != 0 {'''
+
+[[mutant]]
+id = "daemon-seed-update/plan-hash-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_refusal_writes_nothing)"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''    let hash = checked_hash(plan, t.plan_hash)?;
+    let applied = load_applied('''
+replace = '''    let hash = plan.plan_hash().unwrap_or_default();
+    let applied = load_applied('''
