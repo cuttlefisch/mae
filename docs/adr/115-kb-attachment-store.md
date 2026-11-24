@@ -1,6 +1,7 @@
 # ADR-115: A KB's attachments live in a per-KB, content-addressed store, never in node text
 
-**Status:** Proposed (design). Nothing here is built.
+**Status:** Accepted (owner, 2026-11-24), design; built phase by phase. Amendment 1 pins the link
+form, the on-disk layout, the mae-org resolver contract and the build order. Nothing is built yet.
 **Relates to:** ADR-113 (publication review; its D6 revision attachments become one use of this
 store), ADR-109 (resource budget; attachments get their own cap and a storage quota), ADR-111
 (remote clients over HTTPS), ADR-112 (mae-org renders the reference), ADR-093 (node CRDT schema; an
@@ -322,6 +323,53 @@ rule that a budget is set before launch.
 - The OAuth listener gains its first non-JSON-RPC data routes, and with them streaming, a new
   surface reviewed under principle #9.
 - Node text stays small and searchable, and every client keeps its sync cost bounded.
+
+## Amendment 1 (2026-11-24): accepted, with the link form, the layout and the build order pinned
+
+The owner accepted this ADR on 2026-11-24, to put images in published pages: in the live site and in
+the browser client's static documentation site alike. Pinning what both need before any page is
+written:
+
+### E1. One link form
+
+`[[attachment:NAME]]` is the only form a KB uses for a file it carries: never `[[file:…]]` or a
+relative path. It is what seeding carries into the store (D7), and what Emacs resolves natively. An
+image is such a link **without a description**: Org's rule, which mae-org already applies to `http`
+images. `[[attachment:x.png][text]]` is a link to the file, not an image. A caption is `#+CAPTION:` on
+the line before. `alt` is the file name, as ox-html writes it.
+
+### E2. The layout on disk, as Emacs's org-attach has it
+
+From `org-attach.el` (Emacs 30): `org-attach-id-dir` is `"data/"`, relative to the Org file's directory,
+and `org-attach-id-to-path-function-list` tries the UUID format (`<ID[0:2]>/<ID[2:]>`, for an ID longer
+than two characters), then the timestamp format, then the fallback (`__/<ID[0]>/<ID>`). So a file lives
+at `data/<ID[0:2]>/<ID[2:]>/NAME` next to the note, and an ID of two characters or fewer at
+`data/__/<ID[0]>/<ID>/NAME`. The ID is the nearest enclosing entry's `:ID:`: the headline the link is
+under, else up the outline to the file-level ID. MAE fixes `org-attach-use-inheritance` on, so an
+image under a headline with no ID of its own belongs to the page.
+
+Divergences, registered as such (ADR-112): Emacs takes the first function whose folder already
+**exists**, which depends on the filesystem; MAE takes the first that applies, so every peer derives
+the same path. `:DIR:` and `:ATTACH_DIR:` are not supported in v1, and seeding refuses a node that has
+either.
+
+### E3. mae-org's resolver contract (D6, made concrete)
+
+The resolver is data, like `targets`, because it crosses the WASM boundary as JSON: `images` maps a
+link target exactly as written (`"attachment:diagram.png"`, as the semantics expose it) to a state:
+`resolved` (`url`, `media_type`, optional `width` and `height`) renders `<img>`; `missing`,
+`forbidden`, `too_large` and `unsupported` render the labelled placeholder
+`<span class="org-attachment" data-state="…">NAME</span>`. A target that is not in the map renders as
+today (`org-unresolved`). Only description-less `attachment:` and `file:` links to an image extension
+are looked up; the `http` images option is unchanged. The host reads a page's link targets from the
+semantics, resolves them, then renders, and owns its policy (types, size caps).
+
+### E4. Build order
+
+P3 (mae-org's resolver, a mae-org release) comes first. It is the first blocker for images anywhere,
+and it lets the static site resolve images from the repository before the store exists. Then P1 (the
+store and its routes; a live page's `<img src>` is `/kb/<kb-id>/blobs/<sha256>`, authorised like the
+page), P2 and P4. P5 (MAE's editor) follows.
 
 ## Rejected
 
