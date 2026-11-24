@@ -145,15 +145,21 @@ upload that would exceed it (`tenant_quota_exceeded`).
   arrive in.
 
 **A NAME is one portable file name**, because an export writes it as a file on Linux, macOS or
-Windows (principle #13). It is 1 to 255 bytes of UTF-8, is not `.` or `..`, and contains no `/`,
+Windows (principle #13). It is 1 to 255 bytes of UTF-8, and at most 255 bytes in its NFD form too,
+because APFS stores names decomposed (85 `é` fit, 86 do not, though both are under 255 bytes as
+NFC). It is not `.` or `..`, and contains no `/`,
 `\`, control character (Unicode Cc), format character (Unicode Cf: bidi controls, zero-width
 characters), or any of `< > : " | ? *`. It does not end in a dot or a space, and it is not a Windows
 device name, case-insensitively, with or without an extension: `CON`, `PRN`, `AUX`, `NUL`,
 `COM1`–`COM9`, `LPT1`–`LPT9`, and, following Python's `ntpath.isreserved`, `CONIN$`, `CONOUT$` and the
 superscript-digit ports `COM¹`–`COM³`, `LPT¹`–`LPT³`.
 
-**No two NAMEs of one node may be one file.** Two NAMEs equal once NFC-normalised and lowercased
-(the seed's path-collision key) are the same file on APFS and NTFS, so a writer refuses to bind the
+**No two NAMEs of one node may be one file.** Two NAMEs with the same canonical caseless key,
+`NFD(toCasefold(NFD(NAME)))` written in NFC, using full default case folding (the C and F mappings
+of `CaseFolding.txt`, not lowercase, and never the Turkic mappings, so no locale enters it and every
+peer computes the same key), are taken as the same file on APFS and NTFS. That is the seed's
+path-collision key too. `ſ` and `s`, `ς` and `σ`, `ß` and `ss` collide; `ı` and `i` do not, and `İ`
+is `i` with a combining dot. A writer refuses to bind the
 second, on set and on rename (a rename to another spelling of the same NAME is allowed). Two peers can
 still bind such a pair concurrently, each write valid where it was made. The reader keeps both
 rather than picking one, every peer converges on the same pair, and the export must refuse such a
@@ -162,10 +168,13 @@ the place).
 
 **There are two readers, failing in opposite directions.** The display reader is tolerant: an entry
 with a bad NAME or shape is reported and left out, never repaired. The sweep's reader (D5) fails
-safe: any entry holding a 64-hex-digit hash where `sha256` would be counts as referenced, whatever
-else about it is rejected, because an entry an older daemon rejects may be one a newer peer still
-binds, and leaving it out would delete its bytes. A holder that cannot be read at all marks the KB's
-live set incomplete, and a sweep collects nothing in that KB.
+safe: every string anywhere in any entry, under any key and at any depth, that is 64 hex digits once
+ASCII whitespace is trimmed counts as referenced, whatever else about the entry is rejected, because
+an entry an older daemon rejects may be one a newer peer still binds, and leaving it out would delete
+its bytes. Its walk is bounded in depth and in values; a document past either bound, like a holder
+that cannot be read at all, marks the KB's live set incomplete, and a sweep collects nothing in that
+KB. For the same reason a rebirth copies the `attachments` root as stored, every key and value, and
+only the set, rename and remove operations apply the NAME rule.
 
 **The mapping is part of the node's content, everywhere content is fixed.** Replacing `diagram.png`
 under the same name must never change what a revision, a history version or an export shows. So the
