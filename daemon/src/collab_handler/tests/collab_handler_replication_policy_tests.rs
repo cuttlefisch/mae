@@ -87,6 +87,29 @@ async fn setup_four_principal_kb(
     )
 }
 
+/// `kb/join` over the hub as `(session, principal, label)`, with no session
+/// key and the store's own reply bound: what every join in this file sends.
+async fn join_as(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    (session, principal, label): (u64, &str, &str),
+    docs: &mut HashSet<String>,
+    id: u64,
+    kb: &str,
+) -> JsonRpcResponse {
+    kb_membership::handle_kb_join(
+        store,
+        bc,
+        (session, Some(principal), None, Transport::Hub),
+        Some(label),
+        docs,
+        store.message_bound(),
+        serde_json::json!(id),
+        &kb_join_msg(kb)["params"],
+    )
+    .await
+}
+
 #[tokio::test]
 async fn query_only_viewer_denied_join_others_allowed_with_distinguishable_message() {
     let store = test_doc_store();
@@ -176,34 +199,26 @@ async fn query_only_member_kb_join_never_subscribes_the_session() {
     // The QueryOnly member's kb_join must be denied and must never reach the
     // subscription step.
     let mut denied_docs = HashSet::new();
-    let denied_resp = kb_membership::handle_kb_join(
+    let denied_resp = join_as(
         &store,
         &bc,
-        denied_session,
-        Some("query-only-viewer"),
-        Some(&query_only_viewer),
-        None,
+        (denied_session, &query_only_viewer, "query-only-viewer"),
         &mut denied_docs,
-        Transport::Hub,
-        serde_json::json!(1),
-        &kb_join_msg("kbsub")["params"],
+        1,
+        "kbsub",
     )
     .await;
     assert!(denied_resp.error.is_some(), "QueryOnly join must be denied");
 
     // The Full-policy member's kb_join, by contrast, must succeed and subscribe.
     let mut allowed_docs = HashSet::new();
-    let allowed_resp = kb_membership::handle_kb_join(
+    let allowed_resp = join_as(
         &store,
         &bc,
-        allowed_session,
-        Some("full-viewer"),
-        Some(&full_viewer),
-        None,
+        (allowed_session, &full_viewer, "full-viewer"),
         &mut allowed_docs,
-        Transport::Hub,
-        serde_json::json!(2),
-        &kb_join_msg("kbsub")["params"],
+        2,
+        "kbsub",
     )
     .await;
     assert!(
@@ -280,17 +295,13 @@ async fn mid_session_restriction_does_not_tear_down_an_already_live_session_but_
         .unwrap_or_else(|e| e.into_inner())
         .subscribe(session_id, vec![]);
     let mut session_docs = HashSet::new();
-    let join_resp = kb_membership::handle_kb_join(
+    let join_resp = join_as(
         &store,
         &bc,
-        session_id,
-        Some("dana"),
-        Some(&member),
-        None,
+        (session_id, &member, "dana"),
         &mut session_docs,
-        Transport::Hub,
-        serde_json::json!(1),
-        &kb_join_msg("kbmid")["params"],
+        1,
+        "kbmid",
     )
     .await;
     assert!(
@@ -330,17 +341,13 @@ async fn mid_session_restriction_does_not_tear_down_an_already_live_session_but_
     // But a FRESH kb_join attempt (e.g. a reconnect) by the same principal, after
     // the restriction, correctly hits the new policy.
     let mut reconnect_docs = HashSet::new();
-    let reconnect_resp = kb_membership::handle_kb_join(
+    let reconnect_resp = join_as(
         &store,
         &bc,
-        session_id + 1,
-        Some("dana"),
-        Some(&member),
-        None,
+        (session_id + 1, &member, "dana"),
         &mut reconnect_docs,
-        Transport::Hub,
-        serde_json::json!(2),
-        &kb_join_msg("kbmid")["params"],
+        2,
+        "kbmid",
     )
     .await;
     assert!(

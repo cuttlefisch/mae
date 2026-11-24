@@ -153,6 +153,7 @@ async fn dispatch_p2p(
         None,
         docs,
         Transport::P2p,
+        store.message_bound(),
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
         None,

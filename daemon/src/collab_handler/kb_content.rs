@@ -15,9 +15,9 @@ fn collection_state_param(params: &serde_json::Value) -> Result<Vec<u8>, McpErro
     base64_to_update(b64).map_err(|e| invalid(format!("invalid collection_state base64: {e}")))
 }
 
-/// `kb/share`'s caller: session, principal, the session's key (absent for a
-/// bearer or `none` session) and transport.
-pub(super) type ShareCaller<'a> = (u64, Option<&'a str>, Option<&'a [u8; 32]>, Transport);
+/// The caller of `kb/share` and `kb/join`: session, principal, the session's
+/// key (absent for a bearer or `none` session) and transport.
+pub(super) type KbCaller<'a> = (u64, Option<&'a str>, Option<&'a [u8; 32]>, Transport);
 
 /// ADR-018 strict binding: the OWNER is the AUTHENTICATED principal (key
 /// fingerprint), overriding whatever the client baked in. A self-claimed
@@ -52,7 +52,7 @@ fn bind_owner(
 pub(super) async fn handle_kb_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    (session_id, auth_principal, auth_pubkey, transport): ShareCaller<'_>,
+    (session_id, auth_principal, auth_pubkey, transport): KbCaller<'_>,
     auth_label: Option<&str>,
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,

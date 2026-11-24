@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.189] - 2026-11-24
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Size kb/join pages to the session's reply bound ([5582833](https://github.com/cuttlefisch/mae/commit/5582833bf9e46169d5d0aff0081c9155ed86ad60))
+
+### Refactor
+
+- *(daemon)* Kb/join takes its caller as kb/share does ([b06b3dd](https://github.com/cuttlefisch/mae/commit/b06b3dd0ee5657e17e9132ca77bfd29dfcb2364c))
+
+### Testing
+
+- *(daemon)* A reply bound with no room pages one node at a time and ends ([070794e](https://github.com/cuttlefisch/mae/commit/070794ec49a76467f12eb66972847b4bef8dfd07))
+
 ## [0.14.188] - 2026-11-24
 
 
@@ -35,6 +52,7 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* The lock records mae-site's unicode-normalization dependency ([03aa2d4](https://github.com/cuttlefisch/mae/commit/03aa2d498a9db5de43b388ffd9a14c1115831999))
 - *(adr)* Regenerate the ADR KB checksum for ADR-119's status line ([717644c](https://github.com/cuttlefisch/mae/commit/717644cc8234143f5ccbd44fe1c1d2a13d597270))
 - Bump version to 0.14.187 ([9d0a435](https://github.com/cuttlefisch/mae/commit/9d0a435ffa5fed3cdf2b8afbde022a22adff8a55))
+- Bump version to 0.14.188 ([4563530](https://github.com/cuttlefisch/mae/commit/45635302861c0ad6daae47a149c57b0a619f0078))
 
 ## [0.14.186] - 2026-11-23
 
