@@ -55,12 +55,12 @@
 //! skips them, so with `org-export-with-archived-trees` set to `t` it
 //! exports their code as written).
 
+use crate::inherit::Inherited;
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::{SyntaxElement, SyntaxNode};
 use crate::seeded::{HashMap, HashSet};
-use crate::views::{canonical_key, Headline, PropertyDrawer};
+use crate::views::canonical_key;
 use crate::{Document, Span};
-use std::cell::RefCell;
 
 /// What `:exports` resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,14 +86,10 @@ impl Exports {
 /// The export decisions of one document.
 #[derive(Debug)]
 pub(crate) struct Babel {
-    root: SyntaxNode,
     /// Elements Org's export removes: `(start, end, kind)`.
     hidden: HashSet<(u32, u32, SyntaxKind)>,
-    /// `#+PROPERTY:` values, canonical key → value, `+` keys merged.
-    global: HashMap<String, String>,
-    file_drawer: Option<PropertyDrawer>,
-    /// (headline start, canonical property) → its inherited value.
-    memo: RefCell<HashMap<(u32, String), Option<String>>>,
+    /// The `header-args` properties, inherited as Org inherits them.
+    props: Inherited,
     /// Named src blocks and calls, by `:name`: the first element with each
     /// (`org-babel-lob--src-info`'s search).
     defs: HashMap<String, SyntaxNode>,
@@ -138,11 +134,8 @@ impl Babel {
     pub fn new(doc: &Document) -> Babel {
         let root = doc.syntax();
         let mut babel = Babel {
-            root: root.clone(),
             hidden: HashSet::default(),
-            global: global_properties(doc),
-            file_drawer: doc.property_drawer(),
-            memo: RefCell::new(HashMap::default()),
+            props: Inherited::new(doc),
             defs: HashMap::default(),
         };
         let mut named = NamedResults::default();
@@ -288,13 +281,7 @@ impl Babel {
     }
 
     fn headline_at(&self, at: u32) -> Option<SyntaxNode> {
-        if at >= u32::from(self.root.text_range().end()) {
-            return None;
-        }
-        // The token STARTING at `at` (right-biased): at a headline's first
-        // byte, the one before it ends the previous headline's section.
-        let token = self.root.token_at_offset(at.into()).right_biased()?;
-        token.parent()?.ancestors().find(|a| a.kind() == HEADLINE)
+        self.props.headline_at(at)
     }
 
     fn resolve(
@@ -328,115 +315,15 @@ impl Babel {
         headers: &[String],
     ) -> Vec<String> {
         let mut sources = Vec::new();
-        sources.extend(self.inherited("HEADER-ARGS", headline.as_ref()));
+        sources.extend(self.props.get("HEADER-ARGS", headline.as_ref()));
         if !lang.is_empty() {
             let prop = canonical_key(&format!("header-args:{lang}"));
-            sources.extend(self.inherited(&prop, headline.as_ref()));
+            sources.extend(self.props.get(&prop, headline.as_ref()));
         }
         sources.push(params.to_string());
         sources.extend(headers.iter().cloned());
         sources
     }
-
-    /// `prop` (canonical) as `org-entry-get` with inheritance reads it at a
-    /// point under `headline` (`None`: the zeroth section).
-    fn inherited(&self, prop: &str, headline: Option<&SyntaxNode>) -> Option<String> {
-        // The headlines up to the first one whose value is known (memoised,
-        // or a plain value of its own), innermost first.
-        let mut path: Vec<(SyntaxNode, Vec<String>)> = Vec::new();
-        let mut cur = headline.cloned();
-        let mut known = loop {
-            let Some(h) = cur else {
-                break self.file_level(prop);
-            };
-            let at = (Span::of(&h).start, prop.to_string());
-            if let Some(v) = self.memo.borrow().get(&at) {
-                break v.clone();
-            }
-            let drawer = Headline::cast(h.clone()).and_then(|h| h.property_drawer());
-            let (base, plus) = local_values(drawer, prop);
-            if let Some(b) = base {
-                let v = join(Some(b), &plus);
-                self.memo.borrow_mut().insert(at, v.clone());
-                break v;
-            }
-            cur = h.ancestors().skip(1).find(|a| a.kind() == HEADLINE);
-            path.push((h, plus));
-        };
-        for (h, plus) in path.into_iter().rev() {
-            known = join(known, &plus);
-            let at = (Span::of(&h).start, prop.to_string());
-            self.memo.borrow_mut().insert(at, known.clone());
-        }
-        known.filter(|v| v != "nil")
-    }
-
-    /// The file level: its property drawer, else `#+PROPERTY:`.
-    fn file_level(&self, prop: &str) -> Option<String> {
-        let (base, plus) = local_values(self.file_drawer.clone(), prop);
-        match base {
-            Some(b) => join(Some(b), &plus),
-            None => join(self.global.get(prop).cloned(), &plus),
-        }
-    }
-}
-
-/// `base` then `plus`, joined by spaces (`org-property-separators`'s
-/// default); `None` if there is nothing.
-fn join(base: Option<String>, plus: &[String]) -> Option<String> {
-    let mut parts: Vec<String> = base.into_iter().collect();
-    parts.extend(plus.iter().cloned());
-    (!parts.is_empty()).then(|| parts.join(" "))
-}
-
-/// A drawer's plain value of `prop` (the last one wins) and its `prop+`
-/// values in order (`org-element--get-node-properties`).
-fn local_values(drawer: Option<PropertyDrawer>, prop: &str) -> (Option<String>, Vec<String>) {
-    let Some(d) = drawer else {
-        return (None, Vec::new());
-    };
-    let plus_key = format!("{prop}+");
-    let mut base = None;
-    let mut plus = Vec::new();
-    for p in d.properties() {
-        if p.key == prop {
-            base = Some(p.value);
-        } else if p.key == plus_key {
-            plus.push(p.value);
-        }
-    }
-    (base, plus)
-}
-
-/// `#+PROPERTY: NAME VALUE` lines in order, a `NAME+` appending to `NAME`
-/// (`org--update-property-plist`).
-fn global_properties(doc: &Document) -> HashMap<String, String> {
-    let mut out: HashMap<String, String> = HashMap::default();
-    for k in doc.keywords() {
-        if !k.key().eq_ignore_ascii_case("PROPERTY") {
-            continue;
-        }
-        let value = k.value();
-        let Some((name, rest)) = value.split_once([' ', '\t']) else {
-            continue;
-        };
-        let rest = rest.trim_start_matches([' ', '\t']);
-        let (name, append) = match name.strip_suffix('+') {
-            Some(n) if !n.is_empty() => (n, true),
-            _ => (name, false),
-        };
-        let name = canonical_key(name);
-        match out.get_mut(&name) {
-            Some(old) if append => {
-                old.push(' ');
-                old.push_str(rest);
-            }
-            _ => {
-                out.insert(name, rest.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// A block's opening line.

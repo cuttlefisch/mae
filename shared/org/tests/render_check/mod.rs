@@ -86,6 +86,9 @@ pub const ATTRS: &[(&str, &str)] = &[
     ("a", "data-org-c"),
     ("img", "src"),
     ("img", "alt"),
+    ("img", "width"),
+    ("img", "height"),
+    ("span", "data-state"),
     ("li", "value"),
     ("th", "scope"),
     ("div", "data-org-block"),
@@ -168,6 +171,7 @@ fn token(s: &str, max: usize, extra: &str) -> bool {
 
 fn is_class(c: &str) -> bool {
     const FIXED: &[&str] = &[
+        "org-attachment",
         "org-center",
         "org-checkbox",
         "org-citation",
@@ -220,7 +224,20 @@ fn is_unit(v: &str) -> bool {
 pub struct Contract {
     /// Hrefs the resolver supplied that the contract accepts.
     pub resolver_hrefs: HashSet<String>,
+    /// Image URLs the resolver supplied that the contract accepts.
+    pub resolver_srcs: HashSet<String>,
     pub images: bool,
+}
+
+/// A resolver-supplied URL that is plainly safe: an allowed external URL,
+/// or a reference with no scheme, not protocol-relative, nothing to escape.
+fn plainly_safe(h: &str) -> bool {
+    let first = h.split(['/', '?', '#']).next().unwrap_or("");
+    is_safe_external(h)
+        || (!h.is_empty()
+            && !h.starts_with("//")
+            && !first.contains(':')
+            && h.chars().all(url_char))
 }
 
 impl Contract {
@@ -232,17 +249,20 @@ impl Contract {
             .targets
             .values()
             .map(|r| r.href.clone())
-            .filter(|h| {
-                let first = h.split(['/', '?', '#']).next().unwrap_or("");
-                is_safe_external(h)
-                    || (!h.is_empty()
-                        && !h.starts_with("//")
-                        && !first.contains(':')
-                        && h.chars().all(url_char))
+            .filter(|h| plainly_safe(h))
+            .collect();
+        let resolver_srcs = resolver
+            .images
+            .values()
+            .filter_map(|s| match s {
+                mae_org::ImageState::Resolved(i) => Some(i.url.clone()),
+                _ => None,
             })
+            .filter(|h| plainly_safe(h))
             .collect();
         Contract {
             resolver_hrefs,
+            resolver_srcs,
             images,
         }
     }
@@ -349,8 +369,11 @@ fn value(tag: &str, a: &str, v: &str, c: &Contract, ids: &HashSet<String>) -> Re
         "id" => is_anchor_id(v),
         "href" => href_ok(v, c, ids),
         "src" => {
-            c.images && (v.starts_with("http:") || v.starts_with("https:")) && is_safe_external(v)
+            (c.images && (v.starts_with("http:") || v.starts_with("https:")) && is_safe_external(v))
+                || c.resolver_srcs.contains(v)
         }
+        "width" | "height" => !v.is_empty() && v.len() <= 10 && v.parse::<u32>().is_ok(),
+        "data-state" => ["missing", "forbidden", "too_large", "unsupported"].contains(&v),
         "alt" => true,
         "value" => !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()),
         "scope" => v == "col",
@@ -408,6 +431,26 @@ pub fn adversarial_resolver(targets: &[String]) -> Resolver {
         };
         let title = (i % 3 == 0).then(|| format!("T{i}"));
         r.targets.insert((*t).clone(), resolved(href, title));
+    }
+    // Every target also gets an image state (the renderer looks up only an
+    // image link's): resolved to a page URL, with a size or without,
+    // resolved to a URL it must refuse, and each placeholder state.
+    for (i, t) in sorted.iter().enumerate() {
+        let image = |url: String| mae_org::ResolvedImage::new(url, "image/png");
+        let state = match i % 7 {
+            0 => mae_org::ImageState::Resolved(image(format!("/b/{i}"))),
+            1 => mae_org::ImageState::Resolved(
+                image(format!("/b/{i}?v=1"))
+                    .with_width(i as u32)
+                    .with_height(7),
+            ),
+            2 => mae_org::ImageState::Resolved(image(hostile[i % hostile.len()].to_string())),
+            3 => mae_org::ImageState::Missing,
+            4 => mae_org::ImageState::Forbidden,
+            5 => mae_org::ImageState::TooLarge,
+            _ => mae_org::ImageState::Unsupported,
+        };
+        r.images.insert((*t).clone(), state);
     }
     r
 }

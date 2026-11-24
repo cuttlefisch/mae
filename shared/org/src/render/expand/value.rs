@@ -180,12 +180,7 @@ impl Engine {
 
 /// The headline whose entry holds `place` (`None`: before the first).
 fn entry_at(root: &SyntaxNode, place: usize) -> Option<SyntaxNode> {
-    let offset = rowan::TextSize::try_from(place).ok()?;
-    if offset >= root.text_range().end() {
-        return None;
-    }
-    let token = root.token_at_offset(offset).right_biased()?;
-    token.parent_ancestors().find(|a| a.kind() == HEADLINE)
+    crate::inherit::headline_at(root, u32::try_from(place).ok()?)
 }
 
 /// The property lines of an entry's drawer, values trimmed.

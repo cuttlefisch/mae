@@ -8,8 +8,8 @@
 //! this surface only, as an external crate must.
 
 use crate::{
-    ArchivedTrees, HeadlineIds, LinkTypes, ParseOptions, RenderOptions, Resolved, Resolver,
-    SemanticsOptions, TodoSequence,
+    ArchivedTrees, HeadlineIds, ImageState, LinkTypes, ParseOptions, RenderOptions, Resolved,
+    ResolvedImage, Resolver, SemanticsOptions, TodoSequence,
 };
 
 fn strings<S: Into<String>>(v: impl IntoIterator<Item = S>) -> Vec<String> {
@@ -186,7 +186,39 @@ impl Resolved {
     }
 }
 
+impl ResolvedImage {
+    /// An image at `url` (validated when used: see [`ResolvedImage::url`])
+    /// of type `media_type`, size unknown.
+    pub fn new(url: impl Into<String>, media_type: impl Into<String>) -> ResolvedImage {
+        ResolvedImage {
+            url: url.into(),
+            media_type: media_type.into(),
+            width: None,
+            height: None,
+        }
+    }
+
+    /// [`ResolvedImage::width`].
+    pub fn with_width(mut self, width: u32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// [`ResolvedImage::height`].
+    pub fn with_height(mut self, height: u32) -> Self {
+        self.height = Some(height);
+        self
+    }
+}
+
 impl Resolver {
+    /// Adds (or replaces) what the host found for image link `target`
+    /// ([`Resolver::images`]).
+    pub fn with_image(mut self, target: impl Into<String>, state: ImageState) -> Self {
+        self.images.insert(target.into(), state);
+        self
+    }
+
     /// Adds (or replaces) KB node `id`'s target.
     pub fn with_target(mut self, id: impl Into<String>, target: Resolved) -> Self {
         self.targets.insert(id.into(), target);

@@ -503,6 +503,16 @@ const SEMANTIC_FAMILIES: &[Family] = &[
     ("sem: footnote chain of N", footnote_chain, 2_000),
     ("sem: N headline ids, half duplicates", headline_ids, 2_000),
     (
+        "sem: N attachment links under N headlines, one id",
+        |n| {
+            let heads: String = (0..n)
+                .map(|i| format!("* h{i}\n[[attachment:a{i}.png]] [[attachment:b{i}.png]]\n"))
+                .collect();
+            format!(":PROPERTIES:\n:ID: abcdef\n:END:\n#+PROPERTY: ID kw\n{heads}")
+        },
+        2_000,
+    ),
+    (
         "sem: N links in one paragraph",
         |n| {
             format!(

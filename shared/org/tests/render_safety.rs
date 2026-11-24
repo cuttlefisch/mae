@@ -3,7 +3,8 @@
 //! oracle in `render_check`:
 //! - **Closure:** every `href` is a resolver-supplied target (one the
 //!   contract accepts), an http/https/mailto URL, or `#ID` of an id in the
-//!   same output; every `src` an http/https URL with images on.
+//!   same output; every `src` an http/https URL with images on, or an
+//!   image URL the resolver supplied (one the contract accepts).
 //! - **Allowlist:** every tag and attribute is documented, every value in
 //!   its validated form, every id unique.
 //! - **Unrendered regions contribute nothing:** a marker placed in every
@@ -232,6 +233,8 @@ const PIECES: &[&str] = &[
     "[[https://a.org][see *https://b.org* and /[[id:n1]]/ x[fn:1]]] [[id:n1][*[fn:2]*]]\n",
     "* Plan [[file:~/private/x.org]] @@html:<!-- codename -->@@ <<tg>> call_x(arg)\n",
     "[[id:n1?w=-0&c=-0.0][negative zero]] [[id:n2?w=-1e999]]\n",
+    "[[attachment:a.png]] [[attachment:b.svg][d]] [[file:c.jpg]] [[./d.gif]] [[attachment:e.txt]]\n",
+    "#+CAPTION: cap\n[[attachment:f.webp]]\n\n[[attachment:../\"><x.png]] [[file:%2e%2e/y.png]]\n",
 ];
 
 fn org_doc() -> impl Strategy<Value = String> {

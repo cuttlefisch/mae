@@ -121,21 +121,71 @@ fn token(s: &str, max: usize, extra: &[u8]) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
 }
 
-/// Image extensions an external image link may end in.
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp", "avif"];
+/// The extensions an image link may end in: ox-html's
+/// `org-html-inline-image-rules` (Org 9.7, ox-html.el), the same list for
+/// its `file`, `http` and `https` rules, matched in any case as
+/// `org-export-inline-image-p` matches (`case-fold-search` t). Unlike
+/// Org's unanchored regexp (which takes `x.png.txt` for an image), the
+/// extension must END the name (registered: `image-extension`).
+const IMAGE_EXTENSIONS: &[&str] = &["jpeg", "jpg", "png", "gif", "svg", "webp", "avif"];
 
-fn is_image(url: &str) -> bool {
-    let path = url.split(['?', '#']).next().unwrap_or("");
-    let last = path.rsplit('/').next().unwrap_or("");
+/// Whether a file name's last segment ends in an image extension.
+fn has_image_extension(name: &str) -> bool {
+    let last = name.rsplit('/').next().unwrap_or("");
     last.rsplit_once('.')
         .is_some_and(|(_, ext)| IMAGE_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+}
+
+/// Whether an external URL's path (before its query and fragment) names an
+/// image.
+fn is_image(url: &str) -> bool {
+    has_image_extension(url.split(['?', '#']).next().unwrap_or(""))
+}
+
+/// The NAME of a link a resolver's [`super::Resolver::images`] may hold,
+/// when it is an image link by Org's rule: a link of Org's `attachment`
+/// type (written exactly so: Org's type is case-sensitive, and
+/// `org-attach-expand-links` expands no other spelling) or `file` type
+/// (`file:`, `file+APP:` in any case, as `org-element-link-parser` folds
+/// them, or a file name), whose name ends in an image extension and that
+/// has no `::search` option (Org's export of `[[file:x.png::3]]` fails to
+/// resolve it, or drops it with broken links allowed: it is no image). The
+/// caller checks that it has no description.
+fn image_name(class: &crate::SemanticLink) -> Option<&str> {
+    if class.kind != LinkKind::Other || class.search.is_some() {
+        return None;
+    }
+    let t = class.target.as_str();
+    let name = if let Some(rest) = t.strip_prefix(crate::semantics::attach::ATTACHMENT_SCHEME) {
+        rest
+    } else if crate::link_grammar::is_file_name(t) {
+        t
+    } else {
+        let (scheme, rest) = t.split_once(':')?;
+        let s = scheme.to_ascii_lowercase();
+        if s != "file" && !s.starts_with("file+") {
+            return None;
+        }
+        rest
+    };
+    has_image_extension(name).then_some(name)
+}
+
+/// An `<img>`.
+struct Image {
+    src: String,
+    alt: String,
+    width: Option<u32>,
+    height: Option<u32>,
 }
 
 /// What a link becomes.
 enum Target {
     /// `<a href>`, with KB metadata for a KB link.
     Href(String, Option<Box<crate::SemanticLink>>),
-    Image(String),
+    Image(Image),
+    /// An image link the resolver did not resolve: its state and NAME.
+    Attachment(&'static str, String),
     /// No target: the description, or the placeholder.
     None,
     /// Shown as plain text (a link inside another link's description).
@@ -210,6 +260,7 @@ impl Builder<'_> {
             // rendered (Org shows its number or title), never its own path.
             Target::Href(h, None) if h.starts_with('#') => self.local_text(h),
             Target::Href(h, None) => vec![text(h.strip_prefix("mailto:").unwrap_or(h))],
+            Target::Attachment(_, name) => vec![text(name)],
             _ => self.placeholder(),
         };
         let target = match target {
@@ -259,7 +310,13 @@ impl Builder<'_> {
         match class.kind {
             LinkKind::Web | LinkKind::Mailto => match safe_external_url(&class.target) {
                 Some(u) if no_desc && self.opts.images && u.starts_with("http") && is_image(&u) => {
-                    Target::Image(u)
+                    let alt = u.rsplit('/').next().unwrap_or("").to_string();
+                    Target::Image(Image {
+                        src: u,
+                        alt,
+                        width: None,
+                        height: None,
+                    })
                 }
                 Some(u) => Target::Href(u, None),
                 None => Target::None,
@@ -267,7 +324,33 @@ impl Builder<'_> {
             LinkKind::Kb => self.kb_target(class),
             LinkKind::Heading => self.local_target(|t| t.titles.get(&class.target).cloned()),
             LinkKind::CustomId => self.local_target(|t| t.custom_ids.get(&class.target).cloned()),
+            LinkKind::Other if no_desc => self.image_target(&class),
             _ => Target::None,
+        }
+    }
+
+    /// An image link without a description, as the resolver's
+    /// [`super::Resolver::images`] says (ADR-115 E3): `<img>` for a resolved
+    /// one (its `alt` the NAME's last segment, as ox-html's
+    /// `file-name-nondirectory`), the labelled placeholder for any other
+    /// state, and an unresolved link when the target is not there, is no
+    /// image link, or its URL is refused.
+    fn image_target(&self, class: &crate::SemanticLink) -> Target {
+        let Some(name) = image_name(class) else {
+            return Target::None;
+        };
+        match self.resolver.images.get(&class.target) {
+            Some(super::ImageState::Resolved(img)) => match safe_resolver_href(&img.url) {
+                Some(src) => Target::Image(Image {
+                    src,
+                    alt: name.rsplit('/').next().unwrap_or("").to_string(),
+                    width: img.width,
+                    height: img.height,
+                }),
+                None => Target::None,
+            },
+            Some(state) => Target::Attachment(state.as_str(), name.to_string()),
+            None => Target::None,
         }
     }
 
@@ -425,13 +508,23 @@ fn link_element(target: Target, shown: Vec<Node>) -> Node {
             }
             a.with(shown).into()
         }
-        Target::Image(src) => {
-            let alt = src.rsplit('/').next().unwrap_or("").to_string();
-            Element::new(Tag::Img)
-                .attr(Attr::Src, src)
-                .attr(Attr::Alt, alt)
-                .into()
+        Target::Image(img) => {
+            let mut e = Element::new(Tag::Img)
+                .attr(Attr::Src, img.src)
+                .attr(Attr::Alt, img.alt);
+            if let Some(w) = img.width {
+                e = e.attr(Attr::Width, w.to_string());
+            }
+            if let Some(h) = img.height {
+                e = e.attr(Attr::Height, h.to_string());
+            }
+            e.into()
         }
+        Target::Attachment(state, _) => Element::new(Tag::Span)
+            .class("org-attachment")
+            .attr(Attr::DataState, state)
+            .with(shown)
+            .into(),
         Target::None => Element::new(Tag::Span)
             .class("org-unresolved")
             .with(shown)
@@ -477,6 +570,8 @@ fn fallback(link: &Link) -> crate::SemanticLink {
         attrs: c.attrs,
         description: c.description,
         span: Span::of(link.syntax()),
+        attach_dir: None,
+        attach_id: None,
     }
 }
 

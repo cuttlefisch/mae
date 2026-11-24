@@ -81,6 +81,7 @@ pub use highlight::{
     SectionHighlights,
 };
 mod index;
+mod inherit;
 mod inline;
 mod json;
 pub use json::json_string;
@@ -122,10 +123,10 @@ pub use render::{
     encode_id, heading_anchor, is_valid_id, is_valid_language, node_source, node_text, normalise,
     render, render_hast, render_html, render_inline, replace_body, safe_external_url,
     safe_resolver_href, slug, text, text_of, to_hast, to_html, with_line_ending, Attr,
-    BodyEditError, Element, HeadlineIds, HeadlineLevels, MacroFailure, Node, NodeMeta,
-    RenderDiagnostic, RenderOptions, Rendered, Resolved, Resolver, Tag, ToplevelHlevel, TreeFormat,
-    ATTRIBUTES, CLASSES, DECLARATION_KEYWORDS, DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX,
-    TAGS,
+    BodyEditError, Element, HeadlineIds, HeadlineLevels, ImageState, MacroFailure, Node, NodeMeta,
+    RenderDiagnostic, RenderOptions, Rendered, Resolved, ResolvedImage, Resolver, Tag,
+    ToplevelHlevel, TreeFormat, ATTRIBUTES, CLASSES, DATA_STATES, DECLARATION_KEYWORDS,
+    DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
 };
 /// The tree is a rowan tree; `node.text_range()` returns rowan types. The
 /// re-export makes that coupling explicit and versioned: plain-data results
@@ -133,7 +134,7 @@ pub use render::{
 /// needs rowan.
 pub use rowan;
 pub use semantics::{
-    semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, RenderedFootnote,
+    attachment_dir, semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, RenderedFootnote,
     SemanticDiagnostic, SemanticLink, SemanticNode, Semantics, SemanticsOptions, Transclusion,
     Unrendered, LINK_EXCLUDE_KEYWORDS, ORG_EXPORT_SELECT_TAGS,
 };

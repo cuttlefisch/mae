@@ -117,6 +117,8 @@ fn link(w: &mut W, l: &SemanticLink) {
     w.key("confidence").raw(&l.confidence.to_string());
     w.key("attrs").pairs(&l.attrs);
     w.key("description").opt(l.description.as_deref());
+    w.key("attach_dir").opt(l.attach_dir.as_deref());
+    w.key("attach_id").opt(l.attach_id.as_deref());
     w.key("span").span(l.span).raw("}");
 }
 

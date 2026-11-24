@@ -289,3 +289,126 @@ fn a_resolver_target_carries_the_target_page_s_custom_ids() {
     )
     .contains("anchor"));
 }
+
+/// `resolver.images` (ADR-115 E3): each state reaches the renderer, and the
+/// render is mae-org's own for the same resolver built natively.
+#[test]
+fn resolver_images_reach_the_renderer() {
+    let text = "[[attachment:a.png]] [[attachment:b.png]] [[file:c.png]] [[attachment:d.png]] [[attachment:e.png]] [[attachment:f.png]]\n";
+    let req = format!(
+        r##"{{"text": {text:?}, "resolver": {{"images": {{
+            "attachment:a.png": {{"state": "resolved", "url": "/b/a", "media_type": "image/png", "width": 10, "height": 20}},
+            "attachment:b.png": {{"state": "resolved", "url": "/b/b", "media_type": "image/png", "width": null}},
+            "file:c.png": {{"state": "missing"}},
+            "attachment:d.png": {{"state": "forbidden"}},
+            "attachment:e.png": {{"state": "too_large"}},
+            "attachment:f.png": {{"state": "unsupported"}}}}}}}}"##
+    );
+    let html = ok(3, &req);
+    let html = html["body"].as_str().unwrap();
+    assert!(
+        html.contains(r#"<img src="/b/a" alt="a.png" width="10" height="20">"#),
+        "{html}"
+    );
+    assert!(html.contains(r#"<img src="/b/b" alt="b.png">"#), "{html}");
+    for (name, state) in [
+        ("c.png", "missing"),
+        ("d.png", "forbidden"),
+        ("e.png", "too_large"),
+        ("f.png", "unsupported"),
+    ] {
+        let span = format!(r#"<span class="org-attachment" data-state="{state}">{name}</span>"#);
+        assert!(html.contains(&span), "{span}: {html}");
+    }
+    // The same resolver built natively renders the same body.
+    let doc = mae_org::parse(text, &mae_org::ParseOptions::default());
+    let sem = mae_org::semantics(&doc);
+    let png = |u: &str| mae_org::ResolvedImage::new(u, "image/png");
+    let r = mae_org::Resolver::default()
+        .with_image(
+            "attachment:a.png",
+            mae_org::ImageState::Resolved(png("/b/a").with_width(10).with_height(20)),
+        )
+        .with_image(
+            "attachment:b.png",
+            mae_org::ImageState::Resolved(png("/b/b")),
+        )
+        .with_image("file:c.png", mae_org::ImageState::Missing)
+        .with_image("attachment:d.png", mae_org::ImageState::Forbidden)
+        .with_image("attachment:e.png", mae_org::ImageState::TooLarge)
+        .with_image("attachment:f.png", mae_org::ImageState::Unsupported);
+    let native = mae_org::render_html(&doc, &sem, &mae_org::RenderOptions::default(), &r);
+    assert_eq!(html, native);
+}
+
+#[test]
+fn a_malformed_image_state_is_an_error() {
+    let bad = |images: &str, needle: &str| {
+        let e = err(2, &format!(r##"{{"resolver": {{"images": {images}}}}}"##));
+        assert!(e.contains(needle), "{images}: {e}");
+    };
+    bad(r#"[]"#, "resolver.images");
+    bad(r#"{"attachment:x.png": "missing"}"#, "must be an object");
+    bad(r#"{"attachment:x.png": {}}"#, "no state");
+    bad(r#"{"attachment:x.png": {"state": "gone"}}"#, "\"gone\"");
+    bad(
+        r#"{"attachment:x.png": {"state": "Missing"}}"#,
+        "\"Missing\"",
+    );
+    bad(r#"{"attachment:x.png": {"state": 1}}"#, "state");
+    // A placeholder state takes no other key.
+    bad(
+        r#"{"attachment:x.png": {"state": "missing", "url": "/x"}}"#,
+        "\"url\"",
+    );
+    // A resolved one needs url and media_type, both strings, and nothing else.
+    bad(
+        r#"{"attachment:x.png": {"state": "resolved", "media_type": "image/png"}}"#,
+        "no url",
+    );
+    bad(
+        r#"{"attachment:x.png": {"state": "resolved", "url": "/x"}}"#,
+        "no media_type",
+    );
+    bad(
+        r#"{"attachment:x.png": {"state": "resolved", "url": 3, "media_type": "image/png"}}"#,
+        "url",
+    );
+    bad(
+        r#"{"attachment:x.png": {"state": "resolved", "url": "/x", "media_type": "image/png", "alt": "x"}}"#,
+        "\"alt\"",
+    );
+    for w in ["-1", "1.5", "\"10\"", "4294967296", "1e400", "true"] {
+        bad(
+            &format!(
+                r#"{{"attachment:x.png": {{"state": "resolved", "url": "/x", "media_type": "image/png", "width": {w}}}}}"#
+            ),
+            "width",
+        );
+        bad(
+            &format!(
+                r#"{{"attachment:x.png": {{"state": "resolved", "url": "/x", "media_type": "image/png", "height": {w}}}}}"#
+            ),
+            "height",
+        );
+    }
+    // The largest size is accepted.
+    let max = r##"{"resolver": {"images": {"attachment:x.png": {"state": "resolved", "url": "/x", "media_type": "image/png", "width": 4294967295}}}, "text": "[[attachment:x.png]]\n"}"##;
+    assert!(ok(3, max)["body"]
+        .as_str()
+        .unwrap()
+        .contains("width=\"4294967295\""));
+}
+
+/// An `attachment:` link's directory reaches the semantics JSON.
+#[test]
+fn the_semantics_carry_the_attachment_directory() {
+    let req = r##"{"text": "* H\n:PROPERTIES:\n:ID: abcdef\n:END:\n[[attachment:x.png]] [[file:y.png]]\n"}"##;
+    let links = ok(1, req)["semantics"]["links"].clone();
+    assert_eq!(links[0]["kind"], "other");
+    assert_eq!(links[0]["target"], "attachment:x.png");
+    assert_eq!(links[0]["attach_dir"], "data/ab/cdef/");
+    assert_eq!(links[0]["attach_id"], "abcdef");
+    assert_eq!(links[1]["attach_dir"], Value::Null);
+    assert_eq!(links[1]["attach_id"], Value::Null);
+}

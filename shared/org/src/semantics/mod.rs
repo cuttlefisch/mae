@@ -82,10 +82,13 @@
 //!   (`[fn:n:text]`); failing that, the first in a pruned region. The
 //!   others are unrendered ([`Region::OverriddenFootnote`]).
 
+pub(crate) mod attach;
 pub(crate) mod items;
 pub(crate) mod keywords;
 pub(crate) mod plain;
 pub(crate) mod regions;
+
+pub use attach::attachment_dir;
 
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::SyntaxNode;
@@ -260,6 +263,15 @@ pub struct SemanticLink {
     pub description: Option<String>,
     /// The link, without the blanks Org counts after it.
     pub span: Span,
+    /// For an `attachment:` link, the directory its NAME is in, relative to
+    /// the Org file's own directory (`data/ab/cdef…/`, ADR-115 E2): see
+    /// [`attachment_dir`]. `None` for any other link, and for an
+    /// attachment link with no `:ID:` up the outline or under a `:DIR:` or
+    /// `:ATTACH_DIR:` (not supported). Built from the ID as written and
+    /// never joined with the NAME: path safety is the host's.
+    pub attach_dir: Option<String>,
+    /// The `:ID:` [`SemanticLink::attach_dir`] was built from.
+    pub attach_id: Option<String>,
 }
 
 /// A `#+TRANSCLUDE:` line in a rendered region.
@@ -496,6 +508,7 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     w.setup_files(doc);
     w.attribute_notes(&order);
     let mut out = w.out;
+    attach::fill(doc, &mut out.links);
     out.options = options.clone();
     out.defined_notes = defined_notes;
     clip_bodies(&mut out.nodes);
@@ -932,6 +945,8 @@ impl Walk<'_> {
             attrs: c.attrs,
             description,
             span: Span::new(base + span.start as usize, base + span.end as usize),
+            attach_dir: None,
+            attach_id: None,
         });
     }
 

@@ -111,9 +111,65 @@ test = "a_paragraph_caption_is_a_figure"
 id = "file-links-images"
 what = "file: links and local images"
 org = "links file:x.org to x.html, inlines ./img.png"
-mae = "the description (or the placeholder); <img> only for an http(s) image with RenderOptions::images"
+mae = "a file: or attachment: link renders as its description (or the placeholder); a description-less local image is an image only through Resolver::images (see image-url-from-resolver); <img> for an http(s) image only with RenderOptions::images"
 reason = "Closure (D3): every href is a resolver target, an allowlisted URL or an anchor of the page; a path on the author's disk is none of them."
 test = "file_links_and_local_images_are_not_links"
+
+[[divergence]]
+id = "image-url-from-resolver"
+what = "a description-less attachment: or file-type image link ([[attachment:x.png]], [[file:x.png]], [[./x.png]])"
+org = "<img src> of the file's path on disk: org-attach-expand-links rewrites [[attachment:x.png]] to [[file:/abs/data/ab/cdef/x.png]] before parsing, so the src is file:///abs/data/ab/cdef/x.png (measured, Emacs 30.2, Org 9.7.11)"
+mae = "src is the URL the host gives in Resolver::images for the link's target as written (validated as a resolver href; a refused one, or a target not in the map, leaves the link unresolved, as before); alt is the name's last segment, as ox-html's file-name-nondirectory"
+reason = "ADR-115 E3 and D3's closure: a reader fetches the bytes by KB and hash from the host (/kb/<kb-id>/blobs/<sha256>), never a path on the author's disk, so the host resolves the target and mae-org renders what it says."
+test = "a_resolved_image_is_an_img_with_its_size_when_known"
+
+[[divergence]]
+id = "image-placeholder-states"
+what = "an image link the host cannot show (missing, forbidden, too large, unsupported type)"
+org = "an <img> to the path whether or not the file is there or readable: a broken image"
+mae = "<span class=\"org-attachment\" data-state=\"missing|forbidden|too_large|unsupported\">NAME</span>, never an <img>"
+reason = "ADR-115 D6 and E3: the reader is told what happened; a broken image tells nothing, and an image a reader may not see must not be requested."
+test = "every_other_state_is_a_labelled_placeholder_never_an_img"
+
+[[divergence]]
+id = "image-extension"
+what = "which link names are images"
+org = "org-html-inline-image-rules' extensions as an unanchored, case-folded regexp over the whole path: [[file:a.png/b]] and [[attachment:x.png.txt]] export as <img> (measured, Emacs 30.2)"
+mae = "the extension (jpeg jpg png gif svg webp avif, any case) must end the name's last segment (for an http(s) URL, of its path before ? and #)"
+reason = "A name that only contains an extension is not an image file: the host could only answer unsupported. The anchored rule predates ADR-115 for http images, and one rule serves both."
+test = "a_non_image_name_is_never_looked_up"
+
+[[divergence]]
+id = "attachment-dir-inheritance"
+what = "which :ID: an attachment: link's directory comes from"
+org = "org-attach-use-inheritance defaults to selective, which follows org-use-property-inheritance (nil): only the link's own entry's ID"
+mae = "inheritance on: the nearest :ID: up the outline, then the file's property drawer, then #+PROPERTY: ID (SemanticLink::attach_dir); identical to Emacs with org-attach-use-inheritance t over 400 generated outlines (tests/attach_dir.rs, ignored, needs emacs)"
+reason = "ADR-115 E2 fixes it on, so an image under a headline with no ID of its own belongs to the page; a per-user Emacs option cannot decide what every peer derives (ADR-112 D4)."
+test = "a_link_takes_the_nearest_id_up_the_outline"
+
+[[divergence]]
+id = "attachment-dir-first-applicable"
+what = "the attachment directory when its folder does not exist on disk"
+org = "org-attach-dir-from-id takes the first format whose folder EXISTS (UUID, timestamp, fallback, also under data/ and a symlink's target); during export org-attach-dir then returns nil when none exists, and the link becomes a file next to the Org file"
+mae = "the first format that applies, with no I/O: data/ID[0:2]/ID[2:]/ for an ID longer than two characters, data/__/ID[0]/ID/ otherwise"
+reason = "ADR-115 E2: every peer, the daemon and a browser derive the same directory from the text alone (ADR-112 D4); a filesystem probe would make it depend on the machine."
+test = "the_layout_is_uuid_then_fallback_by_characters"
+
+[[divergence]]
+id = "attachment-dir-property"
+what = "an attachment: link under a :DIR: or :ATTACH_DIR: property (inherited, #+PROPERTY: included)"
+org = "the directory is that property's value"
+mae = "no attach_dir (and no attach_id): the host has no directory to read"
+reason = "ADR-115 E2: not supported in v1, and seeding refuses a node that has either, so no peer depends on a directory outside the store's layout."
+test = "a_dir_anywhere_up_the_outline_gives_no_directory"
+
+[[divergence]]
+id = "attachment-dir-empty-id"
+what = "an attachment: link whose nearest :ID: is empty"
+org = "org-attach-dir-from-id signals args-out-of-range, so the export fails"
+mae = "no attach_dir; the page renders"
+reason = "Fail soft on a malformed ID rather than refuse the page; the host shows the link as unresolved or as its placeholder."
+test = "nil_and_empty_ids_stop_the_search_and_give_nothing"
 
 [[divergence]]
 id = "render-depth"
