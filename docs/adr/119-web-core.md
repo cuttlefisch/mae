@@ -651,8 +651,10 @@ D4 extends to the pages the engine generates. Tag pages sit below the tag index:
 `/kb/<kb-id>/tags` and `/kb/<kb-id>/tags/<tag>` live, `<base>/tags/` and `<base>/tags/<tag>/` in the
 export. A generated address is never shadowed (P-166):
 
-- **Reserved IDs.** A page whose file ID is `tags`, compared as the export compares directories (so
-  `Tags` too), is withheld (`Withheld::Reserved`). Later generated namespaces join the list.
+- **Reserved IDs.** A page whose file ID is one the engine generates an address for, compared as the
+  export compares directories (so `Tags` too), is withheld (`Withheld::Reserved`): `tags`,
+  `index.json` (P-77), `explorer.json` (Amendment 3) and `site` (Amendment 4 H2). Later generated
+  namespaces join the list.
 - **IDs with no address.** An empty ID would give `//` (protocol-relative), and `.` or `..` are dot
   segments a browser collapses. Percent-encoding cannot defuse those: the URL standard reads `%2e` as
   `.`. So an ID that is empty or all dots is withheld (`Withheld::InvalidId`).
@@ -890,6 +892,26 @@ components or what a "version" is without a build. Both are the owner's (H1, H2)
 - **Rejected:** deriving versions from the KB's history (it needs L3's change records, ADR-116 and
   ADR-113, which are not built), and keeping the page export-only (the version footer would then link
   nowhere live).
+
+### H3. One registration API for every behaviour *(owner, 2026-11-24)*
+
+The router implemented `register(name, {mount(doc)})` while D18 specified
+`mae.site.register({id, init(ctx) -> cleanup?})`. That drift is resolved toward D18, with one API, not
+two: the router's own behaviours (theme controls, explorer, source-block copy) and every operator
+component register the same way.
+
+- `ctx` holds `root` (the document), `page` (`id`, `url`, `kb`), `site` (`kb`, `base`, `locale`) and
+  an `AbortSignal`. The signal is aborted when the page is left, before the behaviour's own cleanup
+  runs.
+- The shell writes `page` and `site` as attributes on `<main>` only for a KB with components, so a
+  site without them stays byte-identical (P-158). Without them `page` and `site` are `null`, which
+  only the router's own behaviours can meet; they do not read them.
+- A component's script is a module loaded after the router's, so `window.mae.site.register` exists
+  when it runs (module scripts run in document order). One registered after the router started runs
+  on the page on screen at once.
+- Each behaviour runs once per navigation and is cleaned up before the next (P-156). One that throws
+  is reported and skipped; it never stops another from running. A second registration under the same
+  `id` replaces the first.
 
 ## Amendments this needs
 

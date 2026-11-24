@@ -1,5 +1,6 @@
-{# P-162. The behaviour (copy-link.js) prefixes the origin and copies. #}
+{# P-162. A plain link to this page, which works and can be copied without
+   JavaScript (A2); the behaviour (copy-link.js) adds a copy button. #}
 <span class="site-copy-link">
-<button type="button" class="site-copy-link-button" data-site-href="{{ page.url }}" aria-label="Copy a link to this page">Copy link</button>
+<a class="site-copy-link-anchor" href="{{ page.url }}">Link to this page</a>
 <span class="site-copy-link-status" role="status"></span>
 </span>

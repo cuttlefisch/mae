@@ -1,16 +1,19 @@
 // P-162: copy a link to the page, and to each addressable section heading.
 //
-// A behaviour in the router's shape (shared/site/web/router: `Behaviour`,
-// `mount(root) -> cleanup`): mounted once per navigation and cleaned up
-// before the next (P-156). It builds DOM and never writes HTML, as the
-// router's Trusted Types policy requires.
+// Progressive enhancement (ADR-119 A2): the template writes a plain link to
+// the page, which works and can be copied without JavaScript. This behaviour
+// keeps that link's address, hides the link and puts a copy button in its
+// place, and adds one button per addressable section heading. It registers
+// with the router (D18: `mae.site.register({id, init(ctx) -> cleanup})`),
+// runs once per navigation and is cleaned up before the next (P-156). It
+// builds DOM and never writes HTML, as the router's Trusted Types policy
+// requires.
 //
-// The page's address comes from the button the template wrote
-// (data-site-href: base path + /<kb-id>/<id>); this adds the origin. A
-// section's address adds the heading's id, which is mae-org's anchor.
+// The router is loaded before this script (module scripts run in document
+// order), so `mae.site` exists when it runs; without the router (no
+// JavaScript site at all) the link stays a link.
 
-export const name = "copy-link";
-
+const COPY_LABEL = "Copy link";
 const STATUS_COPIED = "Link copied.";
 const STATUS_MANUAL = "Copy this link: ";
 const SECTION_LABEL = "Copy a link to this section";
@@ -27,35 +30,42 @@ async function copy(win, url, status) {
   }
 }
 
-export function mount(doc) {
+function button(doc, className, text, label) {
+  const b = doc.createElement("button");
+  b.type = "button";
+  b.className = className;
+  b.textContent = text;
+  if (label) b.setAttribute("aria-label", label);
+  return b;
+}
+
+export function init(ctx) {
+  const doc = ctx.root;
   const win = doc.defaultView;
   const control = doc.querySelector(".site-copy-link");
-  const button = control?.querySelector("button[data-site-href]");
+  const anchor = control?.querySelector("a.site-copy-link-anchor[href]");
   const status = control?.querySelector(".site-copy-link-status");
-  if (!win || !button || !status) return undefined;
-  const ac = new AbortController();
-  const page = win.location.origin + button.dataset.siteHref;
-  button.addEventListener("click", () => copy(win, page, status), { signal: ac.signal });
+  if (!win || !anchor || !status) return undefined;
+  const page = new URL(anchor.getAttribute("href"), win.location.href).href;
+  const main = button(doc, "site-copy-link-button", COPY_LABEL);
+  main.addEventListener("click", () => copy(win, page, status), { signal: ctx.signal });
+  anchor.hidden = true;
+  anchor.after(main);
 
-  const added = [];
+  const added = [main];
   for (const h of doc.querySelectorAll("h2[id], h3[id], h4[id], h5[id], h6[id]")) {
     if (h.id.startsWith("mae-")) continue; // the chrome's, not a section
-    const b = doc.createElement("button");
-    b.type = "button";
-    b.className = "site-copy-link-section";
-    b.setAttribute("aria-label", SECTION_LABEL);
-    b.textContent = "#";
-    b.addEventListener("click", () => copy(win, page + "#" + encodeURIComponent(h.id), status), {
-      signal: ac.signal,
-    });
+    const b = button(doc, "site-copy-link-section", "#", SECTION_LABEL);
+    const at = page + "#" + encodeURIComponent(h.id);
+    b.addEventListener("click", () => copy(win, at, status), { signal: ctx.signal });
     h.append(b);
     added.push(b);
   }
   return () => {
-    ac.abort();
     for (const b of added) b.remove();
+    anchor.hidden = false;
     status.textContent = "";
   };
 }
 
-export default { mount };
+globalThis.mae?.site?.register({ id: "copy-link", init });

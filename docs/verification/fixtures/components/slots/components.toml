@@ -14,8 +14,9 @@ template = "state-badge.html"
 stylesheet = "components.css"
 attributes = ["data-site-state", "role"]
 
-# P-162: copy a link to this page. The button carries the page's address
-# (base path + /<kb-id>/<id>); the behaviour adds the origin, copies it,
+# P-162: copy a link to this page. The template writes a plain link to the
+# page's address, which works and can be copied without JavaScript (A2); the
+# behaviour hides it behind a copy button that adds the origin, copies it,
 # announces the result, falls back to showing the address when there is no
 # clipboard, and adds one button per addressable section heading.
 [[component]]
@@ -24,7 +25,7 @@ slot = "header-row"
 template = "copy-link.html"
 script = "copy-link.js"
 stylesheet = "components.css"
-attributes = ["data-site-href", "aria-label", "role"]
+attributes = ["role"]
 
 # P-163: a "what's new" link to the node whats-new.json names, omitted when
 # that node is not published in the reader's view.
