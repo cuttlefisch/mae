@@ -25,11 +25,14 @@ mod kb_anchor;
 pub use kb_anchor::AnchorSource;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
+#[path = "storage_seed_update.rs"]
+mod seed_update;
 #[path = "storage_writer.rs"]
 mod writer;
 
 pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
+pub use seed_update::{SeedUpdate, SeedUpdateNode};
 pub use writer::{inspect_store, CheckpointPolicy, StorageHealth, StoreInspection};
 use writer::{Checkpointer, WriteConn, WriterLock};
 
@@ -283,18 +286,54 @@ pub trait StorageBackend: Send + Sync {
         Err(no_seed_tables())
     }
 
-    /// Record the WAL id of the write that installed a seeded node.
+    /// Record the WAL id of the write that installed a seeded node, and its
+    /// version as that write left it.
     async fn seed_set_node_wal(
         &self,
         _kb_id: &str,
         _node_id: &str,
         _wal: u64,
+        _version: &str,
     ) -> Result<(), StorageError> {
         Err(no_seed_tables())
     }
 
     /// Mark a seed complete.
     async fn seed_complete(&self, _kb_id: &str, _applied_at: i64) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// The seed update in progress for a KB, if any (`seed::update`).
+    async fn seed_update(
+        &self,
+        _kb_id: &str,
+    ) -> Result<Option<(SeedUpdate, Vec<SeedUpdateNode>)>, StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Record a seed update's intent and its nodes atomically; an error,
+    /// writing nothing, if the KB has no seed record or an update already.
+    async fn seed_update_begin(
+        &self,
+        _update: &SeedUpdate,
+        _nodes: &[SeedUpdateNode],
+    ) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Mark one node of a seed update done.
+    async fn seed_update_node_done(
+        &self,
+        _kb_id: &str,
+        _node_id: &str,
+        _wal: Option<u64>,
+        _version: Option<&str>,
+    ) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Apply a finished seed update to the seed record, atomically.
+    async fn seed_update_finish(&self, _kb_id: &str, _applied_at: i64) -> Result<(), StorageError> {
         Err(no_seed_tables())
     }
 }
@@ -391,6 +430,7 @@ impl SqlitePool {
                 )?;
                 editor_record::ensure_schema(&conn)?;
                 seed_record::ensure_schema(&conn)?;
+                seed_update::ensure_schema(&conn)?;
                 history::ensure_schema(&conn)?;
                 kb_anchor::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
@@ -442,6 +482,7 @@ impl SqlitePool {
         )?;
         editor_record::ensure_schema(&conn)?;
         seed_record::ensure_schema(&conn)?;
+        seed_update::ensure_schema(&conn)?;
         history::ensure_schema(&conn)?;
         kb_anchor::ensure_schema(&conn)?;
         Ok(SqlitePool {
@@ -738,12 +779,44 @@ impl StorageBackend for SqliteBackend {
         kb_id: &str,
         node_id: &str,
         wal: u64,
+        version: &str,
     ) -> Result<(), StorageError> {
-        seed_record::set_node_wal(&*self.pool.write_primary().await, kb_id, node_id, wal)
+        let conn = self.pool.write_primary().await;
+        seed_record::set_node_wal(&conn, kb_id, node_id, wal, version)
     }
 
     async fn seed_complete(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
         seed_record::complete(&*self.pool.write_primary().await, kb_id, applied_at)
+    }
+
+    async fn seed_update(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<(SeedUpdate, Vec<SeedUpdateNode>)>, StorageError> {
+        seed_update::load(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn seed_update_begin(
+        &self,
+        update: &SeedUpdate,
+        nodes: &[SeedUpdateNode],
+    ) -> Result<(), StorageError> {
+        seed_update::begin(&*self.pool.write_primary().await, update, nodes)
+    }
+
+    async fn seed_update_node_done(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        wal: Option<u64>,
+        version: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let conn = self.pool.write_primary().await;
+        seed_update::node_done(&conn, kb_id, node_id, wal, version)
+    }
+
+    async fn seed_update_finish(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
+        seed_update::finish(&*self.pool.write_primary().await, kb_id, applied_at)
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {

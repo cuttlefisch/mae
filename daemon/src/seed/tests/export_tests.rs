@@ -218,6 +218,7 @@ fn colliding_source_paths_are_all_refused_at_export() {
         modified_at: 0,
         modified_source: "git".into(),
         seed_wal_id: None,
+        seed_version: None,
     };
     let rows: HashMap<String, crate::storage::SeedNodeRow> = [
         row("a", "N/A.org"),

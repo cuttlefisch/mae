@@ -21,7 +21,8 @@ use crate::doc_editors::{
     Authors, EditClock, EditStamp, EditorKind, EditorsSince, PendingChange, Writer,
 };
 use crate::storage::{
-    AnchorSource, Checkpoint, SeedNodeRow, SeedRecord, StorageBackend, StorageError,
+    AnchorSource, Checkpoint, SeedNodeRow, SeedRecord, SeedUpdate, SeedUpdateNode, StorageBackend,
+    StorageError,
 };
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
@@ -433,14 +434,57 @@ impl DocStore {
         self.storage.seed_insert(record, nodes).await
     }
 
-    /// Record the WAL id of the write that installed a seeded node.
+    /// Record the WAL id of the write that installed a seeded node, and the
+    /// node's version as it left it.
     pub async fn seed_set_node_wal(
         &self,
         kb_id: &str,
         node_id: &str,
         wal: u64,
+        version: &str,
     ) -> Result<(), StorageError> {
-        self.storage.seed_set_node_wal(kb_id, node_id, wal).await
+        self.storage
+            .seed_set_node_wal(kb_id, node_id, wal, version)
+            .await
+    }
+
+    /// The seed update in progress for `kb_id`, if any (`seed::update`).
+    pub async fn seed_update(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<(SeedUpdate, Vec<SeedUpdateNode>)>, StorageError> {
+        self.storage.seed_update(kb_id).await
+    }
+
+    /// Record a seed update's intent, not yet applied, atomically.
+    pub async fn seed_update_begin(
+        &self,
+        update: &SeedUpdate,
+        nodes: &[SeedUpdateNode],
+    ) -> Result<(), StorageError> {
+        self.storage.seed_update_begin(update, nodes).await
+    }
+
+    /// Mark one node of a seed update done.
+    pub async fn seed_update_node_done(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        wal: Option<u64>,
+        version: Option<&str>,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .seed_update_node_done(kb_id, node_id, wal, version)
+            .await
+    }
+
+    /// Apply a finished seed update to the seed record, atomically.
+    pub async fn seed_update_finish(
+        &self,
+        kb_id: &str,
+        applied_at: i64,
+    ) -> Result<(), StorageError> {
+        self.storage.seed_update_finish(kb_id, applied_at).await
     }
 
     /// Mark a seed complete.
