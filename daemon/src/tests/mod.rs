@@ -94,6 +94,7 @@ mod kb_store_routing_tests;
 mod kb_write_concurrency_tests;
 mod multi_instance_tests;
 mod seed_store_access_tests;
+mod site_components_tests;
 mod site_copy_gate_tests;
 mod site_highlight_tests;
 mod site_tests;

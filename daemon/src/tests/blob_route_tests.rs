@@ -118,6 +118,7 @@ fn config() -> ResourceServerConfig {
         site_hidden_namespaces: Vec::new(),
         site_home: Default::default(),
         site_title: Default::default(),
+        site_components: Default::default(),
         max_request_body_bytes: 1024,
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,

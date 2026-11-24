@@ -14,6 +14,7 @@ use crate::SyncError;
 
 use super::sv_has_ops_beyond;
 
+mod assign;
 mod attachments;
 mod field_types;
 mod org_header;

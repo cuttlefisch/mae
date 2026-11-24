@@ -1,0 +1,80 @@
+# The web core's slot components (shared/site/src/components, ADR-119 D18
+# and Amendment 4): the component sanitiser and the render bounds, the two
+# parts a defect would turn into an exposure or an outage. Tests:
+# shared/site/tests/components.rs.
+
+[[mutant]]
+id = "site-components/undeclared-data-key-kept"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "components"]
+filter = "test(a_component_loses_everything_it_did_not_declare_or_may_not_write)"
+[[mutant.edit]]
+file = "shared/site/src/components/clean.rs"
+find = '''            declared.contains(a).then_some(value.into())'''
+replace = '''            let _ = declared;
+            Some(value.into())'''
+
+[[mutant]]
+id = "site-components/class-prefix-unchecked"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "components"]
+filter = "test(a_component_loses_everything_it_did_not_declare_or_may_not_write)"
+[[mutant.edit]]
+file = "shared/site/src/components/clean.rs"
+find = '''                .filter(|c| is_component_class(c))'''
+replace = '''                .filter(|_| true)'''
+
+[[mutant]]
+id = "site-components/no-fuel-limit"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "components"]
+filter = "test(a_render_out_of_fuel_fails)"
+[[mutant.edit]]
+file = "shared/site/src/components/mod.rs"
+find = '''    env.set_fuel(Some(FUEL_LIMIT));'''
+replace = '''    env.set_fuel(None);'''
+
+[[mutant]]
+id = "site-components/failed-render-output-kept"
+runner = "editor"
+targets = ["-p", "mae-site", "--test", "components"]
+filter = "test(a_failing_component_contributes_nothing_and_its_neighbours_still_render)"
+[[mutant.edit]]
+file = "shared/site/src/components/mod.rs"
+find = '''                errors.push(e);
+                continue;'''
+replace = '''                errors.push(e);'''
+
+# The live site's wiring (daemon/src/site_components.rs, daemon/src/site.rs,
+# ADR-119 Amendment 4 H1/H2). Tests: daemon/src/tests/site_components_tests.rs.
+
+[[mutant]]
+id = "site-components/site-id-not-reserved"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_node_whose_id_is_site_is_withheld)"
+[[mutant.edit]]
+file = "shared/site/src/address.rs"
+find = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site"];'''
+replace = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json"];'''
+
+[[mutant]]
+id = "site-components/failed-render-output-kept-in-the-shell"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_failing_component_leaves_its_slot_empty_and_the_page_renders)"
+[[mutant.edit]]
+file = "shared/site/src/components/mod.rs"
+find = '''                errors.push(e);
+                continue;'''
+replace = '''                errors.push(e);'''
+
+[[mutant]]
+id = "site-components/asset-served-by-file-name"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_component_asset_is_served_at_its_hash_only)"
+[[mutant.edit]]
+file = "daemon/src/site_components.rs"
+find = '''        let name = asset_name(kind, body);'''
+replace = '''        let name = file.to_string();'''

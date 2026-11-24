@@ -7,6 +7,7 @@ import path from "node:path";
 import { Window } from "happy-dom";
 import { describe, expect, it, vi } from "vitest";
 import {
+  context,
   EXPLORER_ID,
   VISIBLE_SLACK,
   chooseOccurrence,
@@ -387,7 +388,7 @@ function setup(url: string, html: string, serve: (u: string) => Served) {
   const dom = win as unknown as Window & typeof globalThis;
   const router = start(dom as unknown as Parameters<typeof start>[0]);
   const ex = explorer(dom as unknown as Parameters<typeof explorer>[0]);
-  router.register("explorer", ex);
+  router.register(ex);
   const lists = () => requests.filter((r) => r.url.endsWith("/explorer.json"));
   const settled = async () => {
     await router.pending();
@@ -653,7 +654,7 @@ describe("the explorer's list", () => {
       };
     };
     const ex = explorer(win as unknown as Parameters<typeof explorer>[0]);
-    const cleanup = ex.mount(win.document as unknown as Document);
+    const cleanup = ex.init(context(win.document as unknown as Document, new AbortController().signal));
     const loading = ex.idle();
     expect(typeof cleanup).toBe("function");
     (cleanup as () => void)();

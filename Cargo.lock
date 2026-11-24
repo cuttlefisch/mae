@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3210,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "mae-agent-cli"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3229,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3253,11 +3253,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.190"
+version = "0.14.193"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "serde",
  "serde_json",
@@ -3265,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "criterion",
  "hex",
@@ -3337,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "mae-core",
  "serde",
@@ -3348,11 +3348,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.190"
+version = "0.14.193"
 
 [[package]]
 name = "mae-export"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "mae-babel",
  "mae-org",
@@ -3363,11 +3363,11 @@ dependencies = [
 
 [[package]]
 name = "mae-format"
-version = "0.14.190"
+version = "0.14.193"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -3381,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "cozo",
  "hex",
@@ -3407,14 +3407,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "serde",
  "serde_json",
@@ -3424,14 +3424,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme-extra"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "mae-scheme",
  "parking_lot 0.13.0",
@@ -3514,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "alacritty_terminal",
  "mae-mcp",
@@ -3530,20 +3530,25 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "mae-org",
+ "minijinja",
+ "proptest",
+ "serde",
+ "serde_json",
+ "toml",
  "unicode-normalization",
 ]
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.190"
+version = "0.14.193"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.190"
+version = "0.14.193"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.190"
+version = "0.14.193"
 dependencies = [
  "base64 0.23.1",
  "criterion",
@@ -3678,6 +3683,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a64a92489e2744ce060c349162be1c5f33c6969234104dbd99ddb5feb08b8c15"
 
 [[package]]
+name = "memo-map"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5449c8c750f1a07ea702bbd212bd999fceece9b3d1508b17023b3e174583124b"
+
+[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3723,6 +3734,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "2.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86886cf6dbf4e614b19c9a1eec9775f021869d7eadde0fc73921a81b90c9b4c9"
+dependencies = [
+ "memo-map",
+ "serde",
+]
 
 [[package]]
 name = "minimal-lexical"

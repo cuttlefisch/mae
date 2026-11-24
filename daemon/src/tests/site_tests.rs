@@ -198,6 +198,43 @@ async fn a_node_body_over_the_byte_bound_makes_the_kb_too_large() {
     ));
 }
 
+/// Properties count against the same bound as a title or body: they reach the
+/// page source too, so a node with huge properties and a tiny body is as
+/// large as one with a huge body.
+#[tokio::test]
+async fn a_nodes_properties_over_the_byte_bound_make_the_kb_too_large() {
+    let store = fresh_doc_store().await;
+    seed(
+        &store,
+        "kb-props",
+        &[("a", "A", "small"), ("b", "B", "small")],
+    )
+    .await;
+    let mut node = KbNodeDoc::new("b", "B", "small", &[]);
+    let big = "y".repeat(2_000);
+    let _ = node.set_properties(&[("NOTE".to_string(), big)].into_iter().collect());
+    store
+        .share_doc(
+            &mae_sync::kb_node_doc_name("kb-props", "b"),
+            &node.encode_state(),
+            BY,
+        )
+        .await
+        .unwrap();
+    let tight = site::SiteLimits {
+        max_scan_nodes: 500,
+        max_body_bytes: 1_000,
+    };
+    assert_eq!(
+        site::page(&store, "kb-props", "a", Some(READER), tight).await,
+        SitePage::TooLarge
+    );
+    assert!(matches!(
+        site::page(&store, "kb-props", "a", Some(READER), LIMITS).await,
+        SitePage::Found { .. }
+    ));
+}
+
 /// A body that declares another page's ID cannot take that page's address:
 /// the core withholds every holder of a duplicated ID, so no page serves
 /// the claimant's content at the victim's address.
@@ -277,22 +314,30 @@ fn a_page_links_the_palette_by_its_content_addressed_name() {
 /// cannot leave the fixture the browser client checks describing another page.
 #[test]
 fn the_palette_menu_fixture_is_the_daemons_page() {
-    fixture_page(
-        "en-US",
-        include_str!("../../../docs/verification/fixtures/components/palette-menu/input.html"),
-    );
-    fixture_page(
-        "es-ES",
-        include_str!(
-            "../../../docs/verification/fixtures/components/palette-menu/input-es-ES.html"
-        ),
-    );
+    for (lang, file) in [
+        ("en-US", "input.html"),
+        ("es-ES", "input-es-ES.html"),
+        ("fr-FR", "input-fr-FR.html"),
+    ] {
+        fixture_page(lang, file);
+    }
 }
 
-fn fixture_page(lang: &str, fixture: &str) {
+/// The palette-menu fixture directory (the browser client vendors it).
+const PALETTE_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../docs/verification/fixtures/components/palette-menu"
+);
+
+/// The daemon's page in `lang` must equal the fixture `file`. With
+/// `MAE_BLESS_FIXTURES` set, the file is written from the page instead: the
+/// one way to regenerate it, so it is never edited by hand.
+fn fixture_page(lang: &str, file: &str) {
+    let path = std::path::Path::new(PALETTE_FIXTURE).join(file);
     let chrome = site::Chrome {
         lang,
         site: Some(("Parity fixture", "/kb/parity-fixture/")),
+        slots: None,
     };
     let mut html = site::document(
         chrome,
@@ -308,9 +353,14 @@ fn fixture_page(lang: &str, fixture: &str) {
         let stem = stem.rsplit_once('-').expect("stem-hash").0;
         html = html.replace(asset.name, &format!("{stem}-{}.{ext}", "0".repeat(16)));
     }
+    if std::env::var_os("MAE_BLESS_FIXTURES").is_some() {
+        std::fs::write(&path, &html).unwrap();
+        return;
+    }
+    let fixture = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
         html, fixture,
-        "{lang}: regenerate its input from this output"
+        "{lang}: regenerate {file} with MAE_BLESS_FIXTURES=1"
     );
 }
 
@@ -412,7 +462,18 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     .await;
     let view = |v: site::View| {
         let s = store2.clone();
-        async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS, &Default::default()).await }
+        async move {
+            site::view(
+                &s,
+                "kb-tags",
+                &v,
+                Some(READER),
+                LIMITS,
+                &Default::default(),
+                None,
+            )
+            .await
+        }
     };
     let SitePage::Listing { kind, items, .. } = view(site::View::Tags).await else {
         panic!("the tag index");
@@ -439,7 +500,8 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
             &site::View::Tags,
             Some(STRANGER),
             LIMITS,
-            &Default::default()
+            &Default::default(),
+            None,
         )
         .await,
         SitePage::NotFound
@@ -543,6 +605,7 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
         Some(READER),
         LIMITS,
         &opts,
+        None,
     )
     .await
     else {
@@ -564,7 +627,8 @@ async fn the_content_index_lists_published_pages_without_hidden_references() {
             &site::View::Index,
             Some(STRANGER),
             LIMITS,
-            &opts
+            &opts,
+            None,
         )
         .await,
         SitePage::NotFound
@@ -589,7 +653,18 @@ async fn the_home_page_is_the_declared_node_or_else_the_tag_index() {
     .await;
     let view = |v: site::View, who: &'static str| {
         let s = store.clone();
-        async move { site::view(&s, "kb-home", &v, Some(who), LIMITS, &Default::default()).await }
+        async move {
+            site::view(
+                &s,
+                "kb-home",
+                &v,
+                Some(who),
+                LIMITS,
+                &Default::default(),
+                None,
+            )
+            .await
+        }
     };
     let declared = view(site::View::Home(Some("home".into())), READER).await;
     let SitePage::Found { title, .. } = &declared else {
@@ -713,6 +788,7 @@ async fn a_seeded_pages_file_tags_reach_its_page_and_the_tag_pages() {
                 Some(READER),
                 LIMITS,
                 &Default::default(),
+                None,
             )
             .await
         }
@@ -748,6 +824,7 @@ async fn a_node_whose_id_is_view_is_served_at_its_address() {
         Some(READER),
         LIMITS,
         &Default::default(),
+        None,
     )
     .await;
     let SitePage::Found { title, .. } = page else {
@@ -765,6 +842,7 @@ fn the_site_title_heads_every_page_outside_main() {
     let chrome = site::Chrome {
         lang: "en-US",
         site: Some(("Parity <fixture>", "/kb/parity-fixture/")),
+        slots: None,
     };
     for doc in [
         site::document(chrome, "Page & co", "<p>x</p>", &[], &[], &[], None),

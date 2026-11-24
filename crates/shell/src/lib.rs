@@ -15,6 +15,7 @@ mod event;
 pub mod path;
 pub mod shell_invocation;
 mod terminal;
+mod text;
 
 pub use event::{ShellEvent, ShellEventListener};
 pub use shell_invocation::{

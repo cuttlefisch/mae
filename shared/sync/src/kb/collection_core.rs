@@ -70,6 +70,16 @@ impl KbCollectionDoc {
         txn.state_vector().encode_v1()
     }
 
+    /// The operations this document holds beyond `remote_sv`: several local
+    /// changes as ONE update, which a store applies as one write.
+    pub fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, SyncError> {
+        use yrs::updates::decoder::Decode;
+        let sv = yrs::StateVector::decode_v1(remote_sv)
+            .map_err(|e| SyncError::Encoding(e.to_string()))?;
+        let txn = self.doc.transact();
+        Ok(txn.encode_state_as_update_v1(&sv))
+    }
+
     /// Apply a remote update.
     pub fn apply_update(&mut self, update: &[u8]) -> Result<(), SyncError> {
         let update =

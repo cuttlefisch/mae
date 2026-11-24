@@ -1,0 +1,5 @@
+{# P-163. The newest version, linking to the site-changes page. #}
+{% if data %}
+{% set latest = (data | sort(attribute="date", reverse=true)) | first %}
+<p class="site-version-footer"><a href="{{ site.pages.changes }}">Version {{ latest.version }}</a></p>
+{% endif %}

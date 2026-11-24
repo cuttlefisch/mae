@@ -72,6 +72,8 @@ pub struct ResourceServerConfig {
     pub site_home: std::collections::BTreeMap<String, String>,
     /// `config::OAuthConfig::site_title`.
     pub site_title: std::collections::BTreeMap<String, String>,
+    /// `config::OAuthConfig::site_components`, loaded at startup.
+    pub site_components: std::sync::Arc<mae_daemon::site_components::SiteComponents>,
     /// Cap on the raw size of an incoming request body, enforced before it's
     /// read into memory, regardless of `kb_query_enabled`. See
     /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
@@ -642,7 +644,7 @@ async fn handle_request(
     // ADR-119 L1a: the site's static assets are public (no KB content, and a
     // `<link>` cannot carry a bearer token), served only when the site is on.
     if config.site_enabled && req.uri().path().starts_with(mae_site::assets::PREFIX) {
-        return Ok(site_asset(&req));
+        return Ok(site_asset(&req, &config.site_components));
     }
     // ADR-099: `/ws` and `/ws/ticket` exist only when `ws_enabled`; otherwise
     // they are ordinary paths and fall through to the authenticated default.
@@ -737,6 +739,10 @@ pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> 
         None => View::Page(percent_decode(rest)?),
         Some(("tags", tag)) if !tag.is_empty() && !tag.contains('/') => {
             View::Tag(percent_decode(tag)?)
+        }
+        // A page a component emits (Amendment 4 H2): `site` is reserved too.
+        Some(("site", name)) if !name.is_empty() && !name.contains('/') => {
+            View::Site(percent_decode(name)?)
         }
         Some(_) => return None,
     };
@@ -845,7 +851,15 @@ async fn site_route(
             .site_title
             .get(kb_id)
             .map(|t| (t.as_str(), home.as_str())),
+        slots: None,
     };
+    let components = config
+        .site_components
+        .for_kb(kb_id)
+        .map(|components| site::ComponentsFor {
+            components,
+            locale: config.site_locale.clone(),
+        });
     let page = site::view(
         store,
         kb_id,
@@ -856,6 +870,7 @@ async fn site_route(
             max_body_bytes: config.kb_query_max_body_bytes,
         },
         &site_options(config),
+        components,
     )
     .await;
     site_answer(page, chrome)
@@ -870,15 +885,16 @@ pub(crate) fn site_options(config: &ResourceServerConfig) -> mae_site::SiteOptio
     }
 }
 
-/// The response for a derived site answer. The chrome (the site's title)
-/// reaches only a page or listing the reader can read: every refusal is the
-/// same body whatever the configuration (A5), so it says nothing about which
-/// KBs exist (`a_refusal_never_carries_the_site_title`).
+/// The response for a derived site answer. The chrome (the site's title, the
+/// page's slots) reaches only a page or listing the reader can read: every
+/// refusal is the same body whatever the configuration (A5), so it says
+/// nothing about which KBs exist (`a_refusal_never_carries_the_site_title`).
 pub(crate) fn site_answer(
     page: mae_daemon::site::SitePage,
     chrome: mae_daemon::site::Chrome<'_>,
 ) -> Response<Full<Bytes>> {
-    use mae_daemon::site::{self, SitePage};
+    use mae_daemon::site::{self, Chrome, SitePage};
+    let with = |slots| Chrome { slots, ..chrome };
     match page {
         SitePage::Found {
             title,
@@ -887,10 +903,11 @@ pub(crate) fn site_answer(
             tags,
             toc,
             explorer,
+            slots,
         } => site_response(
             StatusCode::OK,
             site::document(
-                chrome,
+                with(slots.as_ref()),
                 &title,
                 &html,
                 &backlinks,
@@ -899,15 +916,25 @@ pub(crate) fn site_answer(
                 explorer.as_ref(),
             ),
         ),
+        SitePage::Component {
+            title,
+            html,
+            explorer,
+            slots,
+        } => site_response(
+            StatusCode::OK,
+            site::component_document(with(slots.as_ref()), &title, &html, explorer.as_ref()),
+        ),
         SitePage::Index(entries) => index_response(&entries),
         SitePage::Explorer(json) => site_json(json),
         SitePage::Listing {
             kind,
             items,
             explorer,
+            slots,
         } => site_response(
             StatusCode::OK,
-            site::listing_document(chrome, &kind, &items, explorer.as_ref()),
+            site::listing_document(with(slots.as_ref()), &kind, &items, explorer.as_ref()),
         ),
         SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),
         SitePage::TooLarge => site_response(
@@ -917,23 +944,39 @@ pub(crate) fn site_answer(
     }
 }
 
-/// One embedded site asset (`mae_site::assets`), by its content-addressed
-/// name: immutable for a year, since a change always gets a new name. Any
-/// other path under the prefix, or a method but GET, is the site's 404.
-fn site_asset(req: &Request<Incoming>) -> Response<Full<Bytes>> {
-    let asset = (req.method() == hyper::Method::GET)
-        .then(|| mae_site::assets::at(req.uri().path()))
-        .flatten();
-    let Some(asset) = asset else {
+/// One site asset by its content-addressed name: the runtime's own
+/// (`mae_site::assets`) or a component's (`SiteComponents::asset`, H1),
+/// immutable for a year, since a change always gets a new name. Any other
+/// path under the prefix, or a method but GET, is the site's 404.
+pub(crate) fn site_asset(
+    req: &Request<Incoming>,
+    components: &mae_daemon::site_components::SiteComponents,
+) -> Response<Full<Bytes>> {
+    if req.method() != hyper::Method::GET {
         return site_response(StatusCode::NOT_FOUND, "not found".into());
+    }
+    asset_response(req.uri().path(), components)
+}
+
+/// The asset at `path`, or the site's 404 (see [`site_asset`]).
+pub(crate) fn asset_response(
+    path: &str,
+    components: &mae_daemon::site_components::SiteComponents,
+) -> Response<Full<Bytes>> {
+    let (content_type, body) = match mae_site::assets::at(path) {
+        Some(a) => (a.content_type, Bytes::from_static(a.body.as_bytes())),
+        None => match components.asset(path) {
+            Some(a) => (a.content_type, Bytes::from(a.body.to_string())),
+            None => return site_response(StatusCode::NOT_FOUND, "not found".into()),
+        },
     };
     Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", asset.content_type)
+        .header("content-type", content_type)
         .header("content-security-policy", mae_daemon::site::CSP)
         .header("x-content-type-options", "nosniff")
         .header("cache-control", "public, max-age=31536000, immutable")
-        .body(Full::new(Bytes::from_static(asset.body.as_bytes())))
+        .body(Full::new(body))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 

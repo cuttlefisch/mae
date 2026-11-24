@@ -146,6 +146,16 @@ pub struct OAuthConfig {
     /// `[tenant.quota] max_storage_bytes`, for the same reason. `0` is an
     /// explicit opt-out: unlimited, still recorded.
     pub default_storage_bytes: u64,
+    /// Each KB's slot components (ADR-119 Amendment 4 H1), under
+    /// `[oauth.site_components]`: KB ID → a directory holding
+    /// `components.toml` and the files it names. Operator configuration,
+    /// never content (D3). Read and checked once, at startup: any problem,
+    /// a missing directory included, refuses to start the daemon, naming the
+    /// KB, the component and the reason (`mae_daemon::site_components`).
+    /// Checked whenever an entry is configured, even with the site off, so a
+    /// directory that would fail never waits for the day the site is turned
+    /// on. A change takes a restart. Default none.
+    pub site_components: std::collections::BTreeMap<String, PathBuf>,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -355,6 +365,7 @@ impl Default for OAuthConfig {
             attachment_upload_deadline_secs: None,
             attachment_image_workers: DEFAULT_ATTACHMENT_IMAGE_WORKERS,
             default_storage_bytes: crate::config::DEFAULT_MAX_STORAGE_BYTES,
+            site_components: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,

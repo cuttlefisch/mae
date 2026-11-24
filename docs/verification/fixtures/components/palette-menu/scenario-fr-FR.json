@@ -1,0 +1,27 @@
+{
+  "format": "component-fixture/1",
+  "component": "palette-menu",
+  "requirements": ["P-91", "P-93", "P-94", "P-99"],
+  "input": "input-fr-FR.html",
+  "locale": "fr-FR",
+  "prefersColorScheme": "light",
+  "storage": {
+    "mae.mode": "dark",
+    "mae.palette": "gruvbox",
+    "mae.accent.gruvbox": "yellow"
+  },
+  "scope": "banner",
+  "states": [
+    { "name": "closed", "steps": [], "expected": "tree-closed-fr-FR.json" },
+    {
+      "name": "menu-open",
+      "steps": [{ "focus": "#mae-palette-button" }, { "key": "Enter" }],
+      "expected": "tree-menu-open-fr-FR.json"
+    },
+    {
+      "name": "submenu-open",
+      "steps": [{ "focus": "#mae-palette-button" }, { "key": "Enter" }, { "key": "ArrowRight" }],
+      "expected": "tree-submenu-open-fr-FR.json"
+    }
+  ]
+}

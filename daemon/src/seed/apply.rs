@@ -48,7 +48,7 @@ use crate::doc_store::DocStore;
 use crate::storage::{SeedNodeRow, SeedRecord, StorageError};
 
 /// Every write of an apply is recorded as the seed (ADR-113 D3).
-const BY: Attribution<'static> = Attribution::Internal(InternalWriter::Seed);
+pub(super) const BY: Attribution<'static> = Attribution::Internal(InternalWriter::Seed);
 
 /// The provenance a seeded node carries (`mae_kb::NodeSource::UserOrg`): an
 /// imported org file. Never `seed`, which marks MAE's own read-only corpora.
@@ -82,7 +82,8 @@ pub enum ApplyRefusalKind {
     PlanRefused,
     /// The recomputed plan's hash is not the one the operator supplied.
     PlanHashMismatch,
-    /// The KB was seeded (or started) from a different plan.
+    /// The KB was seeded (or started) from a different plan, or an update to
+    /// another plan is in progress.
     DifferentPlan,
     /// A collection with this id exists and was not made by a seed.
     KbExists,
@@ -92,6 +93,22 @@ pub enum ApplyRefusalKind {
     CollectionDiffers,
     /// The store failed.
     Storage,
+    /// `--update` of a KB with no seed record: it was not made by `kb seed`.
+    NotSeeded,
+    /// `--update` of a KB whose first apply never finished.
+    SeedUnfinished,
+    /// `--update` found nodes edited outside the seed since its last apply,
+    /// and `--discard-edits` was not given.
+    EditedOutsideSeed,
+    /// `--discard-edits` gave a hash other than the edits' now: they changed
+    /// since the dry run.
+    EditsChanged,
+    /// `--update` with a plan read from a repository other than the
+    /// recorded one.
+    DifferentRepo,
+    /// `--update` of an end-to-end encrypted KB, whose content the daemon
+    /// cannot read or write.
+    Encrypted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,14 +123,14 @@ impl std::fmt::Display for ApplyError {
     }
 }
 
-fn refuse(kind: ApplyRefusalKind, detail: impl Into<String>) -> ApplyError {
+pub(super) fn refuse(kind: ApplyRefusalKind, detail: impl Into<String>) -> ApplyError {
     ApplyError {
         kind,
         detail: detail.into(),
     }
 }
 
-fn storage(e: StorageError) -> ApplyError {
+pub(super) fn storage(e: StorageError) -> ApplyError {
     refuse(ApplyRefusalKind::Storage, format!("store: {e}"))
 }
 
@@ -129,7 +146,8 @@ pub async fn apply(
             return Err(refuse(
                 ApplyRefusalKind::DifferentPlan,
                 format!(
-                    "KB '{}' was seeded from plan {} (rev {}), not {hash}",
+                    "KB '{}' was seeded from plan {} (rev {}), not {hash}; to move it to \
+                     a new revision, use `kb seed --update`",
                     t.kb_id, rec.plan_hash, rec.rev
                 ),
             ))
@@ -149,7 +167,7 @@ pub async fn apply(
 }
 
 /// The plan's hash, if it may be applied and is the one reviewed.
-fn checked_hash(plan: &SeedPlan, expected: &str) -> Result<String, ApplyError> {
+pub(super) fn checked_hash(plan: &SeedPlan, expected: &str) -> Result<String, ApplyError> {
     let Some(hash) = plan.plan_hash() else {
         return Err(refuse(
             ApplyRefusalKind::PlanRefused,
@@ -226,7 +244,7 @@ fn rows_for_plan(
     Ok(rows)
 }
 
-fn row_from_plan(n: &PlannedNode) -> SeedNodeRow {
+pub(super) fn row_from_plan(n: &PlannedNode) -> SeedNodeRow {
     SeedNodeRow {
         node_id: n.file.id.clone(),
         path: n.path.clone(),
@@ -237,6 +255,7 @@ fn row_from_plan(n: &PlannedNode) -> SeedNodeRow {
         modified_at: n.modified_at,
         modified_source: n.modified_source.as_str().to_string(),
         seed_wal_id: None,
+        seed_version: None,
     }
 }
 
@@ -293,7 +312,10 @@ async fn node_state(
 
 /// A durable document's state, `None` if it does not exist. Any other storage
 /// failure is an error, never "absent" (which would let a write replace it).
-async fn existing_state(store: &DocStore, name: &str) -> Result<Option<Vec<u8>>, ApplyError> {
+pub(super) async fn existing_state(
+    store: &DocStore,
+    name: &str,
+) -> Result<Option<Vec<u8>>, ApplyError> {
     match store.encode_state(name).await {
         Ok(bytes) => Ok(Some(bytes)),
         Err(StorageError::DurableDocMissing(_)) => Ok(None),
@@ -316,6 +338,7 @@ async fn write_nodes(
         let _ = i;
         let row = &rows[&n.file.id];
         let name = mae_sync::kb_node_doc_name(kb_id, &n.file.id);
+        let doc = build_node(n, row);
         let wal = if node_state(store, kb_id, n, row).await? {
             present += 1;
             match row.seed_wal_id {
@@ -324,17 +347,17 @@ async fn write_nodes(
             }
         } else {
             created += 1;
-            let doc = build_node(n, row);
             let result = store.restore_doc(&name, &doc.encode(), BY).await;
             result.map_err(storage)?.wal_seq
         };
-        let set = store.seed_set_node_wal(kb_id, &n.file.id, wal).await;
-        set.map_err(storage)?;
+        let version = doc.version();
+        let set = store.seed_set_node_wal(kb_id, &n.file.id, wal, &version);
+        set.await.map_err(storage)?;
     }
     Ok((created, present))
 }
 
-fn collection_doc(kb_id: &str) -> String {
+pub(super) fn collection_doc(kb_id: &str) -> String {
     DocAddress::KbCollection {
         kb_id: kb_id.to_string(),
     }
