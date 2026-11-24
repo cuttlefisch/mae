@@ -5,15 +5,8 @@
   "targets": {
     "unit": {
       "type": "vitest",
-      "command": [
-        "npx",
-        "--no-install",
-        "vitest",
-        "run"
-      ],
-      "files": [
-        "test/**/*.test.ts"
-      ],
+      "command": ["npx", "--no-install", "vitest", "run"],
+      "files": ["test/**/*.test.ts"],
       "env": {
         "FC_NO_SHRINK": "1"
       }
