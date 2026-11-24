@@ -552,6 +552,31 @@ async fn a_node_whose_id_is_site_is_withheld() {
     assert!(!html.contains("href=\"/kb/kb-comp/site\""), "{html}");
 }
 
+/// ADR-115: a node whose ID is `blobs` (any case) is withheld too, so no
+/// page can sit at the address the blob routes answer.
+#[tokio::test]
+async fn a_node_whose_id_is_blobs_is_withheld() {
+    let store = fresh_doc_store().await;
+    let files = [
+        org("blobs", "", "Blobs", "A node at the blob routes' segment."),
+        org("BLOBS", "", "Blobs upper", "Its case variant."),
+        org("ok", "", "Ok", "[[id:blobs][to blobs]]"),
+    ];
+    seed_files(&store, KB, &files).await;
+    for id in ["blobs", "BLOBS"] {
+        assert_eq!(
+            view(&store, View::Page(id.into()), READER, None).await,
+            SitePage::NotFound,
+            "{id}"
+        );
+    }
+    let SitePage::Found { html, .. } = view(&store, View::Page("ok".into()), READER, None).await
+    else {
+        panic!("the control page");
+    };
+    assert!(!html.contains("href=\"/kb/kb-comp/blobs\""), "{html}");
+}
+
 // ---------------------------------------------------------------------------
 // H1: behaviours and stylesheets, served by hash.
 
