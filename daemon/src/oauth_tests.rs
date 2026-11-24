@@ -131,6 +131,7 @@ mod tests {
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
             site_title: std::collections::BTreeMap::new(),
+            site_components: Default::default(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
@@ -713,7 +714,25 @@ mod tests {
             site_path("/kb/k/tags/a%23b"),
             Some(("k".into(), View::Tag("a#b".into())))
         );
+        // A page a component emits (Amendment 4 H2), under the reserved
+        // `site` segment; `/kb/k/site` itself is an ID the derivation
+        // withholds, so its not-found.
+        assert_eq!(
+            site_path("/kb/k/site/changes"),
+            Some(("k".into(), View::Site("changes".into())))
+        );
+        assert_eq!(
+            site_path("/kb/k/site/a%2Eb"),
+            Some(("k".into(), View::Site("a.b".into())))
+        );
+        assert_eq!(
+            site_path("/kb/k/site"),
+            Some(("k".into(), View::Page("site".into())))
+        );
         for bad in [
+            "/kb/k/site/",
+            "/kb/k/site/a/b",
+            "/kb/k/site/%zz",
             "/kb/k",
             "/kb//",
             "/kb//n",
@@ -774,6 +793,7 @@ mod tests {
         let titled = Chrome {
             lang: "en-US",
             site: Some(("A secret KB name", "/kb/secret/")),
+            slots: None,
         };
         async fn parts(r: Response<Full<Bytes>>) -> (StatusCode, String, String) {
             let status = r.status();
@@ -794,6 +814,7 @@ mod tests {
             tags: vec![],
             toc: vec![],
             explorer: None,
+            slots: None,
         };
         assert!(parts(site_answer(found, titled))
             .await

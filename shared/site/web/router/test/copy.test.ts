@@ -5,6 +5,7 @@
 import { Window } from "happy-dom";
 import { describe, expect, it, vi } from "vitest";
 import {
+  context,
   ANNOUNCER_ID,
   COPY_CLASS,
   codeCopy,
@@ -109,7 +110,7 @@ describe("the copy control", () => {
     for (let round = 0; round < 25; round++) {
       const blocks = Array.from({ length: 3 }, () => block(next));
       const { dom, doc, written } = setup(page(blocks.map((b) => b.html)));
-      codeCopy(dom).mount(doc);
+      codeCopy(dom).init(context(doc, new AbortController().signal));
       const buttons = Array.from(doc.querySelectorAll(`.${COPY_CLASS}`));
       // One per source block, never for an example block.
       expect(buttons).toHaveLength(3);
@@ -125,7 +126,7 @@ describe("the copy control", () => {
   it("keeps consecutive blank lines (the old site's control dropped one)", async () => {
     const text = "a\n\n\nb\n\n";
     const { dom, doc, written } = setup(page([text]));
-    codeCopy(dom).mount(doc);
+    codeCopy(dom).init(context(doc, new AbortController().signal));
     (doc.querySelector(`.${COPY_CLASS}`) as HTMLElement).click();
     await vi.waitFor(() => expect(written).toEqual([text]));
   });
@@ -153,21 +154,21 @@ describe("the copy control", () => {
 
   it("marks its buttons when the words are a fallback", () => {
     const { dom, doc } = setup(page(["x"], `${WORDS} data-copy-lang="en-US"`));
-    codeCopy(dom).mount(doc);
+    codeCopy(dom).init(context(doc, new AbortController().signal));
     expect(doc.querySelector(`.${COPY_CLASS}`)?.getAttribute("lang")).toBe("en-US");
   });
 
   it("adds nothing without its words, or without an article", () => {
     for (const html of [page(["x"], ""), page(["x"]).replace('id="mae-article"', "")]) {
       const { dom, doc } = setup(html);
-      expect(codeCopy(dom).mount(doc)).toBeUndefined();
+      expect(codeCopy(dom).init(context(doc, new AbortController().signal))).toBeUndefined();
       expect(doc.querySelectorAll(`.${COPY_CLASS}`)).toHaveLength(0);
     }
   });
 
   it("is gone after unmount, and a click on a stale button copies nothing", async () => {
     const { dom, doc, writeText } = setup(page(["one", "two"]));
-    const cleanup = codeCopy(dom).mount(doc);
+    const cleanup = codeCopy(dom).init(context(doc, new AbortController().signal));
     const stale = doc.querySelector(`.${COPY_CLASS}`) as HTMLElement;
     expect(typeof cleanup).toBe("function");
     if (typeof cleanup === "function") cleanup();
@@ -176,7 +177,7 @@ describe("the copy control", () => {
     await Promise.resolve();
     expect(writeText).not.toHaveBeenCalled();
     // Mounted again (the next page): one button per block, not two.
-    codeCopy(dom).mount(doc);
+    codeCopy(dom).init(context(doc, new AbortController().signal));
     expect(doc.querySelectorAll(`.${COPY_CLASS}`)).toHaveLength(2);
   });
 
@@ -186,7 +187,7 @@ describe("the copy control", () => {
     const inner = vi.spyOn(win.Element.prototype, "innerHTML", "set");
     const outer = vi.spyOn(win.Element.prototype, "outerHTML", "set");
     const adjacent = vi.spyOn(proto as { insertAdjacentHTML(): void }, "insertAdjacentHTML");
-    codeCopy(dom).mount(doc);
+    codeCopy(dom).init(context(doc, new AbortController().signal));
     const b = doc.querySelector(`.${COPY_CLASS}`);
     expect(b?.textContent).toBe("Copy code");
     expect(b?.children).toHaveLength(0);

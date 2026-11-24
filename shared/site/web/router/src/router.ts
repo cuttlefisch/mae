@@ -30,6 +30,23 @@ export const PANELS_ID = "mae-panels";
 export const HEADER_ID = "mae-header";
 export const ANNOUNCER_ID = "mae-announcer";
 export const EXPLORER_ID = "mae-explorer";
+/** The left-panel footer's and page footer's slot boxes (D18, P-153). */
+export const LEFT_FOOTER_ID = "mae-left-footer";
+export const FOOTER_ID = "mae-footer";
+
+/**
+ * The `<meta name>`s a document-head slot may write (mae_site's
+ * `HEAD_META_NAMES`; a Rust test holds the two lists equal): swapped with the
+ * page, so a description or robots line never outlives its page.
+ */
+export const HEAD_META_NAMES = [
+  "application-name",
+  "author",
+  "description",
+  "generator",
+  "keywords",
+  "robots",
+] as const;
 
 /** What a click asks for, as far as routing is concerned. */
 export interface ClickFacts {
@@ -122,11 +139,17 @@ export function assetsOf(doc: Document): string[] {
 /**
  * Whether `next` can be swapped into `current`: it is one of the site's pages
  * (it has the main landmark), and it loads exactly the assets this document
- * already has. A page from a newer daemon (other asset names) or from the
- * backend (no landmark) is a full navigation instead.
+ * already has, for the same KB. A page from a newer daemon (other asset
+ * names), from another KB, or from the backend (no landmark) is a full
+ * navigation instead.
  */
 export function swappable(current: Document, next: Document): boolean {
   if (next.getElementById(MAIN_ID) === null) return false;
+  // Another KB is another site: its components, and the context its
+  // behaviours read, are its own, even when two KBs share a component
+  // directory and so load the same assets.
+  const kb = (d: Document) => d.getElementById(MAIN_ID)?.getAttribute("data-mae-kb") ?? null;
+  if (kb(current) !== kb(next)) return false;
   const a = assetsOf(current);
   const b = assetsOf(next);
   return a.length === b.length && a.every((x, i) => x === b[i]);
@@ -148,17 +171,84 @@ export function announce(doc: Document, text: string): void {
   live.textContent = text;
 }
 
-/** A component: mounted on every page, cleaned up before the next (P-25, P-156). */
-export interface Behaviour {
-  mount(root: Document): void | (() => void);
+/** The page a behaviour runs on, as the daemon wrote it on `<main>`. */
+export interface PageInfo {
+  /** The page's file-level ID; `null` on a generated page (a listing). */
+  id: string | null;
+  url: string;
+  kb: string;
 }
 
-/** What `start` returns, for tests and for components. */
+/** The site a behaviour runs in. */
+export interface SiteInfo {
+  kb: string;
+  /** The site's base path (`/kb/<kb-id>` live). */
+  base: string;
+  /** `<html lang>`. */
+  locale: string;
+}
+
+/**
+ * What a behaviour's `init` is given on each page (D18). `page` and `site`
+ * are `null` when the shell wrote no page data, which it does only for a KB
+ * with components (P-158 keeps a site without them byte-identical), so an
+ * operator's behaviour always has them. `signal` is aborted when the page is
+ * left, before the behaviour's own cleanup runs.
+ */
+export interface Context {
+  root: Document;
+  page: PageInfo | null;
+  site: SiteInfo | null;
+  signal: AbortSignal;
+}
+
+/**
+ * A component's client behaviour (D18, A2): `init` runs once on every page,
+ * and what it returns runs before the next (P-25, P-156). The router's own
+ * controls and an operator's components register the same way, through
+ * `mae.site.register`.
+ */
+export interface Behaviour {
+  id: string;
+  init(ctx: Context): void | (() => void);
+}
+
+/** What `start` returns: `window.mae.site`, for components and tests. */
 export interface Router {
-  register(name: string, b: Behaviour): void;
+  /**
+   * Run `b` on the page on screen now and on every page after it. A second
+   * registration under the same `id` replaces the first, which is cleaned up.
+   */
+  register(b: Behaviour): void;
   navigate(url: URL, push: boolean): Promise<void>;
   /** The navigation in flight, if any (tests wait on it). */
   pending(): Promise<void> | null;
+}
+
+/** The context `init` gets on `root`, read from what the shell wrote. */
+export function context(root: Document, signal: AbortSignal): Context {
+  const main = root.getElementById(MAIN_ID);
+  const kb = main?.getAttribute("data-mae-kb") ?? null;
+  const base = main?.getAttribute("data-mae-base") ?? null;
+  const url = main?.getAttribute("data-mae-url") ?? null;
+  if (!main || kb === null || base === null || url === null) {
+    return { root, page: null, site: null, signal };
+  }
+  return {
+    root,
+    page: { id: main.getAttribute("data-mae-page"), url, kb },
+    site: { kb, base, locale: root.documentElement.lang },
+    signal,
+  };
+}
+
+/** A behaviour as `register` checks it: an operator's script is not typed. */
+function checked(b: unknown): Behaviour {
+  const r = b as Partial<Behaviour> | null;
+  if (!r || typeof r.id !== "string" || r.id === "" || typeof r.init !== "function") {
+    throw new TypeError("mae.site.register takes { id: string, init(ctx) }");
+  }
+  return r as Behaviour;
 }
 
 interface TrustedTypesLike {
@@ -180,17 +270,39 @@ export function start(win: Window & typeof globalThis): Router {
       "text/html",
     );
 
+  // Behaviours by id, and what each left running on the page on screen. One
+  // that throws is reported and skipped: an operator's component never stops
+  // the router's own controls, or another component, from running.
   const behaviours = new Map<string, Behaviour>();
-  let cleanups: Array<() => void> = [];
-  const mountAll = (): void => {
-    for (const b of behaviours.values()) {
-      const c = b.mount(doc);
-      if (typeof c === "function") cleanups.push(c);
+  const running = new Map<string, { ac: AbortController; cleanup: (() => void) | null }>();
+  const report = (e: unknown): void => win.console?.error?.(e);
+  const mountOne = (b: Behaviour): void => {
+    const ac = new AbortController();
+    let cleanup: (() => void) | null = null;
+    try {
+      const c = b.init(context(doc, ac.signal));
+      if (typeof c === "function") cleanup = c;
+    } catch (e) {
+      report(e);
+    }
+    running.set(b.id, { ac, cleanup });
+  };
+  const unmountOne = (id: string): void => {
+    const r = running.get(id);
+    if (!r) return;
+    running.delete(id);
+    r.ac.abort();
+    try {
+      r.cleanup?.();
+    } catch (e) {
+      report(e);
     }
   };
+  const mountAll = (): void => {
+    for (const b of behaviours.values()) mountOne(b);
+  };
   const unmountAll = (): void => {
-    for (const c of cleanups) c();
-    cleanups = [];
+    for (const id of Array.from(running.keys())) unmountOne(id);
   };
 
   win.history.scrollRestoration = "manual";
@@ -205,6 +317,7 @@ export function start(win: Window & typeof globalThis): Router {
     unmountAll();
     doc.title = next.title;
     doc.documentElement.lang = next.documentElement.lang;
+    swapHeadMeta(doc, next);
     const main = doc.getElementById(MAIN_ID);
     const nextMain = next.getElementById(MAIN_ID);
     if (main && nextMain) main.replaceWith(doc.adoptNode(nextMain));
@@ -224,10 +337,18 @@ export function start(win: Window & typeof globalThis): Router {
       } else if (mine) mine.remove();
       else if (theirs) at()?.[place](doc.adoptNode(theirs));
     };
+    // Body order: header, explorer, left-panel footer, main, panels, footer.
     const mainOf = (): Element | null => doc.getElementById(MAIN_ID);
-    region(EXPLORER_ID, "before", mainOf, keepExplorer);
-    region(HEADER_ID, "before", () => doc.getElementById(EXPLORER_ID) ?? mainOf());
+    const byId = (id: string) => (): Element | null => doc.getElementById(id);
+    region(LEFT_FOOTER_ID, "before", mainOf);
+    region(EXPLORER_ID, "before", () => byId(LEFT_FOOTER_ID)() ?? mainOf(), keepExplorer);
+    region(
+      HEADER_ID,
+      "before",
+      () => byId(EXPLORER_ID)() ?? byId(LEFT_FOOTER_ID)() ?? mainOf(),
+    );
     region(PANELS_ID, "after", mainOf);
+    region(FOOTER_ID, "after", () => byId(PANELS_ID)() ?? mainOf());
     mountAll();
   };
 
@@ -318,14 +439,30 @@ export function start(win: Window & typeof globalThis): Router {
   });
 
   return {
-    register(name, b) {
-      behaviours.set(name, b);
-      const c = b.mount(doc);
-      if (typeof c === "function") cleanups.push(c);
+    register(b) {
+      const behaviour = checked(b);
+      unmountOne(behaviour.id);
+      behaviours.set(behaviour.id, behaviour);
+      mountOne(behaviour);
     },
     navigate: (url, push) => navigate(url, push),
     pending: () => current,
   };
+}
+
+/**
+ * Replace `doc`'s slot-written `<meta name>`s (HEAD_META_NAMES) with `next`'s,
+ * before the title, where the shell writes them.
+ */
+function swapHeadMeta(doc: Document, next: Document): void {
+  const sel = HEAD_META_NAMES.map((n) => `meta[name="${n}"]`).join(",");
+  for (const m of Array.from(doc.head.querySelectorAll(sel))) m.remove();
+  const title = doc.head.querySelector("title");
+  for (const m of Array.from(next.head.querySelectorAll(sel))) {
+    const mine = doc.adoptNode(m);
+    if (title) title.before(mine);
+    else doc.head.append(mine);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -719,7 +856,8 @@ export function themeControls(win: Window & typeof globalThis): Behaviour {
     // No media queries: the mode stays as painted.
   }
   return {
-    mount(doc) {
+    id: "theme",
+    init({ root: doc }) {
       const data = (win as unknown as { mae?: { theme?: ThemeData } }).mae?.theme;
       const box = doc.getElementById(THEME_ID);
       const toggle = doc.getElementById(MODE_TOGGLE_ID);
@@ -1329,8 +1467,9 @@ export function explorer(win: Window & typeof globalThis): ExplorerBehaviour {
   };
 
   return {
+    id: "explorer",
     idle: () => loading,
-    mount(doc) {
+    init({ root: doc }) {
       loading = null;
       const click = clicked;
       clicked = null;
@@ -1446,7 +1585,8 @@ export async function copyBlock(
 /** The copy control as a behaviour (P-156): buttons on mount, none after. */
 export function codeCopy(win: Window & typeof globalThis): Behaviour {
   return {
-    mount(doc) {
+    id: "copy",
+    init({ root: doc }) {
       const article = doc.getElementById(ARTICLE_ID);
       const words = article ? copyWords(article) : null;
       if (!article || !words) return;
@@ -1479,7 +1619,14 @@ export function codeCopy(win: Window & typeof globalThis): Behaviour {
 }
 
 // On one of the site's pages: start once, and publish the component registry
-// (D18). A document without the main landmark is not the site's.
+// (D18) as `window.mae.site`. A document without the main landmark is not the
+// site's.
+//
+// Order: the shell loads this module before every component's behaviour, and
+// module scripts run in document order once the document is parsed, so
+// `mae.site.register` exists before any component's script runs. A component
+// registered after start runs on the page on screen at once, then on every
+// page after it.
 if (
   typeof window !== "undefined" &&
   typeof document !== "undefined" &&
@@ -1489,8 +1636,8 @@ if (
   if (!w.mae?.site) {
     const router = start(window);
     w.mae = { ...(w.mae ?? {}), site: router };
-    router.register("theme", themeControls(window));
-    router.register("explorer", explorer(window));
-    router.register("copy", codeCopy(window));
+    router.register(themeControls(window));
+    router.register(explorer(window));
+    router.register(codeCopy(window));
   }
 }

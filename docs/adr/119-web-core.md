@@ -5,7 +5,8 @@ first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) an
 `GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
 Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
 where its home page comes from, and the retirement of ADR-073's view; Amendment 3 (2026-11-24) the
-live explorer and who may list a KB. Spikes
+live explorer and who may list a KB; Amendment 4 (2026-11-24) where the live app's slot components and
+their data come from. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -650,8 +651,10 @@ D4 extends to the pages the engine generates. Tag pages sit below the tag index:
 `/kb/<kb-id>/tags` and `/kb/<kb-id>/tags/<tag>` live, `<base>/tags/` and `<base>/tags/<tag>/` in the
 export. A generated address is never shadowed (P-166):
 
-- **Reserved IDs.** A page whose file ID is `tags`, compared as the export compares directories (so
-  `Tags` too), is withheld (`Withheld::Reserved`). Later generated namespaces join the list.
+- **Reserved IDs.** A page whose file ID is one the engine generates an address for, compared as the
+  export compares directories (so `Tags` too), is withheld (`Withheld::Reserved`): `tags`,
+  `index.json` (P-77), `explorer.json` (Amendment 3) and `site` (Amendment 4 H2). Later generated
+  namespaces join the list.
 - **IDs with no address.** An empty ID would give `//` (protocol-relative), and `.` or `..` are dot
   segments a browser collapses. Percent-encoding cannot defuse those: the URL standard reads `%2e` as
   `.`. So an ID that is empty or all dots is withheld (`Withheld::InvalidId`).
@@ -824,6 +827,95 @@ asks for it.
 
 The two new catalogue strings (the explorer's name and the untagged group) join A4's catalogues in all
 four locales; `eo`'s await the same speaker's review as the rest of its strings.
+
+## Amendment 4 (2026-11-24): slot components in the live app
+
+D18 decided how a component is written (a minijinja template, sanitised like content, with an optional
+behaviour registered through `mae.site.register`). It did not say where the live app finds the
+components or what a "version" is without a build. Both are the owner's (H1, H2); the rest follows.
+
+### H1. Components come from an operator directory *(owner, 2026-11-24)*
+
+- **Configuration, never content (D3).** `daemon.toml` names a directory per KB,
+  `[oauth.site_components] "<kb-id>" = "<dir>"`, beside `site_home` and `site_title`. Nothing in a KB
+  can add, change or select a component.
+- **A manifest, not a naming convention.** The directory holds `components.toml`, which lists each
+  component:
+  - its slot (P-153's seven: document head, header row, before the body, after the body, left-panel
+    footer, right panel, page footer);
+  - its template file;
+  - its optional behaviour script;
+  - the exact `data-` keys and ARIA states its markup needs, which is all A2's sanitiser extension
+    admits for it. Its classes must start with `site-`, so it can wear neither the chrome's (`mae-`) nor
+    content's (`org-`, `language-`);
+  - an optional stylesheet, served like a behaviour;
+  - for a page-emitting component, its page name and its data file (H2).
+- **Loaded once, at startup.** Every template is compiled, every script and data file is read and
+  validated, and every declared attribute is checked against the sanitiser's rules before the daemon
+  serves. Any failure stops the daemon with the component and the reason, before any store opens, as an
+  invalid `[[tenant]]` entry does (an invalid TLS path only disables the HTTPS listener, which would
+  leave a site serving pages without the components the operator declared).
+  It is the live counterpart of P-157's "the build fails". A change takes a restart; there is no hot
+  reload. One check cannot refuse: whether a configured KB ID names a KB the daemon has. KBs are
+  created at run time, so an operator may configure one first; a well-formed ID that names no KB is
+  warned about at startup instead (`site_components::unmatched_kb_ids`).
+- **A failure while rendering** leaves that slot empty for that page, and is logged, rate-limited per
+  template (D18).
+- **What a template sees (P-154):**
+  - the page's own data: ID, title, file-level properties, dates, tags and URL;
+  - the site settings: locale, base path and KB ID;
+  - its own validated data file (H2);
+  - for any other node ID, only whether it is published in this view, and its address. That is what
+    P-163's "what's-new link, omitted if unpublished" needs. It tells the reader nothing they could not
+    learn by following the link.
+
+  Never another page's content. A component cannot read the KB beyond the page it renders, so a
+  template cannot widen what a reader sees.
+- **Behaviours** are served like the runtime's own assets, under content-addressed names, as
+  `script-src 'self'` requires. Each runs once per navigation and is cleaned up before the next (P-156),
+  under the router's single Trusted Types policy: a behaviour builds DOM, and cannot inject HTML.
+- **Empty slots add nothing** (P-158). A slot with no component writes no element, so removing a
+  component moves nothing else.
+- **The five examples** (state badge P-161, copy link P-162, what's-new link, version footer and
+  last-updated line P-163) ship as a fixture component directory under `docs/verification/fixtures/`,
+  with the tests that render each one. They are not engine code: the contract is that they need no
+  engine change.
+- **Rejected:** shipping the examples as built-in engine features (the contract would not be met until
+  later, and each example would be a second implementation to retire); serving no components until the
+  export exists (the live app is L1's first deliverable).
+
+### H2. A version is an entry in an operator data file *(owner, 2026-11-24)*
+
+- **The data.** The site-changes page and the version footer (P-160, P-163) read a data file the
+  manifest names. It is validated at startup against the component's declared shape, as the export's
+  build-time data is. A malformed entry stops the daemon (H1). A malformed date in a page's own
+  properties only omits that line (P-150, P-163).
+- **The address.** A component-emitted page lives under one reserved segment, `/kb/<kb-id>/site/<name>`
+  (`<base>/site/<name>/` in the export). `site` joins A3's reserved IDs, so no operator-declared name
+  reserves an ordinary word per KB, and no node can shadow a generated page.
+- **Rejected:** deriving versions from the KB's history (it needs L3's change records, ADR-116 and
+  ADR-113, which are not built), and keeping the page export-only (the version footer would then link
+  nowhere live).
+
+### H3. One registration API for every behaviour *(owner, 2026-11-24)*
+
+The router implemented `register(name, {mount(doc)})` while D18 specified
+`mae.site.register({id, init(ctx) -> cleanup?})`. That drift is resolved toward D18, with one API, not
+two: the router's own behaviours (theme controls, explorer, source-block copy) and every operator
+component register the same way.
+
+- `ctx` holds `root` (the document), `page` (`id`, `url`, `kb`), `site` (`kb`, `base`, `locale`) and
+  an `AbortSignal`. The signal is aborted when the page is left, before the behaviour's own cleanup
+  runs.
+- The shell writes `page` and `site` as attributes on `<main>` only for a KB with components, so a
+  site without them stays byte-identical (P-158). Without them `page` and `site` are `null`, which
+  only the router's own behaviours can meet; they do not read them.
+- A component's script is a module loaded after the router's, so `window.mae.site.register` exists
+  when it runs (module scripts run in document order). One registered after the router started runs
+  on the page on screen at once.
+- Each behaviour runs once per navigation and is cleaned up before the next (P-156). One that throws
+  is reported and skipped; it never stops another from running. A second registration under the same
+  `id` replaces the first.
 
 ## Amendments this needs
 

@@ -107,6 +107,16 @@ pub struct OAuthConfig {
     /// home. Operator configuration, never content (D3). Never in a refusal:
     /// the not-found is identical for every caller (A5). Default none.
     pub site_title: std::collections::BTreeMap<String, String>,
+    /// Each KB's slot components (ADR-119 Amendment 4 H1), under
+    /// `[oauth.site_components]`: KB ID → a directory holding
+    /// `components.toml` and the files it names. Operator configuration,
+    /// never content (D3). Read and checked once, at startup: any problem,
+    /// a missing directory included, refuses to start the daemon, naming the
+    /// KB, the component and the reason (`mae_daemon::site_components`).
+    /// Checked whenever an entry is configured, even with the site off, so a
+    /// directory that would fail never waits for the day the site is turned
+    /// on. A change takes a restart. Default none.
+    pub site_components: std::collections::BTreeMap<String, PathBuf>,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -262,6 +272,7 @@ impl Default for OAuthConfig {
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
             site_title: std::collections::BTreeMap::new(),
+            site_components: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,

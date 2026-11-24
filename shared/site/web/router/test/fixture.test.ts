@@ -5,11 +5,11 @@
 // choice and the steps, and the expected normalised accessibility tree in
 // each state. The browser client runs the same files
 // against its tests; this runs them against MAE's behaviour.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
 import { describe, expect, it } from "vitest";
-import { themeControls } from "../src/router";
+import { context, themeControls } from "../src/router";
 import { treeOf } from "./a11y";
 
 const DIR = path.join(
@@ -60,7 +60,7 @@ function run(scenario: Scenario, steps: Step[]): Document {
   });
   for (const [k, v] of Object.entries(scenario.storage)) win.localStorage.setItem(k, v);
   new Function("window", PREPAINT)(win);
-  themeControls(dom).mount(dom.document);
+  themeControls(dom).init(context(dom.document, new AbortController().signal));
   for (const s of steps) {
     if (s.focus) (win.document.querySelector(s.focus) as unknown as HTMLElement).focus();
     if (s.key) {
@@ -77,7 +77,7 @@ function run(scenario: Scenario, steps: Step[]): Document {
 }
 
 it("finds a scenario for each locale the fixture covers", () => {
-  expect(scenarios.map(([, s]) => s.locale).sort()).toEqual(["en-US", "es-ES"]);
+  expect(scenarios.map(([, s]) => s.locale).sort()).toEqual(["en-US", "es-ES", "fr-FR"]);
 });
 
 for (const [file, scenario] of scenarios) {
@@ -89,6 +89,11 @@ for (const [file, scenario] of scenarios) {
     for (const state of scenario.states) {
       it(`${state.name}: the expected accessibility tree`, () => {
         const tree = treeOf(run(scenario, state.steps), scenario.scope);
+        // MAE_BLESS_FIXTURES=1 writes the expected tree from the behaviour:
+        // the one way to regenerate it, so it is never edited by hand.
+        if (process.env.MAE_BLESS_FIXTURES) {
+          writeFileSync(path.join(DIR, state.expected), JSON.stringify(tree, null, 2) + "\n");
+        }
         expect(tree).toEqual(JSON.parse(read(state.expected)));
       });
     }

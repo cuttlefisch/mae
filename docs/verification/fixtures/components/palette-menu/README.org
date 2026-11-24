@@ -15,9 +15,14 @@ runs the same files against its tests.
   the focused element; on a focused button, Enter and Space activate it as a browser does).
 - =tree-closed.json=, =tree-menu-open.json=, =tree-submenu-open.json= :: the expected tree of the
   page's banner in each state.
-- =scenario-es-ES.json=, =input-es-ES.html= and =tree-*-es-ES.json= :: the same scenario with the
-  page configured =es-ES=, pinning that catalogue's names for the controls, the menu and the
-  accents. The daemon's test pins this input as well. A runner takes every =scenario*.json= here.
+- =scenario-es-ES.json=, =input-es-ES.html= and =tree-*-es-ES.json= (and the same for =fr-FR=) :: the
+  same scenario with the page configured in that locale, pinning its catalogue's names for the
+  controls, the menu and the accents. The daemon's test pins each input as well. A runner takes every
+  =scenario*.json= here.
+- Regenerate, never hand-edit: =MAE_BLESS_FIXTURES=1= writes each input from the daemon's page
+  (=cd daemon && MAE_BLESS_FIXTURES=1 cargo test --bin mae-daemon the_palette_menu_fixture=) and
+  each tree from the behaviour (=MAE_BLESS_FIXTURES=1 npx vitest run test/fixture.test.ts= in
+  =shared/site/web/router=). Review the diff before committing it.
 
 * The normalised tree
 

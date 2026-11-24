@@ -104,9 +104,11 @@ impl Addressing {
 }
 
 /// IDs a page may not hold, because the engine generates that address: the
-/// tag index, the content index and the explorer (P-166). Compared as the export compares
-/// directories, so `Tags` is reserved too.
-pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json"];
+/// tag index, the content index, the explorer (P-166), and the segment the
+/// pages components emit live under (`site`, ADR-119 Amendment 4 H2).
+/// Compared as the export compares directories, so `Tags` and `Site` are
+/// reserved too.
+pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site"];
 
 /// Whether `id` names an address the engine generates (P-166).
 pub fn is_reserved(id: &str) -> bool {

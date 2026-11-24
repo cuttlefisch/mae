@@ -1396,6 +1396,10 @@
           "kind": "mod"
         },
         {
+          "name": "components",
+          "kind": "mod"
+        },
+        {
           "name": "derive",
           "kind": "mod"
         },

@@ -1,0 +1,50 @@
+/* Styles for the example slot components (ADR-119 A2: the palette's tokens
+   only). */
+
+.site-state-badge {
+  display: inline-block;
+  margin: 0 0 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--ui-accent);
+  border-radius: 0.25rem;
+  color: var(--ui-foreground);
+  background: var(--ui-panel);
+}
+
+.site-state-unknown {
+  border-style: dashed;
+  color: var(--ui-muted);
+}
+
+.site-copy-link-button,
+.site-copy-link-section {
+  font: inherit;
+  color: var(--ui-link);
+  background: none;
+  border: 1px solid var(--ui-muted);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.site-copy-link-section {
+  margin-inline-start: 0.5rem;
+  font-size: 0.75em;
+}
+
+.site-copy-link-status {
+  margin-inline-start: 0.5rem;
+  color: var(--ui-muted);
+}
+
+.site-version-footer {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ui-muted);
+}
+
+/* P-163: hidden on narrow screens. */
+@media (max-width: 48rem) {
+  .site-version-footer {
+    display: none;
+  }
+}

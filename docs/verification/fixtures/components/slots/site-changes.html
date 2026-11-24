@@ -1,0 +1,6 @@
+{# P-160. Every version, newest first, with its date. #}
+<ol class="site-changes">
+{% for v in data | sort(attribute="date", reverse=true) %}
+<li><time datetime="{{ v.date }}">{{ v.date }}</time> <strong>{{ v.version }}</strong>{% if v.summary %}: {{ v.summary }}{% endif %}</li>
+{% endfor %}
+</ol>

@@ -19,3 +19,17 @@ mae-org = { path = "../org" }
 ammonia = "4"
 # ADR-119 Amendment 3: A-to-Z order ignoring case and accents (NFD).
 unicode-normalization = "0.1"
+# ADR-119 D18 and Amendment 4: slot components are minijinja templates
+# (Apache-2.0). Only what the engine needs: `builtins` (filters such as
+# `sort` and `default`), `fuel` (the per-render limit) and `serde` (minijinja
+# warns without it). Not `multi_template` (include/extends/import: a template
+# is exactly the file the manifest names), not `macros`, not `debug`, not
+# `deserialization`, not `adjacent_loop_items`, not `std_collections`.
+minijinja = { version = "2.24", default-features = false, features = ["builtins", "fuel", "serde"] }
+# The component manifest (`components.toml`) and its data files (JSON).
+toml = "1.1"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1"
