@@ -714,7 +714,25 @@ mod tests {
             site_path("/kb/k/tags/a%23b"),
             Some(("k".into(), View::Tag("a#b".into())))
         );
+        // A page a component emits (Amendment 4 H2), under the reserved
+        // `site` segment; `/kb/k/site` itself is an ID the derivation
+        // withholds, so its not-found.
+        assert_eq!(
+            site_path("/kb/k/site/changes"),
+            Some(("k".into(), View::Site("changes".into())))
+        );
+        assert_eq!(
+            site_path("/kb/k/site/a%2Eb"),
+            Some(("k".into(), View::Site("a.b".into())))
+        );
+        assert_eq!(
+            site_path("/kb/k/site"),
+            Some(("k".into(), View::Page("site".into())))
+        );
         for bad in [
+            "/kb/k/site/",
+            "/kb/k/site/a/b",
+            "/kb/k/site/%zz",
             "/kb/k",
             "/kb//",
             "/kb//n",

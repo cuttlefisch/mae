@@ -466,6 +466,143 @@ async fn hostile_component_output_is_inert_in_the_served_page() {
 }
 
 // ---------------------------------------------------------------------------
+// H2: the component page, under the reserved `site` segment.
+
+#[tokio::test]
+async fn a_reader_gets_the_site_changes_page_in_the_shell() {
+    let store = fixture_kb().await;
+    let c = load(&[(KB, &fixture_dir())]).unwrap().for_kb(KB).unwrap();
+    let page = view(&store, View::Site("changes".into()), READER, Some(c)).await;
+    let SitePage::Component {
+        ref title,
+        ref html,
+        ref explorer,
+        ref slots,
+    } = page
+    else {
+        panic!("the changes page: {page:?}");
+    };
+    assert_eq!(title, "Site changes");
+    let want = std::fs::read_to_string(fixture_dir().join("expected/changes.html")).unwrap();
+    assert_eq!(html.trim_end(), want.trim_end());
+    assert!(explorer.is_some() && slots.is_some());
+    let (status, doc) = served(page.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(doc.contains("<title>Site changes</title>"), "{doc}");
+    assert!(doc.contains("<h1>Site changes</h1>"), "{doc}");
+    assert!(doc.contains("<nav id=\"mae-explorer\""), "{doc}");
+    assert!(
+        doc.contains(&format!("data-mae-url=\"/kb/{KB}/site/changes\"")),
+        "{doc}"
+    );
+    assert!(
+        !doc.contains("data-mae-page="),
+        "a generated page has no ID: {doc}"
+    );
+}
+
+/// A5: a stranger, an unknown name and a KB without components all get the
+/// one not-found, byte for byte.
+#[tokio::test]
+async fn every_refusal_of_a_component_page_is_the_same_not_found() {
+    let store = fixture_kb().await;
+    let c = || load(&[(KB, &fixture_dir())]).unwrap().for_kb(KB);
+    let refusals = [
+        view(&store, View::Site("changes".into()), STRANGER, c()).await,
+        view(&store, View::Site("nope".into()), READER, c()).await,
+        view(&store, View::Site("Changes".into()), READER, c()).await,
+        view(&store, View::Site("changes".into()), READER, None).await,
+    ];
+    let first = body(crate::oauth::site_answer(
+        SitePage::NotFound,
+        "en-US".into(),
+    ))
+    .await;
+    for r in refusals {
+        assert_eq!(r, SitePage::NotFound);
+        assert_eq!(
+            body(crate::oauth::site_answer(r, "en-US".into())).await,
+            first
+        );
+    }
+}
+
+/// H2, A3: a node whose ID is `site` (any case) is withheld, so no node can
+/// shadow the component pages' segment.
+#[tokio::test]
+async fn a_node_whose_id_is_site_is_withheld() {
+    let store = fresh_doc_store().await;
+    let files = [
+        org("site", "", "Site", "A node at the reserved segment."),
+        org("Site", "", "Site upper", "Its case variant."),
+        org("ok", "", "Ok", "[[id:site][to site]]"),
+    ];
+    seed_files(&store, KB, &files).await;
+    for id in ["site", "Site"] {
+        assert_eq!(
+            view(&store, View::Page(id.into()), READER, None).await,
+            SitePage::NotFound,
+            "{id}"
+        );
+    }
+    let SitePage::Found { html, .. } = view(&store, View::Page("ok".into()), READER, None).await
+    else {
+        panic!("the control page");
+    };
+    assert!(!html.contains("href=\"/kb/kb-comp/site\""), "{html}");
+}
+
+// ---------------------------------------------------------------------------
+// H1: behaviours and stylesheets, served by hash.
+
+#[tokio::test]
+async fn a_component_asset_is_served_at_its_hash_only() {
+    let set = load(&[(KB, &fixture_dir())]).unwrap();
+    let js = std::fs::read_to_string(fixture_dir().join("copy-link.js")).unwrap();
+    let name =
+        mae_daemon::site_components::asset_name(mae_site::components::AssetKind::Script, &js);
+    let (status, headers, served_js) = body(crate::oauth::asset_response(
+        &format!("/site-assets/{name}"),
+        &set,
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(served_js, js);
+    assert!(
+        headers.contains("\"content-type\": \"text/javascript; charset=utf-8\""),
+        "{headers}"
+    );
+    assert!(
+        headers.contains(&format!("\"content-security-policy\": \"{}\"", site::CSP)),
+        "{headers}"
+    );
+    assert!(headers.contains("immutable"), "{headers}");
+    // A wrong hash, the file's own name, and the component's name are all
+    // the site's not-found.
+    let mut wrong = name.clone();
+    wrong.replace_range(2..3, if &name[2..3] == "0" { "1" } else { "0" });
+    for bad in [
+        wrong.as_str(),
+        "copy-link.js",
+        "components.css",
+        "copy-link",
+    ] {
+        let (s, _, _) = body(crate::oauth::asset_response(
+            &format!("/site-assets/{bad}"),
+            &set,
+        ))
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{bad}");
+    }
+    // The runtime's own assets are still served beside them.
+    let base = mae_site::assets::href(mae_site::assets::BASE);
+    assert_eq!(
+        body(crate::oauth::asset_response(&base, &set)).await.0,
+        StatusCode::OK
+    );
+}
+
+// ---------------------------------------------------------------------------
 // P-158: without components, the shell is byte-identical to the one before
 // components existed. The goldens in daemon/tests/data/site-shell were
 // written by the daemon at d331e7dd, before slots were added, each asset's
