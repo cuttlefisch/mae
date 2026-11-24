@@ -259,10 +259,17 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
         list_under_tags(&mut site.tags, &page);
         site.pages.insert(id, page);
     }
+    finish_lists(&mut site);
+    site
+}
+
+/// The lists derived from every page at once: each tag's pages A to Z, and
+/// each index entry's outgoing links to published pages (the backlinks,
+/// inverted), with the index in ID order.
+fn finish_lists(site: &mut Site) {
     for pages in site.tags.values_mut() {
         pages.sort_by(crate::explorer::by_title);
     }
-    // Each page's outgoing links to published pages: the backlinks, inverted.
     let mut out: BTreeMap<&str, std::collections::BTreeSet<String>> = BTreeMap::new();
     for page in site.pages.values() {
         for b in &page.backlinks {
@@ -279,7 +286,6 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
             .collect();
     }
     site.index.sort_by(|a, b| a.id.cmp(&b.id));
-    site
 }
 
 /// `s` with every reference in a hidden namespace removed: a word that starts
