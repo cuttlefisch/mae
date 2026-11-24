@@ -61,6 +61,13 @@ pub async fn authorize(
     if !matches!(read, Ok(AccessDecision::Allow)) {
         return Err(Denied::Hidden);
     }
+    // D8 before the role: no one uploads to, or reads from, an E2E KB here.
+    if !matches!(
+        crate::kb_query::trusted_encryption(doc_store, kb_id, &coll).await,
+        Encryption::None
+    ) {
+        return Err(Denied::E2eUnsupported);
+    }
     if op == BlobOp::Upload {
         let edit = collab_handler::kb_access_with_coll(
             doc_store,
@@ -75,8 +82,5 @@ pub async fn authorize(
             return Err(Denied::RoleForbidden);
         }
     }
-    match crate::kb_query::trusted_encryption(doc_store, kb_id, &coll).await {
-        Encryption::None => Ok(()),
-        _ => Err(Denied::E2eUnsupported),
-    }
+    Ok(())
 }

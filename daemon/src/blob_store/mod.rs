@@ -57,6 +57,8 @@ use std::sync::{Arc, Mutex};
 
 pub use sniff::MediaType;
 
+/// The blob root's name under the collab data directory.
+pub const DIR: &str = "blobs";
 /// The metadata database, inside the blob root.
 pub const DB_FILE: &str = "blobs.db";
 /// Where uploads are received and staged, inside the blob root: on the same

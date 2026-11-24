@@ -34,6 +34,7 @@ pub mod maintenance;
 mod member_cli;
 mod oauth;
 mod oauth_binding;
+mod oauth_blobs;
 mod oauth_config;
 mod oauth_tls;
 mod p2p;
@@ -597,9 +598,12 @@ async fn spawn_oauth_listener(
     .await;
     state.lock().await.oauth_conn = Some(oauth_limiter.clone());
     let (bindings, binding_routes) = oauth_identity_binding(config);
+    let blobs = oauth_blob_routes(config, doc_store.is_some());
     let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
     {
-        Ok(l) => l.with_identity_binding(bindings, binding_routes),
+        Ok(l) => l
+            .with_identity_binding(bindings, binding_routes)
+            .with_blobs(blobs),
         Err(e) => {
             error!(error = %e, "OAuth listener disabled");
             return;
@@ -612,6 +616,36 @@ async fn spawn_oauth_listener(
             error!(error = %e, "OAuth listener failed to start");
         }
     });
+}
+
+/// ADR-115: a KB's attachments, when `attachments_enabled` and a `DocStore`
+/// exists to gate them. A store that cannot be opened is logged and the routes
+/// stay off (their paths then fall through like any other).
+fn oauth_blob_routes(
+    config: &DaemonConfig,
+    has_doc_store: bool,
+) -> Option<Arc<oauth_blobs::BlobRoutes>> {
+    if !config.oauth.attachments_enabled {
+        return None;
+    }
+    if !has_doc_store {
+        error!("oauth.attachments_enabled needs collab.enabled (a KB's access decides who may read its attachments); attachments are off");
+        return None;
+    }
+    let root = config
+        .resolve_collab_data_dir()
+        .join(mae_daemon::blob_store::DIR);
+    match mae_daemon::blob_store::BlobStore::open(&root) {
+        Ok(store) => Some(Arc::new(oauth_blobs::BlobRoutes::new(
+            Arc::new(store),
+            config.oauth.max_attachment_bytes,
+            config.oauth.max_attachment_pixels,
+        ))),
+        Err(e) => {
+            error!(error = %e, path = %root.display(), "cannot open the attachment store; attachments are off");
+            None
+        }
+    }
 }
 
 /// The binding table (ADR-098 D3) and, when `identity_binding_enabled`, the

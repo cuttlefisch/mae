@@ -107,6 +107,21 @@ pub struct OAuthConfig {
     /// home. Operator configuration, never content (D3). Never in a refusal:
     /// the not-found is identical for every caller (A5). Default none.
     pub site_title: std::collections::BTreeMap<String, String>,
+    /// ADR-115: whether a KB's attachments are served here: `POST
+    /// /kb/<kb-id>/blobs` (an editor uploads) and `GET`/`HEAD
+    /// /kb/<kb-id>/blobs/<sha256>` (a reader fetches), each gated by the KB's
+    /// own access. Default false (principle #12). Needs a `DocStore`, like
+    /// `kb_query_enabled`. The store lives under the collab data directory's
+    /// `blobs/`.
+    pub attachments_enabled: bool,
+    /// ADR-115 D3: the largest upload, bytes. A larger declared
+    /// `Content-Length` is refused (`413 quota_exceeded`) before any of the
+    /// body is read. Default [`DEFAULT_MAX_ATTACHMENT_BYTES`].
+    pub max_attachment_bytes: u64,
+    /// ADR-115 D3a: an image's width times height, read from its header and
+    /// refused above this before anything is decoded. Default 40 megapixels,
+    /// the ADR's figure.
+    pub max_attachment_pixels: u64,
     /// Cap on the raw size (bytes) of an incoming authenticated request
     /// body, enforced BEFORE it's read into memory at all (`http_body_util
     /// ::Limited`, which errors mid-stream rather than buffering past the
@@ -237,6 +252,17 @@ pub struct OAuthConfig {
     pub ws_max_outbound_bytes: Option<usize>,
 }
 
+/// [`OAuthConfig::max_attachment_bytes`]'s default: 10 MiB, the daemon's
+/// largest document (`max_document_size_bytes`, ADR-109 D6), which holds a
+/// phone photo with room to spare. It is also the most a processing worker
+/// reads into memory at once; `the_attachment_defaults_fit_adr_109s_memory_budget`
+/// pins what that and the pixel bound cost.
+pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// [`OAuthConfig::max_attachment_pixels`]'s default: ADR-115 D3a's 40
+/// megapixels.
+pub const DEFAULT_MAX_ATTACHMENT_PIXELS: u64 = 40_000_000;
+
 impl Default for OAuthConfig {
     fn default() -> Self {
         OAuthConfig {
@@ -262,6 +288,9 @@ impl Default for OAuthConfig {
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
             site_title: std::collections::BTreeMap::new(),
+            attachments_enabled: false,
+            max_attachment_bytes: DEFAULT_MAX_ATTACHMENT_BYTES,
+            max_attachment_pixels: DEFAULT_MAX_ATTACHMENT_PIXELS,
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,
