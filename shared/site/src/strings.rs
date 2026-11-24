@@ -31,6 +31,10 @@ pub struct Strings {
     pub palette_menu: &'static str,
     /// The first item of a palette's accent submenu: its default (P-94).
     pub accent_default: &'static str,
+    /// The explorer's accessible name: the list of every page (P-39).
+    pub explorer: &'static str,
+    /// The explorer's group of pages that have no tag (Amendment 3).
+    pub untagged: &'static str,
     /// The accents' names, by the palette package's swatch id (P-94). Colour
     /// words, so translated; the palettes' own names are proper names (A4).
     pub accents: &'static [(&'static str, &'static str)],
@@ -46,6 +50,8 @@ const EN_US: Strings = Strings {
     mode_toggle: "Dark mode",
     palette_menu: "Color palette",
     accent_default: "Default",
+    explorer: "Pages",
+    untagged: "Untagged",
     accents: &[
         ("red", "Red"),
         ("orange", "Orange"),
@@ -68,6 +74,8 @@ const FR_FR: Strings = Strings {
     mode_toggle: "Mode sombre",
     palette_menu: "Palette de couleurs",
     accent_default: "Par d\u{e9}faut",
+    explorer: "Pages",
+    untagged: "Sans \u{e9}tiquette",
     accents: &[
         ("red", "Rouge"),
         ("orange", "Orange"),
@@ -91,6 +99,8 @@ const ES_ES: Strings = Strings {
     mode_toggle: "Modo oscuro",
     palette_menu: "Paleta de colores",
     accent_default: "Predeterminado",
+    explorer: "P\u{e1}ginas",
+    untagged: "Sin etiqueta",
     accents: &[
         ("red", "Rojo"),
         ("orange", "Naranja"),
@@ -113,6 +123,8 @@ const EO: Strings = Strings {
     mode_toggle: "Malhela re\u{11d}imo",
     palette_menu: "Kolorpaletro",
     accent_default: "Defa\u{16d}lta",
+    explorer: "Pa\u{11d}oj",
+    untagged: "Sen etikedo",
     accents: &[
         ("red", "Ru\u{11d}a"),
         ("orange", "Oran\u{11d}a"),
@@ -199,6 +211,8 @@ mod tests {
             mode_toggle,
             palette_menu,
             accent_default,
+            explorer,
+            untagged,
             accents,
         } = *s;
         let mut out: Vec<(String, &'static str)> = [
@@ -210,6 +224,8 @@ mod tests {
             ("mode_toggle", mode_toggle),
             ("palette_menu", palette_menu),
             ("accent_default", accent_default),
+            ("explorer", explorer),
+            ("untagged", untagged),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -220,7 +236,8 @@ mod tests {
 
     /// Each other locale changes every string relative to en-US, except the
     /// ones declared here as the same in both languages: colour words the
-    /// languages share, and eo's closing quotation mark, which is en-US's.
+    /// languages share, fr-FR's "Pages", and eo's closing quotation mark,
+    /// which is en-US's.
     /// A declared exception that differs fails too, so the list stays true.
     #[test]
     fn every_other_locale_changes_every_string_it_really_translates() {
@@ -228,6 +245,7 @@ mod tests {
             (
                 "fr-FR",
                 &[
+                    "explorer",
                     "accent orange",
                     "accent cyan",
                     "accent violet",

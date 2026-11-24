@@ -544,6 +544,8 @@ Source: `shared/site/src/lib.rs`
 | `address` | mod |
 | `assets` | mod |
 | `derive` | mod |
+| `explorer` | mod |
+| `order` | mod |
 | `sanitize` | mod |
 | `strings` | mod |
 

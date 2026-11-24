@@ -17,3 +17,5 @@ rust-version.workspace = true
 mae-org = { path = "../org" }
 # ADR-119 D18/D19: the one allow-list sanitiser for content and components.
 ammonia = "4"
+# ADR-119 Amendment 3: A-to-Z order ignoring case and accents (NFD).
+unicode-normalization = "0.1"
