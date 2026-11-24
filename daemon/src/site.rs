@@ -410,7 +410,8 @@ pub fn document<'a>(
     let chrome = chrome.into();
     let words = Words::of(chrome.lang);
     let article = format!(
-        "<article id=\"mae-article\"><h1>{}</h1>{}{article}</article>",
+        "<article id=\"mae-article\"{}><h1>{}</h1>{}{article}</article>",
+        copy_words(&words),
         escape(title),
         tags_list(&words, tags),
     );
@@ -421,6 +422,25 @@ pub fn document<'a>(
         backlinks_nav(&words, backlinks)
     );
     shell(chrome, title, &article, &panels, explorer)
+}
+
+/// The words the router's copy control needs (P-109), on the article that
+/// holds the source blocks, for the behaviour to read as the theme box's are
+/// read: core chrome, never content. On a fallback the behaviour marks each
+/// button with the catalogue's locale (`data-copy-lang`), since the article
+/// itself holds content in the page's language.
+fn copy_words(words: &Words) -> String {
+    let lang = if words.mark.is_empty() {
+        String::new()
+    } else {
+        format!(" data-copy-lang=\"{}\"", escape(words.s.locale))
+    };
+    format!(
+        " data-copy-label=\"{}\" data-copy-done=\"{}\" data-copy-selected=\"{}\"{lang}",
+        escape(words.s.copy_code),
+        escape(words.s.code_copied),
+        escape(words.s.code_selected),
+    )
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the

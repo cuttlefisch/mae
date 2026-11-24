@@ -241,8 +241,8 @@ mod tests {
                     .and_then(|v| v.strip_suffix(')'))
                     .unwrap_or_else(|| panic!("{prop}: {value}: not a palette token"));
                 assert!(
-                    token.starts_with("--ui-"),
-                    "{prop}: {token}: not a page token"
+                    token.starts_with("--ui-") || token.starts_with("--code-"),
+                    "{prop}: {token}: not a page or code token"
                 );
                 assert!(
                     PALETTE_CSS.contains(&format!("{token}:")),
@@ -251,6 +251,26 @@ mod tests {
             }
         }
         assert!(coloured >= 6, "the page, its text, links and panels");
+        // P-106: each token role is coloured by its own palette token, and
+        // the block by the code background and text.
+        for role in crate::CodeRole::ALL {
+            let class = role.class();
+            let token = class.trim_start_matches("org-");
+            assert!(
+                code.contains(&format!(".{class} {{\n  color: var(--{token});\n}}")),
+                "{class} is not coloured by --{token}"
+            );
+        }
+        for decl in [
+            "background: var(--code-background);",
+            "color: var(--code-text);",
+            "overflow-x: auto;",
+            "white-space: pre;",
+        ] {
+            let rule = code.split("pre.org-src {").nth(1).unwrap_or_default();
+            let rule = rule.split('}').next().unwrap_or_default();
+            assert!(rule.contains(decl), "pre.org-src lacks {decl}");
+        }
         for rule in ["a:link", "a:visited", "body", ":root[data-mode=\"dark\"]"] {
             assert!(code.contains(rule), "{rule} has no rule");
         }

@@ -35,6 +35,14 @@ pub struct Strings {
     pub explorer: &'static str,
     /// The explorer's group of pages that have no tag (Amendment 3).
     pub untagged: &'static str,
+    /// The copy control on each source block (P-109): its text and
+    /// accessible name.
+    pub copy_code: &'static str,
+    /// Announced when the clipboard took a block's text.
+    pub code_copied: &'static str,
+    /// Announced when, with no clipboard, the block's text was selected for
+    /// the reader to copy.
+    pub code_selected: &'static str,
     /// The accents' names, by the palette package's swatch id (P-94). Colour
     /// words, so translated; the palettes' own names are proper names (A4).
     pub accents: &'static [(&'static str, &'static str)],
@@ -52,6 +60,9 @@ const EN_US: Strings = Strings {
     accent_default: "Default",
     explorer: "Pages",
     untagged: "Untagged",
+    copy_code: "Copy code",
+    code_copied: "Code copied",
+    code_selected: "Code selected, ready to copy",
     accents: &[
         ("red", "Red"),
         ("orange", "Orange"),
@@ -76,6 +87,9 @@ const FR_FR: Strings = Strings {
     accent_default: "Par d\u{e9}faut",
     explorer: "Pages",
     untagged: "Sans \u{e9}tiquette",
+    copy_code: "Copier le code",
+    code_copied: "Code copi\u{e9}",
+    code_selected: "Code s\u{e9}lectionn\u{e9}, pr\u{ea}t \u{e0} copier",
     accents: &[
         ("red", "Rouge"),
         ("orange", "Orange"),
@@ -101,6 +115,9 @@ const ES_ES: Strings = Strings {
     accent_default: "Predeterminado",
     explorer: "P\u{e1}ginas",
     untagged: "Sin etiqueta",
+    copy_code: "Copiar el c\u{f3}digo",
+    code_copied: "C\u{f3}digo copiado",
+    code_selected: "C\u{f3}digo seleccionado, listo para copiar",
     accents: &[
         ("red", "Rojo"),
         ("orange", "Naranja"),
@@ -125,6 +142,9 @@ const EO: Strings = Strings {
     accent_default: "Defa\u{16d}lta",
     explorer: "Pa\u{11d}oj",
     untagged: "Sen etikedo",
+    copy_code: "Kopii la kodon",
+    code_copied: "Kodo kopiita",
+    code_selected: "Kodo elektita, preta por kopii",
     accents: &[
         ("red", "Ru\u{11d}a"),
         ("orange", "Oran\u{11d}a"),
@@ -213,6 +233,9 @@ mod tests {
             accent_default,
             explorer,
             untagged,
+            copy_code,
+            code_copied,
+            code_selected,
             accents,
         } = *s;
         let mut out: Vec<(String, &'static str)> = [
@@ -226,6 +249,9 @@ mod tests {
             ("accent_default", accent_default),
             ("explorer", explorer),
             ("untagged", untagged),
+            ("copy_code", copy_code),
+            ("code_copied", code_copied),
+            ("code_selected", code_selected),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

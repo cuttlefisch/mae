@@ -300,6 +300,62 @@ body {
   transform: rotate(45deg);
 }
 
+/* Source blocks (ADR-119 D12; P-106, P-108, P-110). The block takes the
+   palette's code colours; each highlighted token (a span the derivation
+   writes, never an inline style) its role's. A plain block is the same box
+   with no tokens. Long lines scroll inside the block, never the page, and
+   never wrap: what is shown is what is copied. */
+pre.org-src {
+  background: var(--code-background);
+  color: var(--code-text);
+  overflow-x: auto;
+  white-space: pre;
+  padding: 0.5rem 0.75rem;
+}
+
+.org-code-comment {
+  color: var(--code-comment);
+}
+
+.org-code-string {
+  color: var(--code-string);
+}
+
+.org-code-number {
+  color: var(--code-number);
+}
+
+.org-code-constant {
+  color: var(--code-constant);
+}
+
+.org-code-keyword {
+  color: var(--code-keyword);
+}
+
+.org-code-operator {
+  color: var(--code-operator);
+}
+
+.org-code-function {
+  color: var(--code-function);
+}
+
+.org-code-type {
+  color: var(--code-type);
+}
+
+.org-code-variable {
+  color: var(--code-variable);
+}
+
+/* The copy control the router puts before each source block (P-109). */
+.mae-copy {
+  display: block;
+  margin: 0.5rem 0 0.25rem auto;
+  font: inherit;
+}
+
 /* Announcements for screen readers (the router's live region): present for
    assistive technology, invisible on screen. */
 .mae-visually-hidden {

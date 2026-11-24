@@ -214,3 +214,34 @@ fn a_plain_block_log_line_is_bounded_and_escaped() {
         assert!(!l.contains('\n') && !l.contains('\r'), "{l:?}");
     }
 }
+
+/// P-109: the article carries the copy control's words in the page's
+/// locale, for the router's behaviour; on a fallback it says which locale
+/// they are in, so the buttons can be marked.
+#[test]
+fn the_article_carries_the_copy_controls_words() {
+    for locale in ["en-US", "fr-FR", "es-ES", "eo", "pt-BR"] {
+        let (words, fell_back) = mae_site::strings::resolve(locale);
+        let html = mae_daemon::site::document(locale, "T", "<p>x</p>", &[], &[], &[], None);
+        let article = html
+            .split_once("<article id=\"mae-article\"")
+            .and_then(|(_, a)| a.split_once('>'))
+            .map(|(attrs, _)| attrs)
+            .expect("an article");
+        for (name, value) in [
+            ("data-copy-label", words.copy_code),
+            ("data-copy-done", words.code_copied),
+            ("data-copy-selected", words.code_selected),
+        ] {
+            assert!(
+                article.contains(&format!("{name}=\"{value}\"")),
+                "{locale}: {article}"
+            );
+        }
+        assert_eq!(
+            article.contains("data-copy-lang=\"en-US\""),
+            fell_back,
+            "{locale}: {article}"
+        );
+    }
+}
