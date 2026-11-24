@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.191] - 2026-11-24
+
+
+
+
+### Features
+
+- *(site)* Slot-component engine for operator components ([2c6b046](https://github.com/cuttlefisch/mae/commit/2c6b046f1cba742358195957cb9b3d1964cf1f13))
+- *(site)* Example slot components and the engine's tests ([19ef940](https://github.com/cuttlefisch/mae/commit/19ef940a9af40472893e62e6dccae1ffea52fce1))
+- *(daemon)* Load each KB's slot components at startup ([d7f3711](https://github.com/cuttlefisch/mae/commit/d7f3711b297e5fec2d25c7a01e8b9f18a39ddebc))
+- *(site)* Render slot components into the live site's shell ([d7d018e](https://github.com/cuttlefisch/mae/commit/d7d018efd22ac03e492a1e1c9ed6939d29c71e11))
+- *(site)* Serve component assets by hash and component pages under /site/ ([db4ada0](https://github.com/cuttlefisch/mae/commit/db4ada04f19bd64cc4395ea1a4518ea06302b72d))
+- *(router)* One behaviour API, mae.site.register({id, init(ctx)}) ([a05cd36](https://github.com/cuttlefisch/mae/commit/a05cd36c68704c86c6180c0dfa6026ba9272728a))
+
+### Bug Fixes
+
+- *(site)* Review findings on slot components: KB changes, property size, typo'd KB IDs ([b97bf18](https://github.com/cuttlefisch/mae/commit/b97bf1856af430e0a2100542bf5adf2f3e8d40df))
+
+### Refactor
+
+- *(site)* List pages under their tags inline again ([b466dfc](https://github.com/cuttlefisch/mae/commit/b466dfc6c736db96d7e18becba6156147f643c9b))
+
+### Documentation
+
+- *(adr-119)* Amendment 4, where the live app's slot components come from ([d9075df](https://github.com/cuttlefisch/mae/commit/d9075df9a768599888016399a2e9fd40af6535cf))
+- *(adr-119)* H1, what a component may ask about other nodes, and its classes ([fb31b23](https://github.com/cuttlefisch/mae/commit/fb31b231f093a84a3dc169ed055bac3e3dfd60fa))
+- *(adr-119)* H3 records one behaviour API; copy link works without scripts ([e12bb2a](https://github.com/cuttlefisch/mae/commit/e12bb2a2945d715aa61748c70259d0479265d254))
+- *(adr-119)* H1 refuses startup as an invalid tenant does, not a TLS path ([d52e152](https://github.com/cuttlefisch/mae/commit/d52e152e509b7654641bd1c0398a747e7c618ed0))
+- *(adr-119)* H1 says which check warns instead of refusing, and why ([c0a23ee](https://github.com/cuttlefisch/mae/commit/c0a23ee8d7bc105ebbf94db723045735ca7c077f))
+
+### Testing
+
+- *(site)* Declared mutants for the component sanitiser and render bounds ([eb5bb3b](https://github.com/cuttlefisch/mae/commit/eb5bb3b6cf62bcf00137cc3c0247c8470b19e535))
+- *(site)* Declared mutants for the live site's component wiring ([a9e5bdb](https://github.com/cuttlefisch/mae/commit/a9e5bdb65c3abee09cfcdc37c61444e8255ea4bd))
+- *(site)* The palette-menu fixture in fr-FR, and a bless switch to regenerate it ([f0715c2](https://github.com/cuttlefisch/mae/commit/f0715c2e75c824c3c2fe5cecef7282a4f6d8393b))
+- *(mutants)* The body-bound mutant anchors on the bound that now covers properties too ([14d3d69](https://github.com/cuttlefisch/mae/commit/14d3d693354a511d06bdc3d8a861449e53e60131))
+
 ## [0.14.190] - 2026-11-24
 
 
@@ -21,6 +58,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr-119)* D12 carries all 21 grammars, at the measured size ([37365dd](https://github.com/cuttlefisch/mae/commit/37365ddf0029aeac2ffc3512319c6f27c9c2eff5))
+
+### Miscellaneous
+
+- Bump version to 0.14.190 ([3782b28](https://github.com/cuttlefisch/mae/commit/3782b287a1cda5639ac434315c2bbfcdb57dbcd1))
 
 ## [0.14.189] - 2026-11-24
 
