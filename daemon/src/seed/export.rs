@@ -17,7 +17,8 @@
 //! `node_from_file` of the re-split file) must equal the node itself, every
 //! field of [`MaterializedNode`]: a node carrying something the file cannot
 //! (an `aliases` array, a todo state, a priority, links, a source version, a
-//! `kind` that is not its `KIND` property) is refused naming those fields
+//! `kind` that is not its `KIND` property, an `attachments` map until ADR-115
+//! P4 exports the files) is refused naming those fields
 //! (`unrepresentable`), never written without them. Three fields are exempt,
 //! because the seed sets them by definition rather than reading them from the
 //! file: `source` (always `user_org`), `created_at` (from git history, kept in
@@ -390,6 +391,7 @@ fn differing_fields(a: &MaterializedNode, b: &MaterializedNode) -> Vec<&'static 
         source,
         created_at,
         org_header,
+        attachments,
     } = a;
     [
         ("id", *id != b.id),
@@ -406,6 +408,7 @@ fn differing_fields(a: &MaterializedNode, b: &MaterializedNode) -> Vec<&'static 
         ("source", *source != b.source),
         ("created_at", *created_at != b.created_at),
         ("org_header", *org_header != b.org_header),
+        ("attachments", *attachments != b.attachments),
     ]
     .into_iter()
     .filter(|(_, differs)| *differs)
@@ -425,6 +428,9 @@ fn unrepresented_detail(fields: &[&str]) -> String {
     }
     if fields.contains(&"kind") {
         out.push_str(" (the kind is the KIND property's value)");
+    }
+    if fields.contains(&"attachments") {
+        out.push_str(" (exporting attachment files is not built yet, ADR-115 P4)");
     }
     out
 }

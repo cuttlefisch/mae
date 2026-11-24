@@ -10,6 +10,9 @@
 //!   `mae_sync::kb::aliases` — in an `org-literal-v1` KB derived from the
 //!   `ROAM_ALIASES` property, elsewhere the node's array — plus
 //!   `aliases_problems` (strings) when that value could not be read cleanly.
+//! - `attachments`: the node's attachments map (ADR-115 D4), NAME to
+//!   `{sha256, size, media_type}`, `{}` when it has none. Only entries the
+//!   tolerant reader accepts; a client fetches each blob by its hash.
 //! - `created_at` and `modified_at`: RFC 3339 UTC, or null when unknown, with
 //!   `modified_at_basis` saying where `modified_at` came from and, when the edit
 //!   record could not be used, `modified_at_note` saying why.
@@ -71,6 +74,7 @@ pub(crate) fn content_fields(
             "has_filetags_line": h.has_filetags_line,
         })),
         "tags": n.tags,
+        "attachments": n.attachments,
         "created_at": n.created_at.map(rfc3339::utc),
     });
     let fields = m.as_object_mut().expect("an object literal");
