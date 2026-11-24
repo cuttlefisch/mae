@@ -29,7 +29,8 @@ impl CozoKbStore {
     }
 
     /// The body of [`KbStore::insert_node`]: the node row, its link
-    /// replacement and its meta-member replacement in one write transaction,
+    /// replacement, its meta-member replacement and its attachment-row
+    /// replacement (ADR-115 D4) in one write transaction,
     /// retried as a whole on SQLite busy contention. Derived rows are computed
     /// with the same parsers the separate `update_*_for_node` helpers use, so
     /// what is stored does not change — only that it is stored together.
@@ -65,6 +66,10 @@ impl CozoKbStore {
         let mut params = node_params;
         params.insert("link_rows".into(), DataValue::List(link_rows));
         params.insert("member_rows".into(), DataValue::List(member_rows));
+        params.insert(
+            "attachment_rows".into(),
+            DataValue::List(Self::attachment_rows(node)),
+        );
         // One script, one transaction (cozo runs the `{…}` blocks of a chained
         // script atomically). Deliberately NOT `DbInstance::multi_transaction`:
         // its commit replies before its background task releases the connection
@@ -73,12 +78,14 @@ impl CozoKbStore {
         // then saw "database is locked".
         #[allow(unused_mut)]
         let mut script = format!(
-            "{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}",
+            "{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}",
             Self::NODE_PUT_SCRIPT,
             Self::LINKS_FROM_RM_SCRIPT,
             Self::LINK_BULK_SCRIPT.replace("$rows", "$link_rows"),
             Self::META_MEMBERS_RM_SCRIPT,
             Self::META_MEMBER_BULK_SCRIPT.replace("$rows", "$member_rows"),
+            Self::ATTACHMENTS_RM_SCRIPT,
+            Self::ATTACHMENTS_BULK_SCRIPT.replace("$rows", "$attachment_rows"),
         );
         #[cfg(test)]
         if super::test_hooks::fail_after_node_row() {

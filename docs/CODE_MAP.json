@@ -943,6 +943,10 @@
           "kind": "struct"
         },
         {
+          "name": "NodeAttachment",
+          "kind": "struct"
+        },
+        {
           "name": "compute_code_block_ranges",
           "kind": "fn"
         },

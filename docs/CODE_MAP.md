@@ -376,6 +376,7 @@ Source: `shared/kb/src/lib.rs`
 | `SubgraphResult` | struct |
 | `NodeSource` | enum |
 | `Node` | struct |
+| `NodeAttachment` | struct |
 | `compute_code_block_ranges` | fn |
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |
