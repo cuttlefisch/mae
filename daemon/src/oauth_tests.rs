@@ -706,6 +706,10 @@ mod tests {
             Some(("k".into(), View::Index))
         );
         assert_eq!(
+            site_path("/kb/k/explorer.json"),
+            Some(("k".into(), View::Explorer))
+        );
+        assert_eq!(
             site_path("/kb/k/tags/a%23b"),
             Some(("k".into(), View::Tag("a#b".into())))
         );
@@ -789,6 +793,7 @@ mod tests {
             backlinks: vec![],
             tags: vec![],
             toc: vec![],
+            explorer: None,
         };
         assert!(parts(site_answer(found, titled))
             .await

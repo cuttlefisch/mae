@@ -2893,6 +2893,7 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "mae-org",
+ "unicode-normalization",
 ]
 
 [[package]]

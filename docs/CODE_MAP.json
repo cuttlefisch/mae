@@ -1399,6 +1399,14 @@
           "kind": "mod"
         },
         {
+          "name": "explorer",
+          "kind": "mod"
+        },
+        {
+          "name": "order",
+          "kind": "mod"
+        },
+        {
           "name": "sanitize",
           "kind": "mod"
         },

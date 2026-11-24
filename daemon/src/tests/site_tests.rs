@@ -156,7 +156,7 @@ async fn a_hostile_body_or_title_reaches_the_reader_inert() {
     else {
         panic!("the page publishes, inert");
     };
-    let doc = site::document("en-US", &title, &html, &[], &[], &[]);
+    let doc = site::document("en-US", &title, &html, &[], &[], &[], None);
     // The page's two scripts are the core's pre-paint script (D17) and its
     // router (D16); remove exactly those tags, and nothing script-like may
     // remain.
@@ -235,7 +235,7 @@ async fn a_body_declaring_another_pages_id_never_serves_at_its_address() {
 
 #[test]
 fn a_page_links_the_palette_by_its_content_addressed_name() {
-    let html = site::document("en-US", "T", "<p>x</p>", &[], &[], &[]);
+    let html = site::document("en-US", "T", "<p>x</p>", &[], &[], &[], None);
     let href = mae_site::assets::href(mae_site::assets::PALETTE);
     assert!(
         html.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
@@ -301,6 +301,7 @@ fn fixture_page(lang: &str, fixture: &str) {
         &[],
         &[],
         &[],
+        None,
     );
     for asset in mae_site::assets::ALL {
         let (stem, ext) = asset.name.rsplit_once('.').expect("name.ext");
@@ -321,7 +322,7 @@ fn fixture_page(lang: &str, fixture: &str) {
 fn the_theme_controls_are_in_the_header_in_the_locales_words() {
     for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
         let words = mae_site::strings::for_locale(locale);
-        let html = site::document(locale, "T", "<p>x</p>", &[], &[], &[]);
+        let html = site::document(locale, "T", "<p>x</p>", &[], &[], &[], None);
         let (before_main, after) = html.split_once("<main").expect("a main landmark");
         assert!(!after.contains("mae-theme"), "{html}");
         let header = before_main
@@ -385,13 +386,13 @@ async fn a_page_lists_its_backlinks_in_the_configured_locale_and_escapes_them() 
         panic!("target publishes");
     };
     assert_eq!(backlinks.len(), 1);
-    let en = site::document("en-US", &title, &html, &backlinks, &[], &[]);
+    let en = site::document("en-US", &title, &html, &backlinks, &[], &[], None);
     assert!(
         en.contains(r#"<a href="/kb/kb-bl/from">&lt;b&gt;From&lt;/b&gt; &amp; co</a>"#),
         "{en}"
     );
     assert!(en.contains(mae_site::strings::for_locale("en-US").backlinks));
-    let fr = site::document("fr-FR", &title, &html, &backlinks, &[], &[]);
+    let fr = site::document("fr-FR", &title, &html, &backlinks, &[], &[], None);
     assert!(fr.contains(mae_site::strings::for_locale("fr-FR").backlinks));
     assert!(!fr.contains(mae_site::strings::for_locale("en-US").backlinks));
 }
@@ -413,7 +414,7 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
         let s = store2.clone();
         async move { site::view(&s, "kb-tags", &v, Some(READER), LIMITS, &Default::default()).await }
     };
-    let SitePage::Listing { kind, items } = view(site::View::Tags).await else {
+    let SitePage::Listing { kind, items, .. } = view(site::View::Tags).await else {
         panic!("the tag index");
     };
     assert_eq!(kind, site::Listing::Tags);
@@ -450,12 +451,13 @@ async fn the_tag_index_and_a_tag_page_list_what_the_kb_tags() {
     else {
         panic!("page a");
     };
-    let doc = site::document("en-US", &title, &html, &[], &tags, &[]);
+    let doc = site::document("en-US", &title, &html, &[], &tags, &[], None);
     assert!(
         doc.contains(r#"<a href="/kb/kb-tags/tags/only_a">only_a</a>"#),
         "{doc}"
     );
-    let listing = site::listing_document("fr-FR", &site::Listing::Tag("shared".into()), &items);
+    let listing =
+        site::listing_document("fr-FR", &site::Listing::Tag("shared".into()), &items, None);
     assert!(
         listing.contains("lang=\"fr-FR\"") && listing.contains("shared"),
         "{listing}"
@@ -485,7 +487,7 @@ async fn a_page_with_two_headings_has_a_toc_linking_to_their_anchors() {
         panic!("two");
     };
     assert_eq!(toc.len(), 2);
-    let doc = site::document("en-US", &title, &html, &[], &[], &toc);
+    let doc = site::document("en-US", &title, &html, &[], &[], &toc, None);
     assert!(
         doc.contains(r#"<nav id="mae-toc" aria-labelledby="mae-toc-h">"#),
         "{doc}"
@@ -510,7 +512,7 @@ async fn a_page_with_two_headings_has_a_toc_linking_to_their_anchors() {
     else {
         panic!("one");
     };
-    assert!(!site::document("en-US", &title, &html, &[], &[], &toc).contains("mae-toc"));
+    assert!(!site::document("en-US", &title, &html, &[], &[], &toc, None).contains("mae-toc"));
 }
 
 #[tokio::test]
@@ -629,7 +631,7 @@ fn the_side_panels_sit_outside_the_main_landmark() {
         title: "X".into(),
         href: "/kb/k/x".into(),
     }];
-    let doc = site::document("en-US", "T", "<p>body</p>", &backlinks, &[], &toc);
+    let doc = site::document("en-US", "T", "<p>body</p>", &backlinks, &[], &toc, None);
     assert_eq!(doc.matches("<main").count(), 1);
     let (main, after) = doc.split_once("</main>").expect("a main landmark");
     assert!(main.contains("mae-article") && main.contains("<p>body</p>"));
@@ -639,7 +641,7 @@ fn the_side_panels_sit_outside_the_main_landmark() {
     }
     assert!(after.starts_with("<aside id=\"mae-panels\">"));
     // A page with no panels has no empty aside.
-    assert!(!site::document("en-US", "T", "<p>b</p>", &[], &[], &[]).contains("<aside"));
+    assert!(!site::document("en-US", "T", "<p>b</p>", &[], &[], &[], None).contains("<aside"));
 }
 
 /// The fixture's files as `kb seed` writes them: each through the seed's own
@@ -764,8 +766,8 @@ fn the_site_title_heads_every_page_outside_main() {
         site: Some(("Parity <fixture>", "/kb/parity-fixture/")),
     };
     for doc in [
-        site::document(chrome, "Page & co", "<p>x</p>", &[], &[], &[]),
-        site::listing_document(chrome, &site::Listing::Tags, &[]),
+        site::document(chrome, "Page & co", "<p>x</p>", &[], &[], &[], None),
+        site::listing_document(chrome, &site::Listing::Tags, &[], None),
     ] {
         assert!(
             doc.contains("\u{2014} Parity &lt;fixture&gt;</title>"),
@@ -779,7 +781,7 @@ fn the_site_title_heads_every_page_outside_main() {
         assert!(before_main[at..].ends_with("</header>"), "{doc}");
         assert!(!after.contains("mae-header"), "{doc}");
     }
-    let bare = site::document("en-US", "Page", "<p>x</p>", &[], &[], &[]);
+    let bare = site::document("en-US", "Page", "<p>x</p>", &[], &[], &[], None);
     assert!(bare.contains("<title>Page</title>"), "{bare}");
     let (head_of_body, _) = bare.split_once("<main").expect("a main landmark");
     assert!(
@@ -850,6 +852,8 @@ fn en_us_strings() -> Vec<&'static str> {
         w.mode_toggle,
         w.palette_menu,
         w.accent_default,
+        w.explorer,
+        w.untagged,
     ];
     all.extend(w.accents.iter().map(|(_, n)| *n));
     all
@@ -883,6 +887,10 @@ fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
     }];
     let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
     let items = vec![("kappa page".to_string(), "/kb/k/kappa".to_string())];
+    let explorer = site::ExplorerRef {
+        src: "/kb/k/explorer.json".into(),
+        version: "0123456789abcdef".into(),
+    };
     let pages = [
         site::document(
             "xx-YY",
@@ -891,9 +899,15 @@ fn a_fallback_page_marks_its_chrome_en_us_and_keeps_the_configured_lang() {
             &backlinks,
             &tags,
             &toc,
+            Some(&explorer),
         ),
-        site::listing_document("xx-YY", &site::Listing::Tags, &tags),
-        site::listing_document("xx-YY", &site::Listing::Tag("iota".into()), &items),
+        site::listing_document("xx-YY", &site::Listing::Tags, &tags, Some(&explorer)),
+        site::listing_document(
+            "xx-YY",
+            &site::Listing::Tag("iota".into()),
+            &items,
+            Some(&explorer),
+        ),
     ];
     let en = en_us_strings();
     let mut seen: Vec<&str> = Vec::new();
@@ -933,8 +947,8 @@ fn a_catalogued_locale_marks_nothing() {
     let tags = vec![("iota".to_string(), "/kb/k/tags/iota".to_string())];
     for locale in ["en-US", "fr-FR", "es-ES", "eo"] {
         let pages = [
-            site::document(locale, "T", "<p>x</p>", &[], &tags, &[]),
-            site::listing_document(locale, &site::Listing::Tag("iota".into()), &tags),
+            site::document(locale, "T", "<p>x</p>", &[], &tags, &[], None),
+            site::listing_document(locale, &site::Listing::Tag("iota".into()), &tags, None),
         ];
         for page in pages {
             assert_eq!(page.matches(" lang=").count(), 1, "{locale}: {page}");
@@ -953,7 +967,7 @@ fn a_catalogued_locale_marks_nothing() {
 /// reads, pinned as written rather than read back from the catalogue.
 #[test]
 fn the_theme_box_carries_the_es_es_labels() {
-    let html = site::document("es-ES", "T", "<p>x</p>", &[], &[], &[]);
+    let html = site::document("es-ES", "T", "<p>x</p>", &[], &[], &[], None);
     let box_ = html
         .split_once(r#"<div id="mae-theme""#)
         .expect("the box")

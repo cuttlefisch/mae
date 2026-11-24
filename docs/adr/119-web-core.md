@@ -4,7 +4,8 @@
 first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
 `GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
 Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
-where its home page comes from, and the retirement of ADR-073's view. Spikes
+where its home page comes from, and the retirement of ADR-073's view; Amendment 3 (2026-11-24) the
+live explorer and who may list a KB. Spikes
 C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
 C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
 X1, below).
@@ -764,6 +765,62 @@ is deprecated: accepted and ignored, with a startup warning, for one minor relea
 Rejected: reserving `view` under A3 (two renderers of one KB, and an ID withheld for an old path), and
 moving the view to another path (a breaking change that keeps the second renderer).
 
+## Amendment 3 (2026-11-24): the live explorer, and who may list a KB
+
+B1 left the live explorer's grouping to its slice of L1a. Building it decided the following; G1 and G2
+are the owner's.
+
+### G1. The explorer groups pages by tag *(owner, 2026-11-24)*
+
+- One group per tag, in the tag index's order, each listing its pages A to Z (G3). A page with several
+  tags is in each of their groups; a page with none is in an "untagged" group, once. Every published page
+  is listed at least once.
+- Its data is a reserved address, `/kb/<kb-id>/explorer.json` (A3, P-166), derived by the core
+  (`mae_site::explorer`). Each page names it in an empty, `hidden` box between the header and `main`,
+  with the version it was derived with (the first 16 hex digits of the payload's SHA-256). The router
+  keeps the box across navigations and fetches again only when a page names another version, so the
+  list loads once per change, as D6 asks.
+- It is served `private, no-store` like every other live answer, not D7's `private, immutable`: the
+  version in the page already saves the refetch, and nothing outlives a revocation in the browser's
+  cache.
+- Rejected: a flat A-to-Z list (one list of hundreds on a large KB); grouping by node kind (ADR-114;
+  in most KBs nearly every page is a `note`, so it would be one group); an operator setting per KB (a
+  mode per KB to build and test, for a choice nobody has asked to vary).
+
+### G2. A query-only member is refused the KB's content in bulk, not its titles *(owner, 2026-11-24)*
+
+- ADR-067 withholds a durable bulk copy of a KB's **content** (its precedents are Confluence's "Export
+  Space" and Drive's "disable download"), not its titles. The content index (`index.json`) holds every
+  page's text, so a query-only member is refused it, with the one not-found (A5). Before this it was
+  served to them; that is fixed here.
+- The explorer, the tag index and tag pages hold titles only, and a query-only member gets them as any
+  reader does. `kb/query.titles`, `kb/query.list` and `kb/query.graph` already give every reader all
+  titles, deliberately (they give query-only members backlinks and a graph view), so refusing them on
+  the site would withhold nothing.
+- **This reverses the owner's first choice the same morning** (no explorer for a query-only member,
+  following D7's list, which named the explorer payload as a bulk asset). An independent review found
+  the RPC path above; with that evidence the owner chose to refuse content only. D7's list is read
+  accordingly: search shards hold content and stay refused; the explorer and the graph's edge list hold
+  titles and links, which the query surface already serves.
+- The gate is `kb_query::may_copy_whole_kb`: a member whose replication policy is `Full`, read from
+  `member_role`, the lookup `kb_access` decides on, on every request. A restriction applied while a
+  member reads takes the content index away at their next request; lifting it gives it back.
+- **Residual, accepted:** a query-only member can still read every page they can reach, one request
+  at a time, by following links and the explorer. That is ADR-067's own stated limit: it stops the
+  default path to a bulk copy, not a client that reads everything it is allowed to read live.
+
+### G3. A to Z means a reader's order
+
+Every list of titles or tags (tag index, tag pages, explorer) sorts by the text decomposed (NFD), with
+its combining marks dropped, in lower case, then by the text itself (`mae_site::order`). Bytes had put
+every capital before every lower-case letter and every accented initial after "z". This is close to
+CLDR's root collation at its first level for Latin script, not a language's tailoring: es-ES orders "ñ"
+as a letter after "n", and this orders it with "n". A tailored collation is left for when a reader
+asks for it.
+
+The two new catalogue strings (the explorer's name and the untagged group) join A4's catalogues in all
+four locales; `eo`'s await the same speaker's review as the rest of its strings.
+
 ## Amendments this needs
 
 - **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. Amendment 2 B4 retires
@@ -774,7 +831,8 @@ moving the view to another path (a breaking change that keeps the second rendere
   published view is derived from published revisions only (V9), and that publication events write
   change-index rows.
 - **ADR-074 Amendment 1, C2 and C4:** notices, cursors and ETags are scoped per view.
-- **ADR-067:** query-only members are refused the bulk derived assets (D7).
+- **ADR-067:** query-only members are refused the bulk derived assets that hold content (D7, read as
+  Amendment 3 G2 reads it), not those that hold titles.
 - **ADR-053:** its search caps stay the only search surface for query-only members. Full members get
   search shards, which hold nothing they could not already read.
 - **ADR-111 and ADR-052:** how the live app authenticates page loads (D16): an unauthenticated shell,

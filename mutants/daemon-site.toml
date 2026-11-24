@@ -82,3 +82,57 @@ filter = "test(a_refusal_never_carries_the_site_title)"
 file = "daemon/src/oauth.rs"
 find = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),'''
 replace = '''        SitePage::NotFound => site_response(StatusCode::NOT_FOUND, format!("not found {:?}", chrome.site)),'''
+
+# The copy gate (ADR-119 D7, Amendment 3 G2): a query-only member is refused
+# the content index (every page's text) and nothing else. Tests: daemon/src/
+# tests/site_copy_gate_tests.rs, on a real signed op-log. Not declared:
+# admitting a non-member to the gate, which load_gated already refuses before
+# it is asked (defence in depth, invisible to any route test).
+
+[[mutant]]
+id = "daemon-site/copy-gate-always-open"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_everything_but_the_content_index)"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''    let Some(principal) = principal else {
+        return true;
+    };
+    matches!('''
+replace = '''    let Some(principal) = principal else {
+        return true;
+    };
+    true || matches!('''
+
+[[mutant]]
+id = "daemon-site/copy-gate-ignores-replication"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(restricting_a_member_takes_the_content_away_and_lifting_it_gives_it_back)"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''        (Some(_), membership::ReplicationPolicy::Full)'''
+replace = '''        (Some(_), _)'''
+
+[[mutant]]
+id = "daemon-site/content-index-unguarded"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_everything_but_the_content_index)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        View::Index if !may_copy => SitePage::NotFound,'''
+replace = '''        View::Index if false && !may_copy => SitePage::NotFound,'''
+
+# The other direction: titles refused to a query-only member, which G2 decided
+# against (kb/query.titles already gives them).
+[[mutant]]
+id = "daemon-site/explorer-refused-to-query-only"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_query_only_member_reads_everything_but_the_content_index)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''        View::Index if !may_copy => SitePage::NotFound,'''
+replace = '''        View::Index | View::Explorer if !may_copy => SitePage::NotFound,'''

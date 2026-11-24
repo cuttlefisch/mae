@@ -72,6 +72,16 @@ impl Addressing {
         }
     }
 
+    /// The explorer's data (P-39, Amendment 3): `/kb/<kb-id>/explorer.json`
+    /// live, `<base>/explorer.json` in the export. [`RESERVED_IDS`] keeps a
+    /// page from holding this address.
+    pub fn explorer_href(&self) -> String {
+        match &self.0 {
+            Kind::Live { kb_id } => format!("/kb/{kb_id}/explorer.json"),
+            Kind::Export { base } => format!("{base}/explorer.json"),
+        }
+    }
+
     /// The page of one tag (P-70), below the tag index.
     pub fn tag_href(&self, tag: &str) -> String {
         match &self.0 {
@@ -94,9 +104,9 @@ impl Addressing {
 }
 
 /// IDs a page may not hold, because the engine generates that address: the
-/// tag index and the content index (P-166). Compared as the export compares directories, so `Tags`
-/// is reserved too.
-pub const RESERVED_IDS: &[&str] = &["tags", "index.json"];
+/// tag index, the content index and the explorer (P-166). Compared as the export compares
+/// directories, so `Tags` is reserved too.
+pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json"];
 
 /// Whether `id` names an address the engine generates (P-166).
 pub fn is_reserved(id: &str) -> bool {

@@ -704,6 +704,8 @@ pub(crate) fn site_path(path: &str) -> Option<(String, mae_daemon::site::View)> 
         None if rest == "tags" => View::Tags,
         // Also reserved: the content index (P-77).
         None if rest == "index.json" => View::Index,
+        // And the explorer's data (Amendment 3).
+        None if rest == "explorer.json" => View::Explorer,
         None => View::Page(percent_decode(rest)?),
         Some(("tags", tag)) if !tag.is_empty() && !tag.contains('/') => {
             View::Tag(percent_decode(tag)?)
@@ -760,10 +762,12 @@ fn index_response(entries: &[mae_site::IndexEntry]) -> Response<Full<Bytes>> {
             })
         })
         .collect();
-    let mut r = site_response(
-        StatusCode::OK,
-        serde_json::json!({ "pages": pages }).to_string(),
-    );
+    site_json(serde_json::json!({ "pages": pages }).to_string())
+}
+
+/// A JSON answer with the site's headers: the content index, the explorer.
+fn site_json(body: String) -> Response<Full<Bytes>> {
+    let mut r = site_response(StatusCode::OK, body);
     r.headers_mut().insert(
         "content-type",
         hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
@@ -847,14 +851,28 @@ pub(crate) fn site_answer(
             backlinks,
             tags,
             toc,
+            explorer,
         } => site_response(
             StatusCode::OK,
-            site::document(chrome, &title, &html, &backlinks, &tags, &toc),
+            site::document(
+                chrome,
+                &title,
+                &html,
+                &backlinks,
+                &tags,
+                &toc,
+                explorer.as_ref(),
+            ),
         ),
         SitePage::Index(entries) => index_response(&entries),
-        SitePage::Listing { kind, items } => site_response(
+        SitePage::Explorer(json) => site_json(json),
+        SitePage::Listing {
+            kind,
+            items,
+            explorer,
+        } => site_response(
             StatusCode::OK,
-            site::listing_document(chrome, &kind, &items),
+            site::listing_document(chrome, &kind, &items, explorer.as_ref()),
         ),
         SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),
         SitePage::TooLarge => site_response(

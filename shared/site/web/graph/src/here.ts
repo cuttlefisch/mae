@@ -112,12 +112,28 @@ export function makeGrid(w: number, h: number, cell: number, occupied: ArrayLike
   return { w, h, cell, cols, rows, sat };
 }
 
+/**
+ * The cells [first, end) of `n` that the span [start, start + length) touches, with overlaps()'s
+ * strict overlap: cell i when i·cell < start + length and start < (i + 1)·cell. The division gives
+ * a first estimate and the comparisons make it exact: dividing rounds (an edge within a rounding
+ * step of a cell boundary landed in the neighbouring cell, and (x + w) / cell with x + w = 5e-324
+ * gave 0; CI, 2026-11-23).
+ */
+function cellSpan(start: number, length: number, cell: number, n: number): [number, number] {
+  const end = start + length;
+  let first = Math.min(n, Math.max(0, Math.floor(start / cell)));
+  while (first > 0 && first * cell > start) first--;
+  while (first < n && (first + 1) * cell <= start) first++;
+  let last = Math.min(n, Math.max(0, Math.ceil(end / cell)));
+  while (last < n && last * cell < end) last++;
+  while (last > 0 && (last - 1) * cell >= end) last--;
+  return [first, last];
+}
+
 /** How many taken cells the box touches (what falls outside the frame does not count). */
 export function busy(g: Grid, b: Box): number {
-  const c0 = Math.max(0, Math.floor(b.x / g.cell));
-  const r0 = Math.max(0, Math.floor(b.y / g.cell));
-  const c1 = Math.min(g.cols, Math.ceil((b.x + b.w) / g.cell));
-  const r1 = Math.min(g.rows, Math.ceil((b.y + b.h) / g.cell));
+  const [c0, c1] = cellSpan(b.x, b.w, g.cell, g.cols);
+  const [r0, r1] = cellSpan(b.y, b.h, g.cell, g.rows);
   if (c1 <= c0 || r1 <= r0) return 0;
   const W = g.cols + 1;
   return g.sat[r1 * W + c1]! - g.sat[r0 * W + c1]! - g.sat[r1 * W + c0]! + g.sat[r0 * W + c0]!;

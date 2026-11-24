@@ -94,12 +94,27 @@ pub struct Site {
     /// By file-level ID.
     pub pages: BTreeMap<String, DerivedPage>,
     pub withheld: Vec<Withheld>,
-    /// Every valid tag of a published page, with its pages by title then ID
-    /// (P-70, P-71).
+    /// Every valid tag of a published page, with its pages A to Z by title,
+    /// then by ID ([`crate::order`]; P-70, P-71). Keyed by the tag's bytes:
+    /// [`Site::tags_in_order`] is the order a reader sees.
     pub tags: BTreeMap<String, Vec<PageRef>>,
     /// The content index search and the graph read (P-77): one entry per
     /// published page, by ID.
     pub index: Vec<IndexEntry>,
+}
+
+impl Site {
+    /// Every tag with its pages, A to Z by tag ([`crate::order`]): the order
+    /// of the tag index (P-71) and of the explorer's groups.
+    pub fn tags_in_order(&self) -> Vec<(&str, &[PageRef])> {
+        let mut v: Vec<(&str, &[PageRef])> = self
+            .tags
+            .iter()
+            .map(|(t, p)| (t.as_str(), p.as_slice()))
+            .collect();
+        v.sort_by(|a, b| crate::order::cmp_text(a.0, b.0));
+        v
+    }
 }
 
 /// One page in the content index (P-77). It names published pages only and
@@ -214,7 +229,7 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
         site.pages.insert(id, page);
     }
     for pages in site.tags.values_mut() {
-        pages.sort();
+        pages.sort_by(crate::explorer::by_title);
     }
     // Each page's outgoing links to published pages: the backlinks, inverted.
     let mut out: BTreeMap<&str, std::collections::BTreeSet<String>> = BTreeMap::new();

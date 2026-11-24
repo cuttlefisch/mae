@@ -29,13 +29,14 @@ use mae_sync::kb::{Encryption, KbNodeDoc};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SitePage {
     /// A page: its title (raw text), its sanitised article HTML, its
-    /// backlinks, and its tags as `(tag, href)`.
+    /// backlinks, its tags as `(tag, href)`, and where its explorer loads.
     Found {
         title: String,
         html: String,
         backlinks: Vec<mae_site::Backlink>,
         tags: Vec<(String, String)>,
         toc: Vec<mae_site::TocEntry>,
+        explorer: Option<ExplorerRef>,
     },
     /// The content index (P-77): one entry per published page.
     Index(Vec<mae_site::IndexEntry>),
@@ -44,11 +45,54 @@ pub enum SitePage {
     Listing {
         kind: Listing,
         items: Vec<(String, String)>,
+        explorer: Option<ExplorerRef>,
     },
+    /// The explorer's data (P-39, Amendment 3), as the JSON the browser
+    /// runtime reads.
+    Explorer(String),
     /// Every refusal and every absence, alike.
     NotFound,
     /// The KB is larger than this listener derives per request.
     TooLarge,
+}
+
+/// Where a page's explorer loads its data from, and which version of it this
+/// page was derived with: the browser runtime fetches it once and again only
+/// when a page names another version (D6: chrome is not embedded in pages).
+/// It lists titles only, which every reader of the KB may have (ADR-119
+/// Amendment 3 G2; `kb/query.titles` gives the same).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRef {
+    pub src: String,
+    /// The first 16 hex digits of the SHA-256 of [`explorer_json`]'s output.
+    pub version: String,
+}
+
+/// The explorer as the browser runtime reads it:
+/// `{"groups":[{"tag","pages":[{"title","href"}]}],"untagged":[{"title","href"}]}`,
+/// in display order. Titles are raw text; the runtime writes them with
+/// `textContent`, never as markup.
+pub fn explorer_json(ex: &mae_site::explorer::Explorer) -> String {
+    let pages = |ps: &[mae_site::PageRef]| -> Vec<serde_json::Value> {
+        ps.iter()
+            .map(|p| serde_json::json!({ "title": p.title, "href": p.href }))
+            .collect()
+    };
+    let groups: Vec<serde_json::Value> = ex
+        .groups
+        .iter()
+        .map(|g| serde_json::json!({ "tag": g.tag, "pages": pages(&g.pages) }))
+        .collect();
+    serde_json::json!({ "groups": groups, "untagged": pages(&ex.untagged) }).to_string()
+}
+
+fn explorer_ref(json: &str, addressing: &Addressing) -> ExplorerRef {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(json.as_bytes());
+    ExplorerRef {
+        src: addressing.explorer_href(),
+        version: hex::encode(&digest[..8]),
+    }
 }
 
 /// Which generated listing.
@@ -71,6 +115,8 @@ pub enum View {
     Tag(String),
     /// `/kb/<kb-id>/index.json`.
     Index,
+    /// `/kb/<kb-id>/explorer.json`.
+    Explorer,
     /// `/kb/<kb-id>/`: the KB's home page, the node the operator declared
     /// for it (ADR-119 Amendment 2 B3).
     Home(Option<String>),
@@ -113,10 +159,11 @@ pub async fn view(
     limits: SiteLimits,
     opts: &mae_site::SiteOptions,
 ) -> SitePage {
-    let (sources, addressing) = match readable_sources(doc_store, kb_id, principal, limits).await {
-        Ok(v) => v,
-        Err(answer) => return answer,
-    };
+    let (sources, addressing, may_copy) =
+        match readable_sources(doc_store, kb_id, principal, limits).await {
+            Ok(v) => v,
+            Err(refused) => return refused.into(),
+        };
     // Rendering is CPU work: off the async workers.
     let view = view.clone();
     let opts = opts.clone();
@@ -125,32 +172,50 @@ pub async fn view(
             &derive_with(&sources, &addressing, &opts),
             &addressing,
             view,
+            may_copy,
         )
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)
 }
 
+/// Why [`readable_sources`] gave no sources: the answer it stands for.
+enum Refused {
+    NotFound,
+    TooLarge,
+}
+
+impl From<Refused> for SitePage {
+    fn from(r: Refused) -> Self {
+        match r {
+            Refused::NotFound => SitePage::NotFound,
+            Refused::TooLarge => SitePage::TooLarge,
+        }
+    }
+}
+
 /// The KB's pages as sources, once the read gate admits `principal` and the
-/// KB is within `limits`; otherwise the answer to give.
+/// KB is within `limits`, and whether `principal` may have the whole KB's
+/// content at once (D7, G2); otherwise the answer to give.
 async fn readable_sources(
     doc_store: &DocStore,
     kb_id: &str,
     principal: Option<&str>,
     limits: SiteLimits,
-) -> Result<(Vec<SourcePage>, Addressing), SitePage> {
+) -> Result<(Vec<SourcePage>, Addressing, bool), Refused> {
     let Ok(addressing) = Addressing::live(kb_id) else {
-        return Err(SitePage::NotFound);
+        return Err(Refused::NotFound);
     };
     let Ok((coll, encryption)) = kb_query::load_gated(doc_store, kb_id, principal).await else {
-        return Err(SitePage::NotFound);
+        return Err(Refused::NotFound);
     };
     if !matches!(encryption, Encryption::None) {
-        return Err(SitePage::NotFound);
+        return Err(Refused::NotFound);
     }
+    let may_copy = kb_query::may_copy_whole_kb(doc_store, kb_id, &coll, principal).await;
     let nodes = coll.list_nodes();
     if nodes.len() > limits.max_scan_nodes {
-        return Err(SitePage::TooLarge);
+        return Err(Refused::TooLarge);
     }
     let mut sources = Vec::with_capacity(nodes.len());
     for (node_id, _) in nodes {
@@ -163,7 +228,7 @@ async fn readable_sources(
         };
         let (title, body) = (doc.title(), doc.body());
         if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {
-            return Err(SitePage::TooLarge);
+            return Err(Refused::TooLarge);
         }
         if let Some(text) = page_source(&node_id, &doc) {
             sources.push(SourcePage {
@@ -172,18 +237,27 @@ async fn readable_sources(
             });
         }
     }
-    Ok((sources, addressing))
+    Ok((sources, addressing, may_copy))
 }
 
-/// The answer to `view` from a derived KB.
-fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePage {
+/// The answer to `view` from a derived KB. A reader who may not have the
+/// whole KB's content at once (`may_copy`, a query-only member, D7 and G2)
+/// is refused the content index, which holds every page's text, as the one
+/// not-found. Everything else is theirs: pages one at a time, and the
+/// explorer and tag listings, which hold titles only.
+fn answer(site: &mae_site::Site, addressing: &Addressing, view: View, may_copy: bool) -> SitePage {
+    let explorer = || {
+        let json = explorer_json(&mae_site::explorer::explorer(site));
+        Some(explorer_ref(&json, addressing))
+    };
     match view {
+        View::Index if !may_copy => SitePage::NotFound,
         // The declared node when this reader has it as a page; otherwise the
         // tag index. Unpublished, withheld and undeclared all answer alike, so
         // the home address says nothing about a node the reader cannot see.
         View::Home(declared) => match declared.filter(|id| site.pages.contains_key(id)) {
-            Some(id) => answer(site, addressing, View::Page(id)),
-            None => answer(site, addressing, View::Tags),
+            Some(id) => answer(site, addressing, View::Page(id), may_copy),
+            None => answer(site, addressing, View::Tags, may_copy),
         },
         View::Page(id) => match site.pages.get(&id) {
             Some(p) => SitePage::Found {
@@ -196,18 +270,21 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
                     .map(|t| (t.clone(), addressing.tag_href(t)))
                     .collect(),
                 toc: p.toc.clone(),
+                explorer: explorer(),
             },
             None => SitePage::NotFound,
         },
         View::Tags => SitePage::Listing {
             kind: Listing::Tags,
             items: site
-                .tags
-                .keys()
-                .map(|t| (t.clone(), addressing.tag_href(t)))
+                .tags_in_order()
+                .into_iter()
+                .map(|(t, _)| (t.to_string(), addressing.tag_href(t)))
                 .collect(),
+            explorer: explorer(),
         },
         View::Index => SitePage::Index(site.index.clone()),
+        View::Explorer => SitePage::Explorer(explorer_json(&mae_site::explorer::explorer(site))),
         View::Tag(tag) => match site.tags.get(&tag) {
             Some(pages) => SitePage::Listing {
                 kind: Listing::Tag(tag),
@@ -215,6 +292,7 @@ fn answer(site: &mae_site::Site, addressing: &Addressing, view: View) -> SitePag
                     .iter()
                     .map(|p| (p.title.clone(), p.href.clone()))
                     .collect(),
+                explorer: explorer(),
             },
             None => SitePage::NotFound,
         },
@@ -325,6 +403,7 @@ pub fn document<'a>(
     backlinks: &[mae_site::Backlink],
     tags: &[(String, String)],
     toc: &[mae_site::TocEntry],
+    explorer: Option<&ExplorerRef>,
 ) -> String {
     let chrome = chrome.into();
     let words = Words::of(chrome.lang);
@@ -339,7 +418,7 @@ pub fn document<'a>(
         toc_nav(&words, toc),
         backlinks_nav(&words, backlinks)
     );
-    shell(chrome, title, &article, &panels)
+    shell(chrome, title, &article, &panels, explorer)
 }
 
 /// The page's table of contents (P-79): one link per heading, to the id the
@@ -372,6 +451,7 @@ pub fn listing_document<'a>(
     chrome: impl Into<Chrome<'a>>,
     kind: &Listing,
     items: &[(String, String)],
+    explorer: Option<&ExplorerRef>,
 ) -> String {
     let chrome = chrome.into();
     let words = Words::of(chrome.lang);
@@ -402,6 +482,7 @@ pub fn listing_document<'a>(
             words.mark
         ),
         "",
+        explorer,
     )
 }
 
@@ -415,7 +496,18 @@ pub fn listing_document<'a>(
 /// The pre-paint script is a classic script before the stylesheets (D17): it
 /// blocks rendering until the reader's choice is on `<html>`, so the first
 /// frame already has it (P-91, P-93).
-fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
+///
+/// The explorer's box sits between the header and `main`, empty and `hidden`:
+/// the router's behaviour fills it from `data-src` and shows it, so without
+/// JavaScript it is absent, never broken. It carries the words the behaviour
+/// needs (its name, the untagged group's).
+fn shell(
+    chrome: Chrome<'_>,
+    title: &str,
+    main: &str,
+    panels: &str,
+    explorer: Option<&ExplorerRef>,
+) -> String {
     let words = Words::of(chrome.lang);
     let (doc_title, site_link) = match chrome.site {
         Some((site, home)) => (
@@ -428,6 +520,17 @@ fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
         "<header id=\"mae-header\">{site_link}{}</header>",
         theme_controls(&words)
     );
+    let explorer = explorer.map_or_else(String::new, |e| {
+        format!(
+            "<nav id=\"mae-explorer\" class=\"mae-explorer\"{} aria-label=\"{}\" \
+             data-src=\"{}\" data-version=\"{}\" data-untagged=\"{}\" hidden></nav>",
+            words.mark,
+            escape(words.s.explorer),
+            escape(&e.src),
+            escape(&e.version),
+            escape(words.s.untagged),
+        )
+    });
     let aside = if panels.is_empty() {
         String::new()
     } else {
@@ -440,7 +543,7 @@ fn shell(chrome: Chrome<'_>, title: &str, main: &str, panels: &str) -> String {
          <link rel=\"stylesheet\" href=\"{}\">\
          <link rel=\"stylesheet\" href=\"{}\">\
          <script type=\"module\" src=\"{}\"></script>\
-         <title>{doc_title}</title></head><body>{header}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
+         <title>{doc_title}</title></head><body>{header}{explorer}<main id=\"mae-main\">{main}</main>{aside}</body></html>\n",
         escape(chrome.lang),
         mae_site::assets::href(mae_site::assets::PREPAINT),
         mae_site::assets::href(mae_site::assets::PALETTE),
@@ -561,6 +664,7 @@ mod tests {
             &[],
             &[],
             &[],
+            None,
         );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/title&gt;"), "{html}");
@@ -582,5 +686,131 @@ mod tests {
         assert!(page_source("n", &plain).is_some());
         assert_eq!(page_source("a b", &plain), None);
         assert_eq!(page_source("", &plain), None);
+    }
+
+    /// A small KB: `a` tagged `t`, `b` untagged and linking to `a`.
+    fn kb() -> (mae_site::Site, Addressing) {
+        let live = Addressing::live("kb-1").unwrap();
+        let src = |id: &str, extra: &str| SourcePage {
+            origin: format!("{id}.org"),
+            text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n{extra}\n"),
+        };
+        let site = mae_site::derive(
+            &[
+                src("a", "#+filetags: :t:\n"),
+                src("b", "\n[[id:a][to a]]\n"),
+            ],
+            &live,
+        );
+        (site, live)
+    }
+
+    /// Every view a reader may have whether or not they may copy the KB.
+    fn title_views() -> [View; 5] {
+        [
+            View::Page("a".into()),
+            View::Tags,
+            View::Tag("t".into()),
+            View::Explorer,
+            View::Home(None),
+        ]
+    }
+
+    /// D7, Amendment 3 G2: a reader who may not copy the KB (query-only) is
+    /// refused the content index, which holds every page's text, and nothing
+    /// else: pages, the explorer and tag listings hold what they may read.
+    #[test]
+    fn a_reader_who_may_not_copy_the_kb_is_refused_its_content_index_only() {
+        let (site, live) = kb();
+        assert_eq!(answer(&site, &live, View::Index, false), SitePage::NotFound);
+        let SitePage::Index(all) = answer(&site, &live, View::Index, true) else {
+            panic!("the content index");
+        };
+        // What makes it a copy: page b's text is in it.
+        assert!(all.iter().any(|e| e.text.contains("to a")), "{all:?}");
+        for v in title_views() {
+            assert_eq!(
+                answer(&site, &live, v.clone(), false),
+                answer(&site, &live, v.clone(), true),
+                "{v:?}"
+            );
+            assert_ne!(
+                answer(&site, &live, v.clone(), false),
+                SitePage::NotFound,
+                "{v:?}"
+            );
+        }
+    }
+
+    /// Every page and listing names the explorer's
+    /// data and its version, which is the hash of exactly what
+    /// `explorer.json` answers, so a changed KB is a changed version.
+    #[test]
+    fn every_page_names_the_explorer_at_the_version_it_answers() {
+        let (site, live) = kb();
+        let SitePage::Explorer(json) = answer(&site, &live, View::Explorer, true) else {
+            panic!("the explorer");
+        };
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "groups": [{"tag": "t", "pages": [{"title": "a", "href": "/kb/kb-1/a"}]}],
+                "untagged": [{"title": "b", "href": "/kb/kb-1/b"}],
+            })
+        );
+        let want = explorer_ref(&json, &live);
+        assert_eq!(want.src, "/kb/kb-1/explorer.json");
+        assert_eq!(want.version.len(), 16);
+        for view in [View::Page("a".into()), View::Tags, View::Tag("t".into())] {
+            let got = match answer(&site, &live, view.clone(), true) {
+                SitePage::Found { explorer, tags, .. } => {
+                    assert_eq!(tags, [("t".to_string(), "/kb/kb-1/tags/t".to_string())]);
+                    explorer
+                }
+                SitePage::Listing { explorer, .. } => explorer,
+                other => panic!("{view:?}: {other:?}"),
+            };
+            assert_eq!(got.as_ref(), Some(&want), "{view:?}");
+        }
+        // Another KB, another version.
+        let other = mae_site::derive(
+            &[SourcePage {
+                origin: "c.org".into(),
+                text: ":PROPERTIES:\n:ID: c\n:END:\n#+title: c\n".into(),
+            }],
+            &live,
+        );
+        let SitePage::Explorer(json2) = answer(&other, &live, View::Explorer, true) else {
+            panic!()
+        };
+        assert_ne!(explorer_ref(&json2, &live).version, want.version);
+    }
+
+    /// The box: after the header, before `main`, hidden, its words and
+    /// attributes escaped, and marked when the words fell back to en-US.
+    #[test]
+    fn the_explorer_box_sits_before_main_hidden_with_escaped_attributes() {
+        let e = ExplorerRef {
+            src: "/kb/k/explorer.json".into(),
+            version: "\"><script>".into(),
+        };
+        let html = document("es-ES", "t", "", &[], &[], &[], Some(&e));
+        let nav = html.find("<nav id=\"mae-explorer\"").expect("the box");
+        assert!(html.find("</header>").unwrap() < nav);
+        assert!(nav < html.find("<main").unwrap());
+        assert!(!html.contains("<script>\""), "{html}");
+        assert!(html.contains("aria-label=\"P\u{e1}ginas\""), "{html}");
+        assert!(html.contains("data-untagged=\"Sin etiqueta\""), "{html}");
+        let box_ = &html[nav..html[nav..].find("</nav>").unwrap() + nav];
+        assert!(box_.ends_with("hidden>"), "{box_}");
+        assert!(!box_.contains("lang="), "{box_}");
+        let fallback = document("de", "t", "", &[], &[], &[], Some(&e));
+        assert!(
+            fallback.contains("class=\"mae-explorer\" lang=\"en-US\" aria-label=\"Pages\""),
+            "{fallback}"
+        );
+        let listing = listing_document("en-US", &Listing::Tags, &[], Some(&e));
+        assert!(listing.contains("<nav id=\"mae-explorer\""), "{listing}");
     }
 }
