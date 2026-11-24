@@ -641,11 +641,11 @@ impl ShellTerminal {
         let term = self.term.lock();
         let content = term.renderable_content();
 
-        // Collect cells from renderable_content (same approach as read_viewport).
-        let mut text = String::new();
+        // The selected cells, row by row, then the text as written: a row
+        // the selection continues past keeps its soft wrap (joined without a
+        // newline), and no line keeps the blank cells after its text.
+        let mut rows: Vec<crate::text::Row> = Vec::new();
         let mut last_line: Option<usize> = None;
-        let mut line_buf = String::new();
-
         for cell in content.display_iter {
             let row_idx = cell.point.line.0 as usize;
             let col_idx = cell.point.column.0;
@@ -661,17 +661,19 @@ impl ShellTerminal {
                 continue;
             }
 
-            if last_line.is_some() && last_line != Some(row_idx) {
-                // Flush previous line.
-                text.push_str(line_buf.trim_end());
-                text.push('\n');
-                line_buf.clear();
+            if last_line != Some(row_idx) {
+                rows.push(crate::text::Row::default());
+                last_line = Some(row_idx);
             }
-            last_line = Some(row_idx);
-            line_buf.push(cell.c);
+            if let Some(row) = rows.last_mut() {
+                row.push_cell(cell.cell);
+                row.wrapped = row_idx != end.0
+                    && cell
+                        .flags
+                        .contains(alacritty_terminal::term::cell::Flags::WRAPLINE);
+            }
         }
-        // Flush final line.
-        text.push_str(line_buf.trim_end());
+        let text = crate::text::logical_lines(&rows).join("\n");
 
         Some(text.trim_end().to_string())
     }
@@ -730,23 +732,23 @@ impl ShellTerminal {
             "term lock acquired (read_viewport)"
         );
         let content = term.renderable_content();
-        let mut lines: Vec<String> = Vec::new();
-        let mut current_line = String::new();
-        let mut current_line_idx: Option<usize> = None;
-
+        let mut rows: Vec<crate::text::Row> = Vec::new();
+        let mut current_line_idx: Option<i32> = None;
         for cell in content.display_iter {
-            let line_idx = cell.point.line.0 as usize;
+            let line_idx = cell.point.line.0;
             if current_line_idx != Some(line_idx) {
-                if current_line_idx.is_some() {
-                    lines.push(std::mem::take(&mut current_line));
-                }
+                rows.push(crate::text::Row::default());
                 current_line_idx = Some(line_idx);
             }
-            current_line.push(cell.c);
+            if let Some(row) = rows.last_mut() {
+                row.push_cell(cell.cell);
+                row.wrapped = cell
+                    .flags
+                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE);
+            }
         }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
+        // As written: no blank cells after a line, soft wraps joined.
+        let lines = crate::text::logical_lines(&rows);
 
         // Return last max_lines.
         let start = lines.len().saturating_sub(max_lines);
@@ -802,6 +804,36 @@ mod tests {
             v.contains("MAE_SHELL_TEST_OK")
         });
 
+        term.shutdown();
+    }
+
+    /// The reported defect, through a real terminal: output wider than the
+    /// screen soft-wraps, and both readers (the viewport read select mode and
+    /// the AI use, and a mouse selection) give it back as written: the
+    /// wrapped token whole on one line, and no line padded to the width.
+    #[test]
+    fn wrapped_output_reads_back_unbroken_and_unpadded() {
+        let mut term = ShellTerminal::spawn(20, 24, None).expect("failed to spawn terminal");
+        wait_for_prompt(&mut term);
+        // The command line differs from its output, so only the output can
+        // hold the token: 45 Z's then END, 48 cells over three rows.
+        term.write_str("echo $(printf 'Z%.0s' $(seq 1 45))END\n");
+        let token = format!("{}END", "Z".repeat(45));
+        let viewport = wait_for_viewport(&mut term, "the wrapped token", |v| v.contains(&token));
+        let lines = term.read_viewport(100);
+        assert!(lines.iter().any(|l| l == &token), "{lines:?}");
+        assert!(
+            lines.iter().all(|l| !l.ends_with(' ')),
+            "a line kept its padding: {lines:?}"
+        );
+        term.start_selection(0, 0);
+        term.update_selection(23, 19);
+        let copied = term.finish_selection().expect("a selection");
+        assert!(
+            copied.lines().any(|l| l == token),
+            "{copied:?} / {viewport}"
+        );
+        assert!(copied.lines().all(|l| !l.ends_with(' ')), "{copied:?}");
         term.shutdown();
     }
 
