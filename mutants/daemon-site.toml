@@ -30,8 +30,8 @@ targets = ["--bin", "mae-daemon"]
 filter = "test(a_node_body_over_the_byte_bound_makes_the_kb_too_large)"
 [[mutant.edit]]
 file = "daemon/src/site.rs"
-find = '''        if title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes {'''
-replace = '''        if false && (title.len() > limits.max_body_bytes || body.len() > limits.max_body_bytes) {'''
+find = '''            .any(|n| *n > limits.max_body_bytes)'''
+replace = '''            .any(|n| false && *n > limits.max_body_bytes)'''
 
 [[mutant]]
 id = "daemon-site/non-hex-escape-accepted"
