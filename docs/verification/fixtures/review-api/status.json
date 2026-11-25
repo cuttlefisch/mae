@@ -49,6 +49,7 @@
             "revision_id": "rv-00a001-1",
             "rev": 0,
             "since": "2000-01-01T00:00:00.000Z",
+            "approval_record": "signed_pdf",
             "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
           },
           "revisions": [
@@ -85,6 +86,90 @@
               "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c",
               "created_at": "2000-01-03T09:00:00.000Z",
               "approved_at": null,
+              "in_force_since": null,
+              "ended_at": null,
+              "reason": null,
+              "rejected_with": null,
+              "replaces": "rv-00a001-1",
+              "superseded_by": null,
+              "imported": null,
+              "signed_pdf_sha256": null,
+              "approval_record": "signed_pdf"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "approved under signed_pdf, waiting for its signed PDF before entry into force (O19)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 149,
+        "method": "kb/review.status",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 149,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "doc_code": "PRO-1",
+          "approval_record": "signed_pdf",
+          "draft": false,
+          "working_version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c",
+          "in_review": null,
+          "approved": {
+            "request_id": "rq-01a7c2",
+            "revision_id": "rv-01a7c2-1",
+            "rev": 1,
+            "approved_at": "2000-01-06T09:00:00.000Z",
+            "waiting_for": "signed_pdf"
+          },
+          "in_force": {
+            "revision_id": "rv-00a001-1",
+            "rev": 0,
+            "since": "2000-01-01T00:00:00.000Z",
+            "approval_record": "signed_pdf",
+            "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+          },
+          "revisions": [
+            {
+              "revision_id": "rv-00a001-1",
+              "rev": 0,
+              "state": "in_force",
+              "request_id": null,
+              "set_name": null,
+              "source_sha256": "abcd1cc6bd944e751771a2a1e8d3218f44e709cd2b9475b29d1f2adec69aa1e2",
+              "version": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+              "created_at": "2000-01-01T00:00:00.000Z",
+              "approved_at": null,
+              "in_force_since": "2000-01-01T00:00:00.000Z",
+              "ended_at": null,
+              "reason": null,
+              "rejected_with": null,
+              "replaces": null,
+              "superseded_by": null,
+              "imported": {
+                "import_event_id": "ev-0000000001",
+                "approved_by_name": "Example Approver"
+              },
+              "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486",
+              "approval_record": "signed_pdf"
+            },
+            {
+              "revision_id": "rv-01a7c2-1",
+              "rev": 1,
+              "state": "approved",
+              "request_id": "rq-01a7c2",
+              "set_name": "Purchasing procedures",
+              "source_sha256": "63336ef5cf257aa058193f8d3051add9f587bd16da33292e48d66c7e15cb4185",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c",
+              "created_at": "2000-01-03T09:00:00.000Z",
+              "approved_at": "2000-01-06T09:00:00.000Z",
               "in_force_since": null,
               "ended_at": null,
               "reason": null,
