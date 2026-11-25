@@ -524,6 +524,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `unknown_revision` | This KB holds no revision with that id (or it is another node's). | `kb/query.get` with `revision` | — |
 | `revisions_hold_plaintext` | Switching the KB to E2E is refused while it holds any publication-review revision, whose frozen source is plaintext and is kept for good (ADR-113 O17). Code `-32600`. A mesh peer's update that would switch it is refused whole and counted. | any write to the KB's collection: `kb/collection_op`, `sync/update`, `sync/share`, `kb/share` | — |
 | `doc_code_taken` | That document code is assigned to another node of the KB; a code once given is never given to another. | `kb/review.set_code` | `holder` |
+| `activity_record_unavailable` | The activity record (ADR-120) could not commit this request's event within `activity.commit_timeout_ms`, or its writer has failed: nothing of the answer was sent. HTTP `503`, `error: "temporarily_unavailable"`, with `Retry-After`. Retry; the health check is `503` until the record commits again. | every recorded route of the HTTPS listener, with `[activity] enabled` | — |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any

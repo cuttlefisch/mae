@@ -35,7 +35,8 @@ impl Key {
     pub fn of(ev: &Event) -> Key {
         let who = match (&ev.principal.id, &ev.peer) {
             (Some(id), _) => format!("principal:{id}"),
-            (None, Some(p)) => format!("addr:{}", p.addr),
+            // The address, not the port: each connection has its own port.
+            (None, Some(p)) => format!("addr:{}", host_of(&p.addr)),
             (None, None) => "unknown".to_string(),
         };
         Key {
@@ -44,6 +45,13 @@ impl Key {
             kind: ev.outcome_kind.clone().unwrap_or_default(),
         }
     }
+}
+
+/// The host part of a recorded `addr:port`.
+fn host_of(addr: &str) -> String {
+    addr.parse::<std::net::SocketAddr>()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| addr.to_string())
 }
 
 struct Window {

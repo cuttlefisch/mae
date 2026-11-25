@@ -292,6 +292,15 @@ async fn credential(
         (Some(token), 0) => bearer_auth(token, origin, listener).await,
         (None, 1) => {
             let grant = tickets.into_iter().next().flatten();
+            // ADR-120 D1: a redeemed ticket is a sign-in the daemon performs.
+            if let Some(g) = &grant {
+                crate::oauth_activity::ticket_redeemed(
+                    &g.principal,
+                    &g.issuer,
+                    &g.subject,
+                    g.actor,
+                );
+            }
             spend_ticket(grant, &origin, listener)
                 .await
                 .map_err(|why| match why {
@@ -407,6 +416,9 @@ async fn upgrade(
             supported,
         );
     }
+    // ADR-120 D4: the connection's own session id, which the upgrade's
+    // response carries and its later events use.
+    let _connection = crate::oauth_activity::connection_opened();
     let on_upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(super::session::run(
         on_upgrade,
@@ -499,6 +511,7 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
     // The token's own `exp`, uncapped: a bound IdP ticket is capped when it
     // is spent (`spend_ticket`), from when its binding is read again.
     let grant = TicketGrant {
+        actor: crate::oauth_activity::actor_kind(&vp),
         bound_idp: vp.credential == Credential::IdpBound,
         issuer: vp.issuer,
         subject: vp.subject,

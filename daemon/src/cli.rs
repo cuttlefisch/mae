@@ -75,6 +75,7 @@ subcommands:
   checkpoint <kb_id> <out-file> | restore <artifact-file>
   backup create <out.tar> | restore <archive.tar> <empty-dir> | verify <restored-dir>
   kb seed|export|member|anchor|history|review ...
+  activity status [--json] | export [FILTERS] --out <file> | verify [--in <file>]
 ";
 
 impl Cli {

@@ -279,12 +279,18 @@ impl ActivityRecord {
         for entry in self.coalescer.drain_all(super::now_us()) {
             let _ = self.submit(entry).await;
         }
-        if self.commit(Entry::of(stop)).await.is_err() {
-            tracing::error!("daemon_stop could not be recorded");
-        }
+        // Queued, not awaited with the request timeout: an abandoned wait
+        // would store the daemon's own stop as a refusal. The writer takes
+        // messages in order, so its acknowledgement of `Stop` covers it.
+        let queued = self.submit(Entry::of(stop)).await.is_ok();
         let (tx, rx) = oneshot::channel();
-        if self.tx.send(Msg::Stop(tx)).await.is_ok() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
+        let stopped = self.tx.send(Msg::Stop(tx)).await.is_ok()
+            && matches!(
+                tokio::time::timeout(Duration::from_secs(5), rx).await,
+                Ok(Ok(()))
+            );
+        if !(queued && stopped && self.healthy()) {
+            tracing::error!("daemon_stop may not have been recorded");
         }
         let handle = self.writer.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(h) = handle {

@@ -7,6 +7,7 @@ use super::*;
 
 fn grant(principal: &str) -> TicketGrant {
     TicketGrant {
+        actor: mae_daemon::activity::event::ActorKind::Service,
         issuer: "self".into(),
         subject: principal.into(),
         principal: principal.into(),

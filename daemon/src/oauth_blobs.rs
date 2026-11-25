@@ -290,6 +290,7 @@ pub(crate) async fn handle(
     else {
         return boxed(blob_missing());
     };
+    crate::oauth_activity::target(&kb, None, blob.as_deref());
     let method = req.method().clone();
     let op = match (&method, blob.is_some()) {
         (&Method::POST, false) => BlobOp::Upload,
@@ -500,7 +501,11 @@ async fn upload(
     );
     let stored = process_and_commit(routes, kb, received, charge).await;
     boxed(match stored {
-        Ok(meta) => crate::oauth::json_response(StatusCode::OK, describe(&meta)),
+        Ok(meta) => {
+            // ADR-120: the blob the upload stored, by the address the daemon chose.
+            crate::oauth_activity::target(kb, None, Some(&meta.sha256));
+            crate::oauth::json_response(StatusCode::OK, describe(&meta))
+        }
         Err(resp) => *resp,
     })
 }

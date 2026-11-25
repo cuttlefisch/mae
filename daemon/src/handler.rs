@@ -70,6 +70,9 @@ pub struct DaemonState {
     /// many documents it carries (ADR-099 D2), so this counts sessions, not
     /// documents.
     pub oauth_conn: Option<crate::conn_limit::ConnLimiter>,
+    /// ADR-120: the activity record, when enabled. Read only by
+    /// `daemon/activity_status` (counters and chain tips, never an event).
+    pub activity: Option<Arc<mae_daemon::activity::writer::ActivityRecord>>,
 }
 
 /// How many clients are attached to this daemon right now, per listener.
@@ -158,6 +161,7 @@ impl DaemonState {
             kb_conn: None,
             collab_conn: None,
             oauth_conn: None,
+            activity: None,
         }
     }
 
@@ -628,6 +632,12 @@ pub async fn dispatch(
         // named rust-analyzer/Emacs-precedent lesson — don't wait for an idle
         // window a still-connected tenant may never hit). Idempotent:
         // evicting an unknown/already-idle-evicted tenant is a clean no-op.
+        // ADR-120 D13: what `mae-daemon activity status` prints.
+        "daemon/activity_status" => {
+            let record = { state.lock().await.activity.clone() };
+            Ok(crate::activity_cli::status_value(record.as_deref()))
+        }
+
         "daemon/evict_tenant" => {
             let name = params["name"]
                 .as_str()

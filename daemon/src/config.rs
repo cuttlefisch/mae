@@ -80,6 +80,8 @@ pub struct DaemonConfig {
     /// ADR-061 Phase C: KB enrichment sweep settings, dispatched off the same
     /// `maintenance_tick` as the deterministic integrity scan.
     pub enrichment: EnrichmentConfig,
+    /// ADR-120: the activity record, off by default (D11).
+    pub activity: mae_daemon::activity::ActivitySettings,
 }
 
 /// ADR-061 Phase C: background embedding-enrichment sweep settings. Disabled
@@ -505,6 +507,7 @@ impl Default for DaemonConfig {
             kb_socket: KbSocketConfig::default(),
             tenant: Vec::new(),
             enrichment: EnrichmentConfig::default(),
+            activity: Default::default(),
         }
     }
 }
