@@ -139,6 +139,9 @@ impl std::error::Error for AttachmentError {}
 /// - no format character (Unicode `Cf`: bidi controls, zero-width
 ///   characters), which would make two different names look the same;
 /// - none of `< > : " | ? *`, which Windows refuses;
+/// - no `%`: a link target or URL may be percent-decoded on its way
+///   (`a%20b.png` would then name `a b.png`), so one NAME could name two
+///   files;
 /// - no trailing `.` or space, which Windows strips (`a.png.` would be
 ///   written as `a.png`);
 /// - not a Windows device name, case-insensitively, with or without an
@@ -180,6 +183,9 @@ pub fn validate_attachment_name(name: &str) -> Result<(), AttachmentError> {
         return Err(AttachmentError::Name(
             "contains a character Windows refuses (< > : \" | ? *)",
         ));
+    }
+    if name.contains('%') {
+        return Err(AttachmentError::Name("contains a percent sign"));
     }
     if name.ends_with(['.', ' ']) {
         return Err(AttachmentError::Name("ends in a dot or a space"));

@@ -69,6 +69,12 @@ fn the_name_rule_on_named_cases() {
         .map(|c| format!("a{c}b.png"))
         .collect();
     bad.extend(forbidden.iter().map(|n| (n.as_str(), "Windows refuses")));
+    bad.extend([
+        ("a%20b.png", "percent sign"),
+        ("%", "percent sign"),
+        // Checked after the Windows rule: a NAME failing both names that one.
+        ("a%:b.png", "Windows refuses"),
+    ]);
     for device in [
         "CON",
         "con",
@@ -127,7 +133,7 @@ fn portable_file_name(name: &str) -> bool {
             <= MAX_ATTACHMENT_NAME_BYTES
         && !name
             .chars()
-            .any(|c| c.is_control() || "\\<>:\"|?*".contains(c) || INVISIBLE.contains(&c))
+            .any(|c| c.is_control() || "\\<>:\"|?*%".contains(c) || INVISIBLE.contains(&c))
         && !name.ends_with(['.', ' '])
         && !DEVICES.contains(&stem.as_str())
 }
@@ -144,7 +150,7 @@ proptest! {
             prop::sample::select(&[
                 "a", ".", "/", "\\", "\u{0}", "\n", "\u{85}", "ñ", "😀", " ", ":", "<", ">",
                 "|", "?", "*", "\"", "\u{200B}", "\u{202E}", "\u{AD}", "con", "Com1", "lpt3",
-                "NUL", "aux", "prn", "com\u{b9}", "conin$",
+                "NUL", "aux", "prn", "com\u{b9}", "conin$", "%",
             ][..]),
             0..8,
         ),
