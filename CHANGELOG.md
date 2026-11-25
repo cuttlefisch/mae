@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.196] - 2026-11-25
+
+
+
+
+### Documentation
+
+- *(adr)* Review API fixtures for ADR-113 Amendment 4 ([fc24515](https://github.com/cuttlefisch/mae/commit/fc245151eef90261a81e6ade68c066d7f858baa0))
+- *(adr)* ADR-113 Amendment 4, the open decisions settled and the review API pinned ([01f090d](https://github.com/cuttlefisch/mae/commit/01f090dac1ee3b5c82c7aa95a86e1ed2a472f4ae))
+- *(adr)* ADR-113 Amendment 4, the signed PDF as an interim record of approval by KB policy ([0e6b6f2](https://github.com/cuttlefisch/mae/commit/0e6b6f2ed38795dd17032525647d49660394f5f3))
+- *(adr)* ADR-113 O19 decided, entry into force waits for the signed PDF ([abb9d17](https://github.com/cuttlefisch/mae/commit/abb9d17a871716652a1ff97572b598f43f0fcb70))
+- *(adr)* ADR-113 Amendment 4, fixture and shape fixes from a client build ([03d4087](https://github.com/cuttlefisch/mae/commit/03d4087ab4564d96c3cf67161145d7332e57a777))
+
 ## [0.14.195] - 2026-11-25
 
 
@@ -40,6 +53,10 @@ All notable changes to this project will be documented in this file.
 - *(mutants)* Declare the blob store's guards ([6071507](https://github.com/cuttlefisch/mae/commit/6071507f42b558c89f3ea2427f4dafd0ca2cecd3))
 - *(daemon)* The blob store's benchmarks, ignored and non-gating ([1ba8bfc](https://github.com/cuttlefisch/mae/commit/1ba8bfc4a246eed0a49fe8255aeaf1f92332a367))
 - *(site)* Withhold a node whose ID is blobs, and re-anchor the reserved-ID mutant ([f092e06](https://github.com/cuttlefisch/mae/commit/f092e0673df40929e65ef42e58951b06629d32d7))
+
+### Miscellaneous
+
+- Bump version to 0.14.195 ([61097ad](https://github.com/cuttlefisch/mae/commit/61097ad3937aa6cb7305432167836362e870f513))
 
 ## [0.14.194] - 2026-11-24
 
