@@ -107,21 +107,24 @@ async fn is_e2e(r: &Replica, kb: &str) -> bool {
     matches!(coll.encryption(), Encryption::E2e)
 }
 
-/// The peer's flip, relayed to `r` through the dialer's apply path.
-async fn relay_flip(r: &Replica, kb: &str) {
+/// The peer's flip, relayed to `r` through the dialer's apply path: whether
+/// it left the session diverged.
+async fn relay_flip(r: &Replica, kb: &str) -> bool {
     let kbc = format!("kbc:{kb}");
     let state = r.store.encode_state(&kbc).await.unwrap();
     let flip = KbCollectionDoc::from_bytes(&state)
         .unwrap()
         .set_encryption(Encryption::E2e);
-    apply_doc(&r.store, None, 0, &kbc, &flip, None, PEER).await;
+    apply_doc(&r.store, None, 0, &kbc, &flip, None, PEER)
+        .await
+        .is_err()
 }
 
 #[tokio::test]
 async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_without() {
     let r = replica("kb-hist").await;
     give_history(&r, "kb-hist").await;
-    relay_flip(&r, "kb-hist").await;
+    assert!(relay_flip(&r, "kb-hist").await, "history: diverged");
     assert!(
         !is_e2e(&r, "kb-hist").await,
         "history: the flip was applied"
@@ -130,7 +133,7 @@ async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_witho
 
     let r = replica("kb-rev").await;
     give_revision(&r, "kb-rev").await;
-    relay_flip(&r, "kb-rev").await;
+    assert!(relay_flip(&r, "kb-rev").await, "revision: diverged");
     assert!(
         !is_e2e(&r, "kb-rev").await,
         "revision: the flip was applied"
@@ -139,7 +142,7 @@ async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_witho
 
     let r = replica("kb-clean").await;
     assert!(!r.store.history_holds_content("kb-clean").await.unwrap());
-    relay_flip(&r, "kb-clean").await;
+    assert!(!relay_flip(&r, "kb-clean").await, "neither: not diverged");
     assert!(
         is_e2e(&r, "kb-clean").await,
         "neither: the flip is accepted"

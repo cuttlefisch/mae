@@ -165,8 +165,10 @@ pub struct DocStore {
     /// every write to a `kbc:` document holds its KB's stripe, and so does a
     /// review request from its E2E re-check to its commit.
     e2e_switch_gates: Box<[Mutex<()>]>,
-    /// Writes refused for switching a KB to E2E over plaintext.
+    /// Writes and anchors refused for switching a KB to E2E over plaintext.
     e2e_switches_refused: std::sync::atomic::AtomicU64,
+    /// The per-KB rate limit on those refusals' warnings.
+    e2e_refusal_log: e2e_switch::RefusalLog,
     /// Test seams: one-shot pauses at the points where the races between a
     /// replace and the others can happen, so each interleaving is driven
     /// deterministically.
@@ -224,6 +226,9 @@ pub enum AnchorRefused {
     HubRecorded,
     /// The KB is already joined under another owner key.
     OtherKey,
+    /// The anchor would make the KB read as E2E while this daemon holds
+    /// plaintext the switch would leave readable (`doc_store_e2e_switch`).
+    E2eSwitch(crate::storage::PlaintextHeld),
 }
 
 impl std::fmt::Display for AnchorRefused {
@@ -234,6 +239,9 @@ impl std::fmt::Display for AnchorRefused {
                  anchor it"
             }
             Self::OtherKey => "the KB is already anchored to another owner key",
+            Self::E2eSwitch(_) => {
+                "the anchor would switch the KB to E2E while this daemon holds its plaintext"
+            }
         })
     }
 }
@@ -245,6 +253,21 @@ struct CachedDerive {
     anchor: [u8; 32],
     valid_until: u64,
     result: Arc<DerivedMembership>,
+}
+
+/// Apply `update` to `doc` in memory. For a collection: whether it changed
+/// what "is E2E" is read from, the only kind of write that can switch the KB
+/// (`doc_store_e2e_switch`); `false` for any other document.
+fn apply_in_memory(
+    doc: &mut DocEntry,
+    update: &[u8],
+    collection: bool,
+) -> Result<bool, StorageError> {
+    let watch = collection.then(|| KbCollectionDoc::watch_encryption_inputs(doc.sync.doc()));
+    doc.sync
+        .apply_update(update)
+        .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
+    Ok(watch.is_some_and(|w| w.touched()))
 }
 
 /// Result of applying an update.
@@ -333,6 +356,7 @@ impl DocStore {
                 .map(|_| Mutex::new(()))
                 .collect(),
             e2e_switches_refused: std::sync::atomic::AtomicU64::new(0),
+            e2e_refusal_log: e2e_switch::RefusalLog::default(),
             #[cfg(test)]
             pauses: Pauses::default(),
         }
@@ -862,18 +886,33 @@ impl DocStore {
     /// different key, would otherwise swap the key its membership is verified
     /// against, and flip a hosted KB to fail-closed `Joined`. The same key from
     /// the same source is a no-op; anything else is refused and the dial ends.
+    ///
+    /// @ai-caution: [security] An anchor can switch a KB to E2E (the signed
+    /// op-log reads as E2E only under one), so a new one meets the E2E-switch
+    /// guard under the KB's switch gate (`doc_store_e2e_switch`).
     pub async fn set_kb_anchor(
         &self,
         kb_id: &str,
         owner_pubkey: [u8; 32],
     ) -> Result<(), AnchorRefused> {
         let source = AnchorSource::Joined;
+        let _switch = self.e2e_switch_gate(kb_id).await;
+        let refused = |existing: Option<&([u8; 32], AnchorSource)>| match existing {
+            Some(&(key, AnchorSource::Joined)) if key == owner_pubkey => Some(Ok(())),
+            Some(&(_, AnchorSource::HubRecorded)) => Some(Err(AnchorRefused::HubRecorded)),
+            Some(_) => Some(Err(AnchorRefused::OtherKey)),
+            None => None,
+        };
+        if let Some(r) = refused(self.kb_anchors.read().await.get(kb_id)) {
+            return r;
+        }
+        if let Some(held) = self.anchor_switch_refusal(kb_id, owner_pubkey).await {
+            return Err(AnchorRefused::E2eSwitch(held));
+        }
+        // Re-checked under the write lock (a startup load is not gated).
         let mut anchors = self.kb_anchors.write().await;
-        match anchors.get(kb_id) {
-            Some(&(key, AnchorSource::Joined)) if key == owner_pubkey => return Ok(()),
-            Some(&(_, AnchorSource::HubRecorded)) => return Err(AnchorRefused::HubRecorded),
-            Some(_) => return Err(AnchorRefused::OtherKey),
-            None => {}
+        if let Some(r) = refused(anchors.get(kb_id)) {
+            return r;
         }
         if let Err(e) = self
             .storage
@@ -898,12 +937,24 @@ impl DocStore {
     /// stored once, and a joined KB's never becomes hub-recorded). Durable first: a
     /// failed write records nothing, so memory never claims an anchor the next
     /// start would not have — the owner's next share or write retries it.
-    /// Returns whether this call recorded it.
+    /// Returns whether this call recorded it. An anchor that would switch the
+    /// KB to E2E over plaintext is refused, `E2eSwitchRefused`, as
+    /// [`set_kb_anchor`](Self::set_kb_anchor) refuses it.
     pub async fn record_kb_anchor_if_absent(
         &self,
         kb_id: &str,
         owner_pubkey: [u8; 32],
     ) -> Result<bool, StorageError> {
+        let _switch = self.e2e_switch_gate(kb_id).await;
+        if self.kb_anchors.read().await.contains_key(kb_id) {
+            return Ok(false);
+        }
+        if let Some(held) = self.anchor_switch_refusal(kb_id, owner_pubkey).await {
+            return Err(StorageError::E2eSwitchRefused {
+                kb_id: kb_id.to_string(),
+                held,
+            });
+        }
         let mut anchors = self.kb_anchors.write().await;
         if anchors.contains_key(kb_id) {
             return Ok(false);
@@ -1250,14 +1301,15 @@ impl DocStore {
 
     /// Refuse the update just applied to `doc` in memory, putting `doc` back
     /// to what storage holds: one that grows it past the size limit (ADR-109
-    /// D6), or, for a collection (`coll_before`: its KB and state before), one
-    /// that switches the KB to E2E over plaintext (`doc_store_e2e_switch`).
+    /// D6), or, for a collection whose encryption inputs it changed
+    /// (`coll_touched`: its KB), one that switches the KB to E2E over
+    /// plaintext (`doc_store_e2e_switch`).
     async fn refuse_applied(
         &self,
         doc_name: &str,
         doc: &mut DocEntry,
         size_before: usize,
-        coll_before: Option<(&str, &[u8])>,
+        coll_touched: Option<&str>,
     ) -> Result<(), StorageError> {
         let after = doc.sync.payload_bytes();
         let mut refused = self.size_refusal(doc_name, size_before, after);
@@ -1267,11 +1319,8 @@ impl DocStore {
                 size = after,
                 "refused an update over the document size limit"
             );
-        } else if let Some((kb, state_before)) = coll_before {
-            let state_after = doc.sync.encode_state();
-            refused = self
-                .e2e_switch_refusal(kb, state_before, &state_after)
-                .await;
+        } else if let Some(kb) = coll_touched {
+            refused = self.applied_switch_refusal(kb, doc_name, &doc.sync).await;
         }
         match refused {
             Some(refused) => {
@@ -1327,14 +1376,9 @@ impl DocStore {
             let mut stamp = self.stamp(by.into());
             stamp.checkpoint = self.handoff(doc_name, &doc.sync, &stamp.editors).await?;
             let (before, pending_before) = (doc.sync.payload_bytes(), doc.sync.pending_digest());
-            let coll_before = switch
-                .as_ref()
-                .map(|(k, _)| (k.as_str(), doc.sync.encode_state()));
-            doc.sync
-                .apply_update(update)
-                .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
-            let coll_before = coll_before.as_ref().map(|(k, s)| (*k, s.as_slice()));
-            self.refuse_applied(doc_name, &mut doc, before, coll_before)
+            let touched = apply_in_memory(&mut doc, update, switch.is_some())?;
+            let coll_touched = switch.as_ref().filter(|_| touched).map(|(k, _)| k.as_str());
+            self.refuse_applied(doc_name, &mut doc, before, coll_touched)
                 .await?;
 
             // WAL append (durability) before the update is acknowledged or relayed.

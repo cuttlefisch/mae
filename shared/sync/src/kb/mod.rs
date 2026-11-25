@@ -21,10 +21,12 @@ mod collection_format;
 mod collection_lease;
 mod collection_oplog;
 mod collection_roles;
+mod collection_watch;
 pub mod history;
 mod node;
 
 pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
+pub use collection_watch::EncryptionInputsWatch;
 pub use node::{
     body_bytes, validate_attachment_name, AttachmentError, AttachmentProblem, AttachmentRef,
     AttachmentsRead, KbNodeDoc, MaterializedNode, OrgHeader, UnwalkableAttachments,

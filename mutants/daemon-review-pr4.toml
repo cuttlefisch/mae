@@ -1,7 +1,7 @@
 # ADR-113 PR-4: the revision record, the request and the event chain. One
 # mutant per guard. Tests: daemon/src/review/tests/ and
 # daemon/src/review/chain_tests.rs (--lib), the history tests for the E2E
-# switch, the dialer's (--bin), and mae-sync's retention tests. Format: tools/mutate/README.md.
+# switch, the dialer's (--bin), and mae-sync's retention and encryption-watch tests. Format: tools/mutate/README.md.
 
 [[mutant]]
 id = "daemon-review-pr4/stale-version-unchecked"
@@ -280,10 +280,8 @@ filter = "test(a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted
 ref = "ADR-116 Amendment 1, O17: the switch guard is in apply_update, so a mesh peer's flip meets it"
 [[mutant.edit]]
 file = "daemon/src/doc_store.rs"
-find = '''            refused = self
-                .e2e_switch_refusal(kb, state_before, &state_after)
-                .await;'''
-replace = '''            refused = None.filter(|_: &StorageError| kb.len() + state_before.len() + state_after.len() > 0);'''
+find = '''            refused = self.applied_switch_refusal(kb, doc_name, &doc.sync).await;'''
+replace = '''            refused = None.filter(|_: &StorageError| kb.len() + doc_name.len() > 0);'''
 
 [[mutant]]
 id = "daemon-review-pr4/e2e-switch-unguarded-on-replace"
@@ -342,3 +340,69 @@ ref = "E9: free-text caps are in UTF-8 bytes"
 file = "daemon/src/review/mod.rs"
 find = '''    if s.len() > max {'''
 replace = '''    if s.chars().count() > max {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-anchor-unguarded"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_anchor_that_would_switch_a_kb_holding_plaintext_to_e2e_is_refused)"
+ref = "O17: recording a KB's anchor can switch it to E2E, so both registrations meet the guard"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''        if !is_e2e_under(&coll, Some(anchor)) || self.collection_is_e2e(kb_id, &coll).await {'''
+replace = '''        if true || !is_e2e_under(&coll, Some(anchor)) || self.collection_is_e2e(kb_id, &coll).await {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-mesh-refusal-retried"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_peer_offering_a_refused_switch_repeatedly_is_refused_once_and_the_session_ends)"
+ref = "O17: a mesh peer's refused switch ends the session; it is never re-pulled and re-refused"
+[[mutant.edit]]
+file = "daemon/src/dialer.rs"
+find = '''            return Err(Diverged(e.to_string()))'''
+replace = '''            drop(e)'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-refusal-log-unlimited"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(refusals_are_all_counted_and_their_warnings_rate_limited_per_kb)"
+ref = "O17: a refusal's warning is rate-limited per KB"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''            if now.duration_since(*at) < REFUSAL_LOG_INTERVAL {'''
+replace = '''            if false && now.duration_since(*at) < REFUSAL_LOG_INTERVAL {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-prefilter-never-touched"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_write_that_integrates_a_pending_switch_is_checked)"
+ref = "O17: the pre-filter skips the check only for a write that changed no encryption input"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''    Ok(watch.is_some_and(|w| w.touched()))'''
+replace = '''    Ok(watch.is_some_and(|w| w.touched() && false))'''
+
+[[mutant]]
+id = "daemon-review-pr4/encryption-watch-ignores-owner"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(every_change_to_an_encryption_input_touches_the_watch)"
+ref = "O17: the owner is an encryption input (its key anchors a KB the store owns)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_watch.rs"
+find = '''const ENCRYPTION_INPUT_KEYS: [&str; 3] = [COLL_OPLOG_KEY, COLL_ENCRYPTION_KEY, COLL_OWNER_KEY];'''
+replace = '''const ENCRYPTION_INPUT_KEYS: [&str; 2] = [COLL_OPLOG_KEY, COLL_ENCRYPTION_KEY];'''
+
+[[mutant]]
+id = "daemon-review-pr4/encryption-watch-ignores-nested"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(every_change_to_an_encryption_input_touches_the_watch) | test(a_pending_change_is_reported_by_the_write_that_integrates_it)"
+ref = "O17: a change inside the op-log or an op's record is an encryption input"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_watch.rs"
+find = '''        Some(PathSegment::Key(key)) => is_input(key),'''
+replace = '''        Some(PathSegment::Key(key)) => is_input(key) && false,'''

@@ -70,7 +70,16 @@ pub enum JoinOutcome {
     /// The owner explicitly REJECTED the join (not a member / not shared over P2p /
     /// role denied) — an authorization decision that retrying cannot change.
     Rejected(String),
+    /// The owner's collection can never merge here (see [`Diverged`]).
+    Diverged(String),
 }
+
+/// A peer's collection update this replica refused for good: it switches the
+/// KB to E2E while this daemon holds plaintext the switch would leave readable
+/// (ADR-113 O17, `doc_store_e2e_switch`). E2E latches in the signed log, so the
+/// peer never offers anything else: re-pulling would only re-refuse it, so the
+/// session with that peer ends, terminally, at the first refusal.
+struct Diverged(String);
 
 /// Why a peer session ended — drives the dialer's reconnect policy ([`run_peer`]).
 enum SessionEnd {
@@ -199,6 +208,7 @@ async fn peer_session(
         JoinOutcome::Rejected(why) => {
             return Err(SessionEnd::Terminal(format!("owner rejected join: {why}")))
         }
+        JoinOutcome::Diverged(why) => return Err(diverged(why)),
     }
 
     // No explicit notifications/subscribe is needed: the owner's kb/join handler
@@ -250,48 +260,14 @@ async fn peer_session(
             // apply locally (merge). A forged/mis-attributed/unsigned op is rejected.
             inbound = inbound_rx.recv() => match inbound {
                 Some(Ok(msg)) => {
-                    if let Some((doc, update, header)) = parse_sync_update(&msg) {
-                        // Mesh require-signed: the owner is an untrusted relay, so an
-                        // unsigned/forged/mis-attributed op is rejected (shared check).
-                        match mae_daemon::collab_handler::verify_relayed_content_op(
-                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), OpSender::mesh_relay(),
-                        ).await {
-                            Ok(verified) => {
-                                // #157 N1: the ADR-023 epoch fence runs on the mesh relay
-                                // too — not just the hub `kb/node_update` — so a stale-epoch
-                                // op can't slip in via the peer path (complete mediation).
-                                // The op's author (from the verified signed header) is the
-                                // principal whose current-epoch client_id must match.
-                                // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not
-                                // string prefix — a node doc that stops matching here
-                                // falls to `_ => None` and is never epoch-fenced on the
-                                // P2P path.
-                                let node_addr = match mae_sync::DocAddress::parse(&doc) {
-                                    Some(mae_sync::DocAddress::KbNode { node_id, .. }) => Some(node_id),
-                                    _ => None,
-                                };
-                                let fence_reject = match (
-                                    verified.as_ref().and_then(|h| h.get("author").and_then(|a| a.as_str())),
-                                    node_addr.as_deref(),
-                                ) {
-                                    (Some(author), Some(node_id)) => {
-                                        mae_daemon::collab_handler::enforce_epoch_fence(
-                                            doc_store, &ticket.kb_id, node_id, &doc, &update, author,
-                                        ).await.err()
-                                    }
-                                    _ => None, // unsigned/legacy/collection doc — no author to fence
-                                };
-                                match fence_reject {
-                                    Some(reason) => warn!(kb_id = %ticket.kb_id, doc = %doc, %reason, "mesh: REJECTED relayed op (epoch fence — #157 N1)"),
-                                    None => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified, Attribution::MeshPeer(&mesh_peer_fp(ticket))).await,
-                                }
-                            }
-                            Err(e) => warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)"),
-                        }
+                    if let Err(Diverged(why)) =
+                        apply_inbound(doc_store, broadcaster, dialer_sid, ticket, &msg).await
+                    {
+                        break Err(diverged(why));
                     }
                 }
                 Some(Err(e)) if e == "eof" => break Ok(()),
-                Some(Err(e)) => break Err(format!("read: {e}")),
+                Some(Err(e)) => break Err(format!("read: {e}").into()),
                 None => break Ok(()),
             },
             // OUTBOUND: a local edit to one of this KB's docs → forward to the owner,
@@ -311,7 +287,7 @@ async fn peer_session(
                         "jsonrpc": "2.0", "id": 3, "method": "sync/update", "params": params
                     }).to_string();
                     if let Err(e) = mae_mcp::write_framed(&mut send, req.as_bytes(), WRITE_TIMEOUT).await {
-                        break Err(format!("forward local edit: {e}"));
+                        break Err(format!("forward local edit: {e}").into());
                     }
                 }
             }
@@ -324,8 +300,101 @@ async fn peer_session(
         .unwrap_or_else(|e| e.into_inner())
         .unsubscribe(dialer_sid);
     reader_task.abort();
-    // Read/forward/EOF failures are all network/protocol — transient, so reconnect.
-    result.map_err(SessionEnd::Transient)
+    // Read/forward/EOF failures are network/protocol — transient, so reconnect;
+    // a diverged collection is terminal.
+    result
+}
+
+/// One inbound message of a live session: a pushed `sync_update` is verified
+/// (ADR-036: an unsigned, forged or mis-attributed op is rejected), epoch-fenced
+/// and applied; anything else is ignored. `Err` only when the peer's
+/// collection diverged ([`Diverged`]).
+async fn apply_inbound(
+    doc_store: &Arc<DocStore>,
+    broadcaster: &SharedBroadcaster,
+    dialer_sid: u64,
+    ticket: &JoinTicket,
+    msg: &str,
+) -> Result<(), Diverged> {
+    let Some((doc, update, header)) = parse_sync_update(msg) else {
+        return Ok(());
+    };
+    // Mesh require-signed: the owner is an untrusted relay, so an
+    // unsigned/forged/mis-attributed op is rejected (shared check).
+    match mae_daemon::collab_handler::verify_relayed_content_op(
+        doc_store,
+        &ticket.kb_id,
+        &doc,
+        &update,
+        header.as_ref(),
+        OpSender::mesh_relay(),
+    )
+    .await
+    {
+        Ok(verified) => {
+            // #157 N1: the ADR-023 epoch fence runs on the mesh relay
+            // too — not just the hub `kb/node_update` — so a stale-epoch
+            // op can't slip in via the peer path (complete mediation).
+            // The op's author (from the verified signed header) is the
+            // principal whose current-epoch client_id must match.
+            // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not
+            // string prefix — a node doc that stops matching here
+            // falls to `_ => None` and is never epoch-fenced on the
+            // P2P path.
+            let node_addr = match mae_sync::DocAddress::parse(&doc) {
+                Some(mae_sync::DocAddress::KbNode { node_id, .. }) => Some(node_id),
+                _ => None,
+            };
+            let fence_reject = match (
+                verified
+                    .as_ref()
+                    .and_then(|h| h.get("author").and_then(|a| a.as_str())),
+                node_addr.as_deref(),
+            ) {
+                (Some(author), Some(node_id)) => mae_daemon::collab_handler::enforce_epoch_fence(
+                    doc_store,
+                    &ticket.kb_id,
+                    node_id,
+                    &doc,
+                    &update,
+                    author,
+                )
+                .await
+                .err(),
+                _ => None, // unsigned/legacy/collection doc — no author to fence
+            };
+            match fence_reject {
+                Some(reason) => {
+                    warn!(kb_id = %ticket.kb_id, doc = %doc, %reason, "mesh: REJECTED relayed op (epoch fence — #157 N1)")
+                }
+                None => {
+                    let from = Attribution::MeshPeer(&mesh_peer_fp(ticket));
+                    return apply_doc(
+                        doc_store,
+                        Some(broadcaster),
+                        dialer_sid,
+                        &doc,
+                        &update,
+                        verified,
+                        from,
+                    )
+                    .await;
+                }
+            }
+        }
+        Err(e) => {
+            warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)")
+        }
+    }
+    Ok(())
+}
+
+/// The terminal end of a session whose collection diverged ([`Diverged`]).
+fn diverged(why: String) -> SessionEnd {
+    SessionEnd::Terminal(format!(
+        "diverged from the peer, not re-pulled (the KB's plaintext here must be dealt \
+         with first): {why}"
+    ))
 }
 
 /// The owner daemon's key fingerprint, which the editor record names as the
@@ -555,17 +624,21 @@ async fn apply_join_response(
     let coll_bytes =
         base64_to_update(coll_b64).map_err(|e| format!("bad collection_state: {e}"))?;
     // The join snapshot is the owner's authoritative state (not an individual signed
-    // content op), so it carries no authorship header.
-    apply_doc(
+    // content op), so it carries no authorship header. A diverged collection
+    // stops here: none of the owner's nodes are taken either.
+    let coll_doc = format!("kbc:{kb_id}");
+    let applied = apply_doc(
         doc_store,
         broadcaster,
         exclude_sid,
-        &format!("kbc:{kb_id}"),
+        &coll_doc,
         &coll_bytes,
         None,
         from,
-    )
-    .await;
+    );
+    if let Err(Diverged(why)) = applied.await {
+        return Ok(JoinOutcome::Diverged(why));
+    }
 
     let mut nodes = 0usize;
     if let Some(arr) = result.get("nodes").and_then(|n| n.as_array()) {
@@ -585,16 +658,19 @@ async fn apply_join_response(
                 warn!(node = %id, "mesh join: undecodable node payload");
                 continue;
             };
-            apply_doc(
+            let node_doc = mae_sync::kb_node_doc_name(kb_id, id);
+            let applied = apply_doc(
                 doc_store,
                 broadcaster,
                 exclude_sid,
-                &mae_sync::kb_node_doc_name(kb_id, id),
+                &node_doc,
                 &update,
                 None,
                 from,
-            )
-            .await;
+            );
+            if let Err(Diverged(why)) = applied.await {
+                return Ok(JoinOutcome::Diverged(why));
+            }
             nodes += 1;
         }
     }
@@ -603,7 +679,8 @@ async fn apply_join_response(
 
 /// Apply a remote update to a local doc (non-destructive merge) and, when a
 /// broadcaster is present, notify local subscribers (e.g. this peer's editor) so the
-/// change surfaces live.
+/// change surfaces live. Any other failure is logged and the session goes on;
+/// a switch refused over plaintext is [`Diverged`].
 async fn apply_doc(
     doc_store: &Arc<DocStore>,
     broadcaster: Option<&SharedBroadcaster>,
@@ -612,7 +689,7 @@ async fn apply_doc(
     update: &[u8],
     content_header: Option<Value>,
     from: Attribution<'_>,
-) {
+) -> Result<(), Diverged> {
     // A verified signed header names the content's author (ADR-113 D3).
     let signer = mae_daemon::doc_editors::verified_signer(content_header.as_ref());
     let by = mae_daemon::doc_editors::Writer::signed(from, signer);
@@ -638,8 +715,13 @@ async fn apply_doc(
                     );
             }
         }
+        // Counted and logged (rate-limited) by the store.
+        Err(e @ mae_daemon::storage::StorageError::E2eSwitchRefused { .. }) => {
+            return Err(Diverged(e.to_string()))
+        }
         Err(e) => warn!(doc = %doc_name, error = %e, "mesh: failed to apply remote update"),
     }
+    Ok(())
 }
 
 /// Extract `(doc_name, update_bytes, content_header)` from an inbound
@@ -1295,6 +1377,104 @@ mod tests {
         let stopped = tokio::time::timeout(Duration::from_secs(8), peer).await;
         assert!(stopped.is_ok(), "a refused anchor is terminal, not retried");
         assert_eq!(b_store.kb_anchor_record("kbh").await, kept);
+    }
+
+    /// ADR-113 O17 on the mesh, bounded: B holds plaintext history of A's KB,
+    /// and A switches the KB to E2E. B can never merge that, so the first
+    /// refusal ends B's session for good (terminal: no reconnect, no re-pull)
+    /// instead of refusing every push and every reconnect's pull. A pushes the
+    /// switch five times; B refuses it once, logs it once, and its session
+    /// returns. Then a fresh session against the switched owner is refused at
+    /// the pull, once, and ends too.
+    #[tokio::test]
+    async fn a_peer_offering_a_refused_switch_repeatedly_is_refused_once_and_the_session_ends() {
+        let a_id = Arc::new(Identity::generate("owner-A"));
+        let b_id = Identity::generate("joiner-B");
+        let (addr, a_store, a_bc) = serve_owner_kb(&a_id, "kbd", Some(&b_id.fingerprint())).await;
+        let b_store = mem_store();
+        let ticket = JoinTicket::new(addr, "kbd");
+        let endpoint = || bind_endpoint(&b_id, RelayMode::Disabled);
+        let peer = tokio::spawn(run_peer(
+            endpoint().await.unwrap(),
+            ticket.clone(),
+            Arc::clone(&b_store),
+            bc(),
+        ));
+        let node = "kbn:kbd:concept:n";
+        assert!(
+            wait_until(5, || {
+                let s = Arc::clone(&b_store);
+                async move { s.has_doc(node).await }
+            })
+            .await,
+            "B pulls the KB"
+        );
+        // B's own editors write the node in turn: B now holds plaintext history.
+        for (i, who) in ["alice", "bob"].into_iter().enumerate() {
+            let state = b_store.encode_state(node).await.unwrap();
+            let mut d = KbNodeDoc::from_bytes_with_client_id(&state, 900 + i as u64).unwrap();
+            let up = d.set_title(&format!("T{i}"));
+            let by = Attribution::Principal(who);
+            b_store.apply_update(node, &up, None, by).await.unwrap();
+        }
+        assert!(b_store.history_holds_content("kbd").await.unwrap());
+
+        // A switches to E2E (it holds no plaintext, so it may) and pushes it 5x.
+        let (st, _) = a_store.encode_state_and_sv("kbc:kbd").await.unwrap();
+        let mut coll = KbCollectionDoc::from_bytes(&st).unwrap();
+        let switch = coll.author_e2e_genesis(
+            "kbd",
+            &a_id.fingerprint(),
+            &a_id.secret_bytes(),
+            &a_id.public().to_bytes(),
+            vec![7; 48],
+            0,
+        );
+        a_store
+            .apply_update("kbc:kbd", &switch, None, TEST_BY)
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            a_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+                buffer_name: "kbc:kbd".to_string(),
+                update_base64: update_to_base64(&switch),
+                wal_seq: 0,
+                content_header: None,
+            });
+        }
+        let stopped = tokio::time::timeout(Duration::from_secs(8), peer).await;
+        assert!(stopped.is_ok(), "the session ends: B never re-pulls it");
+        assert_eq!(
+            b_store.e2e_switches_refused(),
+            1,
+            "applied once, not per push"
+        );
+        assert_eq!(b_store.e2e_switch_refusals_logged(), 1, "logged once");
+
+        // A later session (a re-share) is refused at the pull, and ends.
+        let peer = tokio::spawn(run_peer(
+            endpoint().await.unwrap(),
+            ticket,
+            Arc::clone(&b_store),
+            bc(),
+        ));
+        let stopped = tokio::time::timeout(Duration::from_secs(8), peer).await;
+        assert!(
+            stopped.is_ok(),
+            "refused at the pull: terminal, not retried"
+        );
+        assert_eq!(b_store.e2e_switches_refused(), 2);
+        assert_eq!(
+            b_store.e2e_switch_refusals_logged(),
+            1,
+            "rate-limited per KB"
+        );
+        let (st, _) = b_store.encode_state_and_sv("kbc:kbd").await.unwrap();
+        let held = KbCollectionDoc::from_bytes(&st).unwrap();
+        assert!(
+            !b_store.collection_is_e2e("kbd", &held).await,
+            "B stays plaintext"
+        );
     }
 }
 
