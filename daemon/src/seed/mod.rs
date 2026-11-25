@@ -50,6 +50,11 @@
 //! MAE's own header keywords (`#+kind`, `#+aliases`, …), whose meaning would
 //! then be stored twice.
 //!
+//! Attachments (ADR-115 P4): each `[[attachment:NAME]]` link's file, found
+//! at org-attach's layout next to the page (`data/<ID[0:2]>/<ID[2:]>/NAME`,
+//! the nearest `:ID:` up the outline), is processed as an upload would be and
+//! bound in the node's `attachments` map; see [`attach`].
+//!
 //! The `:ID:` is taken exactly as Org reads it. It is never derived from the file
 //! name and never validated as a uuid.
 //!
@@ -59,6 +64,7 @@
 //! case either fits the contract or becomes a named refusal; never a default.
 
 mod apply;
+mod attach;
 mod export;
 mod git;
 mod glob;
@@ -71,6 +77,11 @@ mod update;
 pub use apply::node_from_file;
 pub use apply::{
     apply, build_collection, build_node, ApplyError, ApplyOutcome, ApplyRefusalKind, ApplyTarget,
+    SeedAttachments,
+};
+pub use attach::{
+    file_path as attachment_file_path, links as attachment_links, AttachmentLimits, AttachmentLink,
+    BlobReader, GitBlobs, PlannedAttachment,
 };
 pub use export::{export, render, ExportRefusal, ExportRefusalKind, ExportReport, Rendered};
 pub use git::{GitRepo, TreeEntry};
@@ -153,6 +164,17 @@ pub enum ProblemKind {
     CheckoutAttribute,
     ExcludeNotSelected,
     NothingSelected,
+    /// ADR-115 D7: an `[[attachment:NAME]]` link the seed cannot carry.
+    AttachmentName,
+    AttachmentDir,
+    AttachmentPath,
+    AttachmentCollision,
+    AttachmentMissing,
+    AttachmentSymlink,
+    AttachmentTooLarge,
+    AttachmentTooManyPixels,
+    AttachmentUndecodable,
+    AttachmentUnsupported,
 }
 
 impl ProblemKind {
@@ -192,6 +214,16 @@ impl ProblemKind {
             CheckoutAttribute => "checkout_attribute",
             ExcludeNotSelected => "exclude_not_selected",
             NothingSelected => "nothing_selected",
+            AttachmentName => "attachment_name",
+            AttachmentDir => "attachment_dir",
+            AttachmentPath => "attachment_path",
+            AttachmentCollision => "attachment_collision",
+            AttachmentMissing => "attachment_missing",
+            AttachmentSymlink => "attachment_symlink",
+            AttachmentTooLarge => "attachment_too_large",
+            AttachmentTooManyPixels => "attachment_too_many_pixels",
+            AttachmentUndecodable => "attachment_undecodable",
+            AttachmentUnsupported => "attachment_unsupported",
         }
     }
 }

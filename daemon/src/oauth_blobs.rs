@@ -79,7 +79,7 @@ pub(crate) const RETRY_AFTER_SECS: u64 =
     (MEASURED_WORST_JOB.as_millis() as u64 * JOBS_PER_TENANT as u64).div_ceil(1000);
 
 /// Frames an animated GIF, APNG or WebP may have (D3a's frame limit).
-pub(crate) const MAX_FRAMES: u32 = 1000;
+pub(crate) const MAX_FRAMES: u32 = mae_daemon::blob_store::process::MAX_FRAMES;
 
 /// `Content-Security-Policy` on every blob: no script, no fetch, a unique
 /// origin. D3's header, exactly.

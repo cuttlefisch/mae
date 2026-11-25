@@ -21,6 +21,14 @@
 //! 2. The seed record and every node row, in ONE transaction, marked "not yet
 //!    applied". From here a re-run with the same plan resumes, a different plan
 //!    is refused, and the rows (not the re-planned clock) are the node times.
+//!
+//!    Then every attachment file (ADR-115 D7) is read again from the commit,
+//!    processed and committed to the KB's blob store through the store's own
+//!    pipeline (`blob_store::upload::store_bytes`), and must come out at the
+//!    sha256 the plan names. All of them before any node: a node never binds
+//!    a blob the store lacks. A failure here leaves no node written; the blobs
+//!    already committed are unreferenced, and a re-run finds them (the same
+//!    bytes are the same blob, charged once).
 //! 3. Each node document absent is written (one transaction each); one present
 //!    and equal is kept; one present and different stops the apply. Nothing is
 //!    ever overwritten.
@@ -33,6 +41,7 @@
 //! is someone's content, and the seed must stop rather than replace it.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use mae_mcp::identity::Identity;
 use mae_sync::kb::{
@@ -41,8 +50,11 @@ use mae_sync::kb::{
 use mae_sync::membership::MembershipAction;
 use mae_sync::DocAddress;
 
+use super::attach::{AttachmentLimits, BlobReader};
 use super::plan::sha256_hex;
 use super::{regen, PlannedNode, SeedPlan, SplitFile, CONTRACT};
+use crate::blob_store::upload::{store_bytes, Job, UploadError};
+use crate::blob_store::StorageQuota;
 use crate::doc_editors::{Attribution, InternalWriter};
 use crate::doc_store::DocStore;
 use crate::storage::{SeedNodeRow, SeedRecord, StorageError};
@@ -63,6 +75,23 @@ pub struct ApplyTarget<'a> {
     pub owner: &'a Identity,
     /// Unix seconds, recorded as the apply's start and finish.
     pub now: i64,
+    /// Where a plan's attachment files are read from, and the bounds and
+    /// quota they are stored under (ADR-115 D7). `None`: a plan with any
+    /// attachment is refused ([`ApplyRefusalKind::AttachmentsOff`]). The
+    /// store is the doc store's own (`DocStore::blob_store`).
+    pub attach: Option<SeedAttachments>,
+}
+
+/// What storing a plan's attachments needs besides the plan.
+#[derive(Clone)]
+pub struct SeedAttachments {
+    /// The commit's blobs: the same reader the plan was made with.
+    pub reader: Arc<dyn BlobReader>,
+    pub limits: AttachmentLimits,
+    /// The bucket the blobs are charged to. A seed is written by the daemon,
+    /// a principal in no tenant, so the CLI passes the shared bucket
+    /// (`oauth.default_storage_bytes`, ADR-115 B2).
+    pub quota: Option<StorageQuota>,
 }
 
 /// What an apply did.
@@ -109,6 +138,14 @@ pub enum ApplyRefusalKind {
     /// `--update` of an end-to-end encrypted KB, whose content the daemon
     /// cannot read or write.
     Encrypted,
+    /// The plan has attachments and this daemon stores none: no attachment
+    /// store is open (`oauth.attachments_enabled` is off), or the KB's id is
+    /// not one the store accepts.
+    AttachmentsOff,
+    /// Storing an attachment failed: the store refused it (quota), or its
+    /// processing came out other than the plan says (another build of the
+    /// daemon, or a repository that changed under the plan).
+    AttachmentFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,8 +191,14 @@ pub async fn apply(
         }
         Some((rec, _)) if rec.applied_at.is_some() => return Ok(ApplyOutcome::AlreadyApplied),
         Some((_, rows)) => rows_for_plan(plan, rows)?,
-        None => begin(store, plan, &hash, t).await?,
+        None => {
+            // Checked before anything is recorded: a plan this daemon cannot
+            // store never starts a seed it could not finish.
+            attachment_store(store, plan, t)?;
+            begin(store, plan, &hash, t).await?
+        }
     };
+    store_attachments(store, plan, t).await?;
     let (created, present) = write_nodes(store, t.kb_id, plan, &rows).await?;
     #[cfg(test)]
     crash::at(plan.nodes.len())?;
@@ -259,15 +302,24 @@ pub(super) fn row_from_plan(n: &PlannedNode) -> SeedNodeRow {
     }
 }
 
-/// The node document a planned file becomes. Times come from the seed row, so a
-/// resumed apply rebuilds exactly what the first run wrote.
+/// The node document a planned file becomes, its attachments bound. Times come
+/// from the seed row, so a resumed apply rebuilds exactly what the first run
+/// wrote.
 pub fn build_node(n: &PlannedNode, row: &SeedNodeRow) -> KbNodeDoc {
-    node_from_file(&n.file, row.created_at)
+    let mut doc = node_from_file(&n.file, row.created_at);
+    for a in &n.attachments {
+        // The plan refused every NAME the writer would (the NAME rule, a
+        // folded pair), with the writer's own functions.
+        let bound = doc.set_attachment(&a.name, &a.entry());
+        debug_assert!(bound.is_ok(), "{}: {bound:?}", a.name);
+    }
+    doc
 }
 
-/// The seed's one file-to-node mapping. The apply writes it, and the export
-/// checks a node against it (`export::unrepresented`), so the two directions
-/// cannot drift apart.
+/// The seed's one file-to-node mapping, without attachments (whose entries
+/// come from processing the files, not from the text). The apply writes it,
+/// and the export checks a node against it (`export::unrepresented`), so the
+/// two directions cannot drift apart.
 pub fn node_from_file(f: &SplitFile, created_at: i64) -> KbNodeDoc {
     let tags = f.filetags.clone().unwrap_or_default();
     let title = f.title.as_deref().unwrap_or("");
@@ -424,6 +476,150 @@ fn is_seed_collection(c: &KbCollectionDoc, plan: &SeedPlan, owner_fp: &str) -> b
         && c.body_format().as_deref() == Some(BODY_FORMAT_ORG_LITERAL_V1)
         && c.oplog_head().is_some()
         && manifest == planned
+}
+
+/// The attachment store a plan with attachments is written to, or why there
+/// is none. `Ok(None)`: the plan has no attachments.
+pub(super) fn attachment_store(
+    store: &DocStore,
+    plan: &SeedPlan,
+    t: &ApplyTarget<'_>,
+) -> Result<Option<(Arc<crate::blob_store::BlobStore>, SeedAttachments)>, ApplyError> {
+    if plan.nodes.iter().all(|n| n.attachments.is_empty()) {
+        return Ok(None);
+    }
+    let off = |why: &str| {
+        refuse(
+            ApplyRefusalKind::AttachmentsOff,
+            format!(
+                "the plan binds {} attachment file(s) and {why}",
+                plan.unique_attachments().len()
+            ),
+        )
+    };
+    let Some(blobs) = store.blob_store() else {
+        return Err(off(
+            "this daemon stores no attachments: set oauth.attachments_enabled",
+        ));
+    };
+    let Some(attach) = t.attach.clone() else {
+        return Err(off("no attachment source was given"));
+    };
+    if !crate::blob_store::valid_kb_id(t.kb_id) {
+        return Err(off(&format!(
+            "'{}' is not a KB id the attachment store accepts ([a-z0-9][a-z0-9-]{{0,62}})",
+            t.kb_id
+        )));
+    }
+    Ok(Some((Arc::clone(blobs), attach)))
+}
+
+/// Step 2a: every attachment of the plan in the KB's blob store, each at the
+/// sha256 the plan names. Idempotent: a blob already held is not stored or
+/// charged again.
+pub(super) async fn store_attachments(
+    store: &DocStore,
+    plan: &SeedPlan,
+    t: &ApplyTarget<'_>,
+) -> Result<(), ApplyError> {
+    let Some((blobs, attach)) = attachment_store(store, plan, t)? else {
+        return Ok(());
+    };
+    let wanted: Vec<(String, String, u64, String)> = plan
+        .unique_attachments()
+        .into_iter()
+        .map(|a| {
+            (
+                a.blob.clone(),
+                a.sha256.clone(),
+                a.size,
+                a.media_type.clone(),
+            )
+        })
+        .collect();
+    let kb_id = t.kb_id.to_string();
+    let job = tokio::task::spawn_blocking(move || store_all(&blobs, &kb_id, &attach, &wanted));
+    match job.await {
+        Ok(r) => r,
+        Err(e) => Err(refuse(
+            ApplyRefusalKind::AttachmentFailed,
+            format!("storing attachments stopped: {e}"),
+        )),
+    }
+}
+
+/// Synchronous: commits take the KB's binding lock, which blocks.
+fn store_all(
+    blobs: &crate::blob_store::BlobStore,
+    kb_id: &str,
+    attach: &SeedAttachments,
+    wanted: &[(String, String, u64, String)],
+) -> Result<(), ApplyError> {
+    let processor: &crate::blob_store::upload::Processor = &crate::blob_store::process::process;
+    let limits = attach.limits.process();
+    let by_blob: HashMap<&str, Vec<&(String, String, u64, String)>> =
+        wanted.iter().fold(HashMap::new(), |mut m, w| {
+            m.entry(w.0.as_str()).or_default().push(w);
+            m
+        });
+    let mut shas: Vec<String> = by_blob.keys().map(|s| s.to_string()).collect();
+    shas.sort();
+    let mut first_error: Option<ApplyError> = None;
+    let mut seen = 0usize;
+    let read = attach.reader.for_each(&shas, &mut |blob, bytes| {
+        seen += 1;
+        if first_error.is_some() {
+            return;
+        }
+        let stored = store_bytes(
+            blobs,
+            kb_id,
+            bytes.to_vec(),
+            &limits,
+            attach.quota.as_ref(),
+            processor,
+            &Job::new(),
+        );
+        let checked = match stored {
+            Ok(meta) => by_blob[blob]
+                .iter()
+                .find(|w| w.1 != meta.sha256 || w.2 != meta.size || w.3 != meta.media_type.as_str())
+                .map(|w| {
+                    format!(
+                        "blob {blob}: processing gave {} ({} bytes, {}), the plan names {} \
+                         ({} bytes, {}); re-run the dry run with this daemon",
+                        meta.sha256,
+                        meta.size,
+                        meta.media_type.as_str(),
+                        w.1,
+                        w.2,
+                        w.3
+                    )
+                }),
+            Err(UploadError::Process(e)) => Some(format!("blob {blob}: {e:?}")),
+            Err(UploadError::Store(e)) => Some(format!("blob {blob}: {e}")),
+            Err(UploadError::Cancelled) => Some(format!("blob {blob}: cancelled")),
+        };
+        if let Some(detail) = checked {
+            first_error = Some(refuse(ApplyRefusalKind::AttachmentFailed, detail));
+        }
+    });
+    if let Err(e) = read {
+        return Err(refuse(
+            ApplyRefusalKind::AttachmentFailed,
+            format!("reading attachment files: {e}"),
+        ));
+    }
+    if let Some(e) = first_error {
+        return Err(e);
+    }
+    if seen != shas.len() {
+        return Err(refuse(
+            ApplyRefusalKind::AttachmentFailed,
+            format!("{} of {} attachment files were read", seen, shas.len()),
+        ));
+    }
+    Ok(())
 }
 
 /// A test-only crash point: stop the apply before writing node `i` (`n`:

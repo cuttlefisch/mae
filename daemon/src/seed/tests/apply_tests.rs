@@ -86,6 +86,7 @@ pub(super) fn target<'a>(owner: &'a Identity, hash: &'a str) -> ApplyTarget<'a> 
         plan_hash: hash,
         owner,
         now: T + 10,
+        attach: None,
     }
 }
 

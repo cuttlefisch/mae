@@ -17,7 +17,7 @@
 //! call this.
 
 use super::super::MaterializedNode;
-use super::KbNodeDoc;
+use super::{AttachmentRef, KbNodeDoc};
 
 impl KbNodeDoc {
     /// Make this document's content `target` and return the update that does
@@ -45,7 +45,29 @@ impl KbNodeDoc {
         if let Some(header) = &target.org_header {
             let _ = self.set_org_header(header);
         }
+        self.assign_attachments(&target.attachments);
         self.encode_diff(&before).unwrap_or_default()
+    }
+
+    /// The `attachments` map (ADR-115 D4): every NAME the reader shows that
+    /// the target lacks is removed, then every target entry that differs is
+    /// set, through the writers' own rules. An entry the display reader
+    /// rejects is not the target's to judge and is left as stored, so the
+    /// sweep still sees the hash it holds.
+    ///
+    /// A target entry a writer refuses (a NAME that folds onto one stored
+    /// beside it) is not written: a caller holding a target it must reach
+    /// compares `attachments()` afterwards (`seed::update` does).
+    fn assign_attachments(&mut self, target: &std::collections::BTreeMap<String, AttachmentRef>) {
+        let current = self.attachments();
+        for name in current.keys().filter(|n| !target.contains_key(*n)) {
+            let _ = self.remove_attachment(name);
+        }
+        for (name, entry) in target {
+            if current.get(name) != Some(entry) {
+                let _ = self.set_attachment(name, entry);
+            }
+        }
     }
 
     fn assign_tags(&mut self, tags: &[String]) {
@@ -92,6 +114,8 @@ mod tests {
         let _ = d.set_properties(&HashMap::from([("ID".into(), "n".into())]));
         let _ = d.add_link("x");
         let _ = d.set_todo_state(Some("TODO"));
+        let _ = d.set_attachment("old.png", &entry('a')).unwrap();
+        let _ = d.set_attachment("kept.png", &entry('c')).unwrap();
         d
     }
 
@@ -110,7 +134,15 @@ mod tests {
             has_title_line: true,
             has_filetags_line: false,
         });
+        t.attachments = [("new.png", 'b'), ("kept.png", 'k')]
+            .into_iter()
+            .map(|(n, c)| (n.to_string(), entry(c)))
+            .collect();
         t
+    }
+
+    fn entry(c: char) -> AttachmentRef {
+        AttachmentRef::new(c.to_string().repeat(64), 7, "image/png").unwrap()
     }
 
     /// Every field reaches the target, including a reordered tag list, and a

@@ -662,6 +662,9 @@ async fn spawn_oauth_listener(
     state.lock().await.oauth_conn = Some(oauth_limiter.clone());
     let (bindings, binding_routes) = oauth_identity_binding(config);
     let blobs = oauth_blob_routes(config, doc_store.is_some());
+    if let (Some(routes), Some(store)) = (blobs.as_ref(), doc_store.as_ref()) {
+        store.set_blob_store(Arc::clone(&routes.store));
+    }
     let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
     {
         Ok(l) => l

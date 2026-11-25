@@ -61,6 +61,13 @@ use std::sync::{Arc, Mutex};
 
 pub use sniff::MediaType;
 
+/// `oauth.max_attachment_bytes`'s default: 10 MiB (see `oauth_config`, where
+/// the reasoning is pinned). Here so that every way into the store, the
+/// HTTPS route and `kb seed`, starts from one value.
+pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
+/// `oauth.max_attachment_pixels`'s default: D3a's 40 megapixels.
+pub const DEFAULT_MAX_ATTACHMENT_PIXELS: u64 = 40_000_000;
+
 /// The blob root's name under the collab data directory.
 pub const DIR: &str = "blobs";
 /// The metadata database, inside the blob root.
