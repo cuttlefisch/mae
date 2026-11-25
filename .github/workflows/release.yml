@@ -69,6 +69,14 @@ jobs:
           chmod +x dist/mae-pkg/install.sh
           tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
+      # Every Linux binary must start on a CPU with nothing past the x86-64
+      # baseline: a toolchain that defaulted to AVX shipped v0.14.191-193
+      # binaries that died with SIGILL on such CPUs.
+      - name: Check the binaries run on a baseline x86-64 CPU
+        run: |
+          sudo apt-get install -y qemu-user-static || sudo apt-get install -y qemu-user
+          scripts/check-baseline-cpu.sh dist/mae-pkg/mae dist/mae-pkg/mae-daemon dist/mae-pkg/mae-mcp-shim
+
       # The ADR KB ships as its OWN asset, not inside the user packages. It is
       # ~57 MB of MAE's own decision history — useful to contributors querying
       # why the architecture is the way it is (ADR-059), useless to someone who
@@ -114,6 +122,14 @@ jobs:
       - name: Build GUI binary
         run: |
           cargo build --release --features gui --package mae
+
+      # Every Linux binary must start on a CPU with nothing past the x86-64
+      # baseline: a toolchain that defaulted to AVX shipped v0.14.191-193
+      # binaries that died with SIGILL on such CPUs.
+      - name: Check the binaries run on a baseline x86-64 CPU
+        run: |
+          sudo apt-get install -y qemu-user-static || sudo apt-get install -y qemu-user
+          scripts/check-baseline-cpu.sh target/release/mae
 
       - name: Build AppImage
         run: |
