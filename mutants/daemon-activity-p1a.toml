@@ -370,7 +370,7 @@ replace = '''        if false && &link.prev_hash != prev {'''
 id = "daemon-activity-p1a/verify-skips-the-body-hash"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(flipping_any_byte_of_any_stored_link_or_body_fails_verify)"
+filter = "test(flipping_sampled_bytes_of_every_stored_link_and_body_fails_verify)"
 ref = "ADR-120 D8 step 5: body_hash recomputed"
 [[mutant.edit]]
 file = "daemon/src/activity/export.rs"

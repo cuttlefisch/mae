@@ -226,49 +226,96 @@ fn at_is_microseconds_and_reads_back() {
 // --- the stored chain -------------------------------------------------------
 
 /// Flipping any byte of any stored link or body fails verification.
+/// Exhaustive, so it runs on demand (`--ignored`): it copies the database
+/// once per byte, about 40 s in a debug build. The test below covers every
+/// column of every row in the merge gate.
 #[test]
+#[ignore = "exhaustive, about 40 s in debug: run with --ignored"]
 fn flipping_any_byte_of_any_stored_link_or_body_fails_verify() {
+    let (dir, path, rows) = flip_fixture();
+    for (gseq, link, body) in &rows {
+        for (col, bytes) in [("link", link), ("body", body)] {
+            for i in 0..bytes.len() {
+                assert_flip_fails_verify(dir.path(), &path, *gseq, col, bytes, i);
+            }
+        }
+    }
+}
+
+/// A flip of the first, middle and last byte, and of a seeded sample of 24
+/// more, in every column of every row, fails verification.
+#[test]
+fn flipping_sampled_bytes_of_every_stored_link_and_body_fails_verify() {
+    let (dir, path, rows) = flip_fixture();
+    let mut x: u64 = 0x5eed_f11b;
+    for (gseq, link, body) in &rows {
+        for (col, bytes) in [("link", link), ("body", body)] {
+            let n = bytes.len();
+            let mut at = vec![0, n / 2, n - 1];
+            for _ in 0..24 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                at.push((x % n as u64) as usize);
+            }
+            for i in at {
+                assert_flip_fails_verify(dir.path(), &path, *gseq, col, bytes, i);
+            }
+        }
+    }
+}
+
+/// Each row's `gseq`, link and body.
+type FlipRows = Vec<(u64, Vec<u8>, Vec<u8>)>;
+
+/// A verified database of three events, and each row's link and body.
+fn flip_fixture() -> (tempfile::TempDir, std::path::PathBuf, FlipRows) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(super::DB_FILE);
     let db = ActivityDb::open(&path).unwrap();
     fill(&db, 0x5eed_0002, 3);
     export::verify_db(&db).unwrap();
-    let rows: Vec<(u64, Vec<u8>, Vec<u8>)> = {
-        let mut v = Vec::new();
-        db.for_each_row(1, 3, |r| {
-            v.push((r.gseq, r.link, r.body));
-            Ok(())
-        })
-        .unwrap();
-        v
-    };
+    let mut rows = Vec::new();
+    db.for_each_row(1, 3, |r| {
+        rows.push((r.gseq, r.link, r.body));
+        Ok(())
+    })
+    .unwrap();
     drop(db);
-    for (gseq, link, body) in &rows {
-        for (col, bytes) in [("link", link), ("body", body)] {
-            for i in 0..bytes.len() {
-                let mut flipped = bytes.clone();
-                flipped[i] ^= 0x01;
-                let copy = dir.path().join(format!("flip-{gseq}-{col}-{i}.db"));
-                std::fs::copy(&path, &copy).unwrap();
-                let c = sqlite::Connection::open(&copy).unwrap();
-                c.execute("DROP TRIGGER events_no_update").unwrap();
-                let mut st = c
-                    .prepare(format!("UPDATE events SET {col} = ?1 WHERE gseq = ?2"))
-                    .unwrap();
-                st.bind((1, &flipped[..])).unwrap();
-                st.bind((2, *gseq as i64)).unwrap();
-                st.next().unwrap();
-                drop(st);
-                drop(c);
-                let db = ActivityDb::open_read_only(&copy).unwrap();
-                assert!(
-                    export::verify_db(&db).is_err(),
-                    "byte {i} of {col} at gseq {gseq} flipped and verify passed"
-                );
-                std::fs::remove_file(&copy).unwrap();
-            }
-        }
-    }
+    (dir, path, rows)
+}
+
+/// Copies the database, flips byte `i` of `col` at `gseq` in the copy (past
+/// the no-update trigger), and asserts the copy no longer verifies.
+fn assert_flip_fails_verify(
+    dir: &std::path::Path,
+    path: &std::path::Path,
+    gseq: u64,
+    col: &str,
+    bytes: &[u8],
+    i: usize,
+) {
+    let mut flipped = bytes.to_vec();
+    flipped[i] ^= 0x01;
+    let copy = dir.join(format!("flip-{gseq}-{col}-{i}.db"));
+    std::fs::copy(path, &copy).unwrap();
+    let c = sqlite::Connection::open(&copy).unwrap();
+    c.execute("DROP TRIGGER events_no_update").unwrap();
+    let mut st = c
+        .prepare(format!("UPDATE events SET {col} = ?1 WHERE gseq = ?2"))
+        .unwrap();
+    st.bind((1, &flipped[..])).unwrap();
+    st.bind((2, gseq as i64)).unwrap();
+    st.next().unwrap();
+    drop(st);
+    drop(c);
+    let db = ActivityDb::open_read_only(&copy).unwrap();
+    assert!(
+        export::verify_db(&db).is_err(),
+        "byte {i} of {col} at gseq {gseq} flipped and verify passed"
+    );
+    drop(db);
+    std::fs::remove_file(&copy).unwrap();
 }
 
 /// Removing, swapping or reordering rows fails verification.
