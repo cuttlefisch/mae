@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.201] - 2026-11-25
+
+
+
+
+### Bug Fixes
+
+- *(kb)* Keep each node's stored body in store form when the file's rewrite is refused ([a8960b5](https://github.com/cuttlefisch/mae/commit/a8960b536c94486fb76c625bbad12b587c22999c))
+
+### Testing
+
+- *(kb)* Pin excluded-ancestor nodes in store form; state the node_of rule plainly ([2bf6f4f](https://github.com/cuttlefisch/mae/commit/2bf6f4fa9e9b75a6301b88989bd6af062f5bb280))
+
 ## [0.14.200] - 2026-11-25
 
 
@@ -36,6 +49,7 @@ All notable changes to this project will be documented in this file.
 - Rebuild the ADR KB checksum after merging the amendment ([25dd53e](https://github.com/cuttlefisch/mae/commit/25dd53ea66c7dd6d935a3afc4f99366437c77303))
 - Rebuild the ADR KB checksum after merging main ([324be53](https://github.com/cuttlefisch/mae/commit/324be538c2978541933f3b95b0962cf9db52eeec))
 - Rebuild the ADR KB checksum after merging main ([ae162c1](https://github.com/cuttlefisch/mae/commit/ae162c178d522b3f8afac3329142494d0e9f3953))
+- Bump version to 0.14.200 ([d09f402](https://github.com/cuttlefisch/mae/commit/d09f40227db7e3c53508e1b6efccba93498de35c))
 
 ## [0.14.199] - 2026-11-25
 
