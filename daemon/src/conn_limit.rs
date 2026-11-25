@@ -42,11 +42,21 @@ impl ConnLimiter {
     /// together pass the cap.
     pub fn try_acquire(&self) -> Option<ConnGuard> {
         let max = self.max;
-        self.active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (max == 0 || n < max).then_some(n + 1)
-            })
-            .ok()?;
+        // An explicit compare-and-swap loop: `fetch_update` is deprecated on
+        // current Rust and its replacement is newer than the MSRV.
+        let mut n = self.active.load(Ordering::Relaxed);
+        loop {
+            if max != 0 && n >= max {
+                return None;
+            }
+            match self
+                .active
+                .compare_exchange_weak(n, n + 1, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(seen) => n = seen,
+            }
+        }
         Some(ConnGuard(Arc::clone(&self.active)))
     }
 
