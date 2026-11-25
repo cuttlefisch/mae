@@ -52,7 +52,7 @@ mod bench;
 #[cfg(test)]
 mod svg_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::io::Write;

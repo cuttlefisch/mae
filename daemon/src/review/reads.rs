@@ -427,7 +427,7 @@ pub(super) async fn get_revision(
         return Err(fault("its frozen source does not match its version"));
     }
     let truncated = node.body.len() > max_body_bytes;
-    let mut out = crate::kb_query::content_fields(&node, g.coll.body_format().as_deref());
+    let mut out = crate::kb_query::content_fields(&node, g.coll.body_format().as_deref(), kb_id);
     let mut body = node.body.clone();
     if truncated {
         let mut end = max_body_bytes;

@@ -1,6 +1,7 @@
 //! Tests for the seed planner. Every fixture is synthetic text written here.
 
 mod apply_tests;
+mod attach_tests;
 mod export_tests;
 mod git_tests;
 mod glob_tests;
