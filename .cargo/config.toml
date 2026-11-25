@@ -24,3 +24,30 @@
 # binaries from past code states over time — run `make clean` periodically for a
 # full reclaim, or `make clean-cache` to drop just the regenerable caches.)
 incremental = false
+
+[env]
+# x86_64 Linux C and C++ dependencies (aws-lc, SQLite, tree-sitter, ring…) are
+# compiled for the same baseline Rust targets, x86-64, never for the build
+# machine's toolchain default. The release's Ubuntu GCC emitted AVX throughout
+# them, so v0.14.191–193 died with SIGILL at start-up on CPUs without AVX (in
+# aws-lc's own CPU detection, before any runtime dispatch). Hand-written
+# assembly that dispatches at runtime is unaffected by these flags.
+#
+# The cc crate (1.2) concatenates CFLAGS, then HOST_/TARGET_CFLAGS, then these
+# target-specific keys, so a later -march here wins over any earlier one and
+# daemon/.cargo/config.toml's define still applies. The release checks every
+# Linux binary under `qemu-x86_64 -cpu qemu64` (release.yml).
+CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
+CXXFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
+# aws-lc-sys resolves its C flags itself and then OVERWRITES CFLAGS_<target>
+# in its build process with what it found. For a cross build (the musl daemon)
+# it looks at TARGET_CFLAGS first, and for a native one at HOST_CFLAGS, each
+# before CFLAGS_<target>: daemon/.cargo/config.toml sets both, for SQLite, so
+# without these keys aws-lc alone was built for the runner's AVX default.
+# Its own crate-prefixed keys come first in that lookup.
+AWS_LC_SYS_HOST_CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_HOST_CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_TARGET_CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_TARGET_CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"

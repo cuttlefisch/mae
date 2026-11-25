@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.198] - 2026-11-25
+
+
+
+
+### Bug Fixes
+
+- *(release)* Build C dependencies for the x86-64 baseline, and check it ([920550e](https://github.com/cuttlefisch/mae/commit/920550e6606bd8e413819ac123cdabc2eeecc8e1))
+- *(release)* Aws-lc's own C flags for the baseline, and attribute faults by address ([4828a6f](https://github.com/cuttlefisch/mae/commit/4828a6f7e4b13224949cdec529ecb53ccc8595a3))
+
+### Testing
+
+- *(sync)* Fix two node-hash tests that failed across a second boundary ([46e6a40](https://github.com/cuttlefisch/mae/commit/46e6a40c9922a72022c3860b5608cda070121233))
+
+### CI
+
+- *(release)* Name the faulting function in the baseline check; temporary compiler diagnostics ([526f16b](https://github.com/cuttlefisch/mae/commit/526f16b3ed8be1aa6fe838949b2436b7554dd067))
+- *(release)* Temporary: keep binaries that fail the baseline check ([bc59481](https://github.com/cuttlefisch/mae/commit/bc5948156e2769a31dd0a9e862bedafc702e4c5d))
+
 ## [0.14.197] - 2026-11-25
 
 
@@ -12,6 +31,10 @@ All notable changes to this project will be documented in this file.
 - *(adr)* ADR-120, the daemon's activity record ([a0a940c](https://github.com/cuttlefisch/mae/commit/a0a940cc1d5766e3a7dfaf8a32b2504b253ca8b2))
 - *(adr)* ADR-120 accepted, with the owner's decisions and the session header pinned ([12e7412](https://github.com/cuttlefisch/mae/commit/12e741211ae00eeab71b1848e136b8277fe5c853))
 - *(adr)* ADR-120 D13, the operator contract for monitoring and collection ([982a0c8](https://github.com/cuttlefisch/mae/commit/982a0c8bac28c78a8b70d155772d610791d643fa))
+
+### Miscellaneous
+
+- Bump version to 0.14.197 ([c633d2a](https://github.com/cuttlefisch/mae/commit/c633d2a0e7d40873d22041b6870d32fb67a9b746))
 
 ## [0.14.196] - 2026-11-25
 
