@@ -116,14 +116,13 @@ async fn populated() -> (Env, Value) {
     (env, policy)
 }
 
-#[tokio::test]
-async fn every_pr4_method_answers_in_its_fixtures_shape() {
-    let (env, _) = populated().await;
-
+/// Codes for every node, each answer in `set_code`'s shape, and a taken
+/// number refused in its refusal's.
+async fn codes_in_their_fixtures_shape(env: &Env) {
     let f = fixture("set_code");
     for (n, code) in [("n1", "PRO-1"), ("n2", "PRO-2"), ("n3", "PRO-3")] {
         let r = call(
-            &env,
+            env,
             &env.owner,
             "kb/review.set_code",
             json!({"kb_id": KB, "node_id": n, "doc_code": code}),
@@ -133,7 +132,7 @@ async fn every_pr4_method_answers_in_its_fixtures_shape() {
         assert_shape("set_code", &example_result(&f, 0), &r);
     }
     let r = call(
-        &env,
+        env,
         &env.owner,
         "kb/review.set_code",
         json!({"kb_id": KB, "node_id": "n3", "doc_code": "PRO-2"}),
@@ -144,6 +143,13 @@ async fn every_pr4_method_answers_in_its_fixtures_shape() {
         &refusal(&f, "number already used for that prefix"),
         &data(r),
     );
+}
+
+#[tokio::test]
+async fn every_pr4_method_answers_in_its_fixtures_shape() {
+    let (env, _) = populated().await;
+
+    codes_in_their_fixtures_shape(&env).await;
 
     let f = fixture("request");
     let first = request(&env, &env.editor, &["n1"]).await.unwrap();
@@ -202,9 +208,11 @@ async fn every_pr4_method_answers_in_its_fixtures_shape() {
     assert_shape("events page 2", &example_result(&ev, 1), &last);
 }
 
+/// `kb/review.request`'s refusals, each with its fixture's kind and fields,
+/// the switch-off case last (it is the one that needs review off).
 #[tokio::test]
-async fn every_pr4_refusal_carries_its_fixtures_kind_and_fields() {
-    let (env, policy) = populated().await;
+async fn every_request_refusal_carries_its_fixtures_kind_and_fields() {
+    let (env, _) = populated().await;
     let f = fixture("request");
     let v1 = version(&env, "n1").await;
     let ask = |extra: Value| {
@@ -215,103 +223,85 @@ async fn every_pr4_refusal_carries_its_fixtures_kind_and_fields() {
             .extend(extra.as_object().unwrap().clone());
         p
     };
-    let stale = call(
+    let unknown_node = "ffffffff-0000-4000-8000-000000000000";
+    let cases = [
+        (
+            "the working copy moved on",
+            &env.editor,
+            json!({"nodes": [{"node_id": "n1", "version": "0"}]}),
+        ),
+        ("no reason given", &env.editor, json!({"reason": null})),
+        (
+            "node is not in this KB",
+            &env.editor,
+            json!({"nodes": [{"node_id": unknown_node, "version": v1}]}),
+        ),
+        (
+            "requester loosens in_force_on_approval",
+            &env.editor,
+            json!({"in_force_on_approval": true}),
+        ),
+        (
+            "caller is not a member (identical for an unknown KB)",
+            &env.stranger,
+            json!({}),
+        ),
+    ];
+    for (case, who, extra) in cases {
+        let r = call(&env, who, "kb/review.request", ask(extra)).await;
+        assert_refusal(case, &refusal(&f, case), &data(r));
+    }
+    call(
         &env,
-        &env.editor,
-        "kb/review.request",
-        ask(json!({"nodes": [{"node_id": "n1", "version": "0"}]})),
-    )
-    .await;
-    assert_refusal(
-        "stale",
-        &refusal(&f, "the working copy moved on"),
-        &data(stale),
-    );
-    let no_reason = call(
-        &env,
-        &env.editor,
-        "kb/review.request",
-        ask(json!({"reason": null})),
-    )
-    .await;
-    assert_refusal("reason", &refusal(&f, "no reason given"), &data(no_reason));
-    let no_node = call(
-        &env,
-        &env.editor,
-        "kb/review.request",
-        ask(json!({"nodes": [{"node_id": "ffffffff-0000-4000-8000-000000000000", "version": v1}]})),
-    )
-    .await;
-    assert_refusal(
-        "node",
-        &refusal(&f, "node is not in this KB"),
-        &data(no_node),
-    );
-    let loosen = call(
-        &env,
-        &env.editor,
-        "kb/review.request",
-        ask(json!({"in_force_on_approval": true})),
-    )
-    .await;
-    assert_refusal(
-        "loosen",
-        &refusal(&f, "requester loosens in_force_on_approval"),
-        &data(loosen),
-    );
-    let stranger = call(&env, &env.stranger, "kb/review.request", ask(json!({}))).await;
-    assert_refusal(
-        "member",
-        &refusal(&f, "caller is not a member (identical for an unknown KB)"),
-        &data(stranger),
-    );
-
-    let not_owner = call(
-        &env,
-        &env.editor,
+        &env.owner,
         "kb/review.set_policy",
         json!({"kb_id": KB, "review_enabled": false}),
     )
-    .await;
-    assert_refusal(
-        "set_policy",
-        &refusal(&policy, "not the owner"),
-        &data(not_owner),
-    );
+    .await
+    .unwrap();
+    let off = call(&env, &env.editor, "kb/review.request", ask(json!({}))).await;
+    assert_refusal("off", &refusal(&f, "review is off for this KB"), &data(off));
+}
 
-    let bad_cursor = call(
-        &env,
-        &env.viewer,
-        "kb/review.pending",
-        json!({"kb_id": KB, "cursor": "not-a-cursor"}),
-    )
-    .await;
-    assert_refusal(
-        "pending",
-        &refusal(&fixture("pending"), "unknown cursor"),
-        &data(bad_cursor),
-    );
-
-    let not_owner = call(&env, &env.editor, "kb/review.events", json!({"kb_id": KB})).await;
-    assert_refusal(
-        "events",
-        &refusal(&fixture("events"), "a member who is not owner or auditor"),
-        &data(not_owner),
-    );
-
-    let no_node = call(
-        &env,
-        &env.viewer,
-        "kb/review.status",
-        json!({"kb_id": KB, "node_id": "nope"}),
-    )
-    .await;
-    assert_refusal(
-        "status",
-        &refusal(&fixture("status"), "unknown node"),
-        &data(no_node),
-    );
-
+/// The other PR-4 methods' fixture refusals.
+#[tokio::test]
+async fn every_other_pr4_refusal_carries_its_fixtures_kind_and_fields() {
+    let (env, policy) = populated().await;
+    let cases = [
+        (
+            &policy,
+            "not the owner",
+            &env.editor,
+            "kb/review.set_policy",
+            json!({"review_enabled": false}),
+        ),
+        (
+            &fixture("pending"),
+            "unknown cursor",
+            &env.viewer,
+            "kb/review.pending",
+            json!({"cursor": "not-a-cursor"}),
+        ),
+        (
+            &fixture("events"),
+            "a member who is not owner or auditor",
+            &env.editor,
+            "kb/review.events",
+            json!({}),
+        ),
+        (
+            &fixture("status"),
+            "unknown node",
+            &env.viewer,
+            "kb/review.status",
+            json!({"node_id": "nope"}),
+        ),
+    ];
+    for (f, case, who, method, mut params) in cases {
+        params["kb_id"] = json!(KB);
+        let r = call(&env, who, method, params).await;
+        assert_refusal(case, &refusal(f, case), &data(r));
+    }
     let r = request(&env, &env.editor, &["n2"]).await.unwrap();
     let w = json!({"kb_id": KB, "request_id": r["request_id"], "reason": "x"});
     call(&env, &env.editor, "kb/review.withdraw", w.clone())
@@ -324,16 +314,4 @@ async fn every_pr4_refusal_carries_its_fixtures_kind_and_fields() {
         &again,
     );
     assert_eq!(again["from"], json!("withdrawn"));
-
-    // review off, last: it is the one fixture case that needs the switch off.
-    call(
-        &env,
-        &env.owner,
-        "kb/review.set_policy",
-        json!({"kb_id": KB, "review_enabled": false}),
-    )
-    .await
-    .unwrap();
-    let off = call(&env, &env.editor, "kb/review.request", ask(json!({}))).await;
-    assert_refusal("off", &refusal(&f, "review is off for this KB"), &data(off));
 }

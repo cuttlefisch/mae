@@ -231,7 +231,7 @@ fn record_request(
             "replaces": rev.replaces,
         }));
     }
-    store::append_event(
+    let seq = store::append_event(
         c,
         signer,
         NewEvent {
@@ -250,6 +250,7 @@ fn record_request(
     )?;
     Ok(Ok(json!({
         "request_id": req.request_id,
+        "event_id": store::event_id(seq),
         "state": "in_review",
         "revisions": answer,
     })))

@@ -142,7 +142,10 @@ pub(super) async fn status(
         json!({
             "request_id": r.request_id,
             "revision_id": r.revision_id,
+            "rev": r.rev_no,
             "approved_at": t(r.approved_at),
+            // What it waits for (E9) is the acts' to say; no act exists before PR-5.
+            "waiting_for": null,
         })
     });
     let in_force = latest_in("in_force").map(|r| {
@@ -150,6 +153,7 @@ pub(super) async fn status(
             "revision_id": r.revision_id,
             "rev": r.rev_no,
             "since": t(r.in_force_since),
+            "approval_record": r.approval_record.clone().unwrap_or_else(|| g.policy.approval_record.clone()),
             "signed_pdf_sha256": null,
         })
     });
