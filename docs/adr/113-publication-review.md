@@ -8,7 +8,8 @@ states with `superseded` and `derogated` in place of `historical`; a rejection o
 whole request; a per-KB policy makes the signed PDF the interim record of approval; signed originals enter through
 `mae-daemon kb import` under a required manifest; browser and native sign-in from the start; review
 acts before #727; revisions never deleted; the second-factor check, the method shapes, the event-log
-export and every refusal kind pinned, with fixtures. Still proposed: nothing here is built.
+export and every refusal kind pinned, with fixtures. Built so far (2026-11-25): PR-4 of the build
+sequence, the revision record, the request and the event chain; everything else is still proposed.
 **Relates to:** ADR-106 (node version history is a local audit trail — revisions follow the same
 placement), ADR-101 / ADR-103 (agent-made links held for human review — becomes a case of this
 ADR), ADR-098 (durable identity; its service-account binding is where an agent principal is
@@ -1707,9 +1708,22 @@ named.
   `remove_node` on the collection. A design, or a mapping onto what exists, is needed.
 - **O6. Holds (PR-3).** ADR-115 D5 and ADR-116 D5 each name operator holds; neither is built.
   Decide that they are one table and one CLI, and which PR builds it (this sequence assumes PR-3).
+- **Decided 2026-11-25 by the build lead (O7):** dropped. ADR-115 P1 deduplicates per KB only, so
+  there is no cross-KB binding path for the test to exercise.
 - **O7. The ADR-115 test on cross-KB bytes (PR-1).** "An upload of bytes another KB holds is read
   and verified in full before binding" describes a cross-KB deduplication path that ADR-115 D1
   rejects. Restate or drop it.
+- **Decided 2026-11-25 by the build lead (O8):** both. A revision holds its own copy of the frozen
+  source (hub-local, plaintext; review refuses E2E), with D2's unkeyed `source_sha256`, and it
+  references the ADR-116 history version cut at the freeze, `(node, seq)`. That version has a new
+  kind, `review_freeze`, which is always written (even when its content repeats the previous
+  version's) and never pruned (ADR-116 D5). Reason: revisions survive purge and are the
+  document-control record, while history may be pruned and its content hash is keyed. As built
+  (PR-4): the frozen source is ADR-116's canonical `maenode/v1` encoding of the materialized node,
+  the fields `KbNodeDoc::version` digests, stored once per KB under its sha256 in
+  `kb_review_sources`; the freeze reads the content, checks the version, reads the WAL high-water
+  mark and cuts the history version under the document's replace gate and entry lock, so all four
+  describe one state (A2).
 - **O8. Where the frozen source lives, and its hash (PR-4).** ADR-116 D2.3 cuts a history version at
   a freeze but defines no version kind for it, and its content hash is keyed while D2's
   `source_sha256` is not. Decide whether a revision references the history entry `(node, seq)` or
@@ -1769,6 +1783,12 @@ named.
   hub-local check on a CRDT update is acceptable for a map mesh peers also replicate (ADR-115 D8).
 - **O16. One agent or all of P's agents (PR-10).** An agent signs with P's key, so the daemon cannot
   tell one of P's agents from another: a C9 grant can only be per `(KB, P)`. Confirm.
+- **Decided provisionally in PR-4's build (O17), for the owner to confirm:** refused. A
+  `kb/collection_op` that would switch a KB to E2E is refused `revisions_hold_plaintext` while the
+  KB holds any revision, in any state, and the collection is left as it was. Revisions are never
+  deleted (E7), so for such a KB the refusal is permanent until a design carries revisions across
+  the switch. This is the fail-closed reading of "as it is while history holds plaintext"; the
+  first revision made the question live, so PR-4 could not leave it open.
 - **O17. A review-enabled KB switched to E2E.** Revisions and their frozen sources are plaintext,
   and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
   refused while revisions exist, as it is while history holds plaintext. No PR here builds the
