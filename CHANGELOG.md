@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.203] - 2026-11-25
+
+
+
+
+### Testing
+
+- Keep the images tests under the function-length ceiling, and re-anchor two mutants ([3a4e5ab](https://github.com/cuttlefisch/mae/commit/3a4e5abcb78c682da68a6c31f85b479c63d972ab))
+
 ## [0.14.202] - 2026-11-25
 
 
@@ -36,6 +45,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.201 ([431b801](https://github.com/cuttlefisch/mae/commit/431b8019421d5d4c5b8f3785167a534f9c224695))
+- Bump version to 0.14.202 ([7d15b19](https://github.com/cuttlefisch/mae/commit/7d15b19afc0fea1883c64a0b3d475fed81c8a286))
 
 ## [0.14.200] - 2026-11-25
 
