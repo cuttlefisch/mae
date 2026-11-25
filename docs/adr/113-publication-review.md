@@ -1071,6 +1071,19 @@ Field notes:
 - **`set_policy`.** It is an administrative act (E8). It refuses a named performer who is not a
   person (`performer_not_person`, ADR-117 D8) and a retention period below the floor
   (`retention_below_floor`).
+- **Caps** *(PR-4's review)*. Every member of a request is frozen for good: a history version no
+  retention prunes (ADR-116 D5), a source copy that is never deleted (O8, E7) and an entry in the
+  request's event. So one call is bounded by more than the scan limit:
+  - a request names at most **50** members (never more than `[kb_query] max_scan_nodes`): a
+    procedure family revised together, while a larger set is several requests;
+  - `reason`, on every method that takes one, is at most **2,048** bytes of UTF-8, and `set_name`
+    at most **200** (a title, as long as a version name);
+  - `set_policy`'s `code_prefixes` holds at most **32** prefixes.
+
+  These are constants, not operator settings: no setting exists for a cap of this kind. Over a cap
+  is `invalid_params` with the cap in `data.limit`, and nothing is written. A request/withdraw loop
+  is otherwise bounded only by the per-tenant cost class (both are `Mutation`, #456): each round
+  leaves its frozen sources, history versions and two events for good.
 
 ### E10. The event chain, and its export
 
@@ -1138,7 +1151,7 @@ other route kinds (`attachment_unsupported`, `attachment_too_many_pixels`, `atta
 
 | Kind | Extra `data` | Raised by | Defined in |
 |---|---|---|---|
-| `invalid_params` | `param` | any method | D8 |
+| `invalid_params` | `param`, and `limit` when over a cap (E9) | any method | D8 |
 | `not_member` | — | any method, the blob route; also for an unknown KB | D8, ADR-115 B5 |
 | `role_forbidden` | — | `set_policy`/`set_code` by a non-owner, `events` by a non-auditor, loosening `in_force_on_approval` | D3 |
 | `review_not_enabled` | — | every method but `set_policy`, with review off | D3 |
@@ -1455,7 +1468,10 @@ review requests (name, mode, reason, requester, state); revisions (`rev_id`, KB,
 document type, template id and sha256, creator, time, `replaces`); frozen sources, where O8 decides;
 document codes, unique per `(kb, prefix, number)`; the event log (per KB: sequence, kind, actor and
 kind of actor, time, payload, `prev_hash`, `entry_hash`, daemon signature, `member_sig`). No
-migration.
+migration. *(As built.)* Each revision's `approval_record` is stamped at the freeze with the policy
+in force when it was requested (E3), and PR-5 re-stamps it at approval. The column is NOT NULL, and
+a reader never substitutes the live policy, so a later `set_policy` cannot rewrite what an existing
+revision says.
 
 **Methods and errors:** `kb/review.request`, `kb/review.withdraw` (by the requester, before
 approval), `kb/review.status`, `kb/review.pending`, `kb/review.set_policy` (switch, mode,
@@ -1799,16 +1815,29 @@ named.
   hub-local check on a CRDT update is acceptable for a map mesh peers also replicate (ADR-115 D8).
 - **O16. One agent or all of P's agents (PR-10).** An agent signs with P's key, so the daemon cannot
   tell one of P's agents from another: a C9 grant can only be per `(KB, P)`. Confirm.
-- **Decided provisionally in PR-4's build (O17), for the owner to confirm:** refused. A
-  `kb/collection_op` that would switch a KB to E2E is refused `revisions_hold_plaintext` while the
-  KB holds any revision, in any state, and the collection is left as it was. Revisions are never
-  deleted (E7), so for such a KB the refusal is permanent until a design carries revisions across
-  the switch. This is the fail-closed reading of "as it is while history holds plaintext"; the
-  first revision made the question live, so PR-4 could not leave it open.
-- **O17. A review-enabled KB switched to E2E.** Revisions and their frozen sources are plaintext,
-  and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
-  refused while revisions exist, as it is while history holds plaintext. No PR here builds the
-  switch, but the first revision makes the question live, so it blocks PR-4.
+- **Decided by the owner 2026-11-25 (O17): the switch stays refused.** A KB that holds any
+  publication-review revision, in any state, cannot be switched to E2E (`revisions_hold_plaintext`);
+  ADR-116 Amendment 1's history refusal (`history_holds_plaintext`) stands beside it. Revisions are
+  never deleted (E7), so for such a KB the refusal is permanent. A KB that needs E2E is created
+  encrypted from the start. Re-encrypting revisions at the switch is not designed.
+  - **Where it is enforced.** In the write itself: `DocStore::apply_update` and `replace_doc`
+    (`share_doc`, `restore_doc`) check every write to a `kbc:` document on the state it would leave,
+    under the document's locks (`daemon/src/doc_store_e2e_switch.rs`). Every path that writes a
+    collection goes through them: `kb/collection_op` and the other methods that persist a
+    collection, `sync/update`, `sync/share`, `kb/share`, a mesh peer's update (the dialer), the
+    legacy-collection migration, seeding, a checkpoint import, the control socket and `anchor_cli`.
+    PR-4 first built it on `kb/collection_op` alone; its review found the dialer applying a peer's
+    flip with no check.
+  - **A refused peer update.** A mesh peer's update that would switch the KB is refused whole: none
+    of it is logged or applied, including any other change it carries, and the refusal is logged and
+    counted (`DocStore::e2e_switches_refused`). The replica's collection then stops converging with
+    that peer's until the KB is dealt with. That is the price of not leaving plaintext readable on a
+    daemon that must hold none (ADR-037); half-applying the update would break the CRDT instead.
+  - **A request racing a switch.** `kb/review.request` takes the KB's switch gate, the one every
+    collection write takes, from a re-check that the KB is still plaintext through its freezes and its
+    commit. A switch therefore either lands first, and the request is refused `e2e_unsupported`, or
+    waits and then sees the request's revisions and is refused.
+- **O17. A review-enabled KB switched to E2E.** *Decided above (2026-11-25).*
 - **Decided 2026-11-25 (O19):** under `approval_record: signed_pdf`, entry into force waits for the
   signed PDF of every member (Amendment 4, E3; refusal `signed_pdf_required`).
 - **O20. Scheduled entry into force (Amendment 4, E9).** `effective_at` may not be in the future.
