@@ -39,6 +39,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # TEMPORARY diagnostic (remove before merge): what the runner's C
+      # compiler enables by default, and the exact command aws-lc's build
+      # uses for its FIPS module.
+      - name: "TEMP: C compiler defaults and aws-lc flags"
+        run: |
+          cc --version | head -1
+          cc -Q --help=target | grep -E '^\s+-m(arch|tune|avx|avx2)[= ]' || true
+          printf 'AVX macros by default: '; echo | cc -dM -E - | grep -cE '__AVX__|__AVX2__' || true
+          printf 'AVX macros with -march=x86-64: '; echo | cc -march=x86-64 -dM -E - | grep -cE '__AVX__|__AVX2__' || true
+          env | grep -E '^(CC|CFLAGS|CXXFLAGS|TARGET_CFLAGS|HOST_CFLAGS|RUSTFLAGS|CC_|CFLAGS_)[A-Za-z0-9_-]*=' | sed 's/=.*/=<set>/' || true
+          cargo build --release -p aws-lc-sys -vv 2>&1 | grep -E 'running:.*(bcm|cpucap)' | head -3 | cut -c1-1500 || true
+          cargo build --release -p aws-lc-sys -vv 2>&1 | grep -E 'CFLAGS' | sort -u | head -20 || true
+
       - name: Build GUI binary (glibc) + services (musl) + ADR KB + daemon
         run: |
           cargo build --release --features gui --package mae

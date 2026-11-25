@@ -32,6 +32,13 @@ for bin in "$@"; do
         # 132 = 128 + SIGILL: an instruction past the baseline.
         echo "FAILED  $bin: exit $rc on -cpu qemu64" >&2
         printf '%s\n' "$out" | tail -n 3 >&2
+        # Name the code that faulted: the last translated blocks before the
+        # signal, by symbol (release binaries are not stripped).
+        log=$(mktemp)
+        "$qemu" -cpu qemu64 -d in_asm,nochain -D "$log" "$bin" --version >/dev/null 2>&1
+        echo "  last functions entered before the fault:" >&2
+        grep '^IN: ' "$log" | uniq | tail -n 6 | sed 's/^/    /' >&2
+        rm -f "$log"
         failed=1
     fi
 done
