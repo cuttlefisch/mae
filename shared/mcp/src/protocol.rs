@@ -1017,6 +1017,7 @@ mod tests {
             McpError::unknown_revision(m()),
             McpError::revisions_hold_plaintext(m()),
             McpError::doc_code_taken(m(), "n"),
+            McpError::activity_record_unavailable(m()),
             McpError::internal_fault(m()),
         ]
     }
