@@ -301,3 +301,124 @@ file = "daemon/src/seed/update.rs"
 find = '''            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
             (wal, doc.version())'''
 replace = '''            (wal, doc.version())'''
+
+[[mutant]]
+id = "daemon-review-pr5/delete-guard-off-on-apply"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_node_with_a_revision_is_never_removed_from_its_kb)"
+ref = "E7: an update removing a node with a revision is refused"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''            None => self.refuse_applied_removal(doc_name, doc, removal).await,'''
+replace = '''            None => Ok(drop(removal)),'''
+
+[[mutant]]
+id = "daemon-review-pr5/delete-guard-off-on-replace"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_write_path_refuses_removing_a_node_with_a_revision_whole)"
+ref = "E7: a replace dropping a node with a revision is refused"
+[[mutant.edit]]
+file = "daemon/src/doc_store_delete_guard.rs"
+find = '''        self.refuse_replacing_removal(kb, before, probe).await'''
+replace = '''        Ok(())'''
+
+[[mutant]]
+id = "daemon-review-pr5/delete-guard-skips-reviewed-kb"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_node_with_a_revision_is_never_removed_from_its_kb)"
+ref = "E7: a KB holding revisions is guarded"
+[[mutant.edit]]
+file = "daemon/src/doc_store_delete_guard.rs"
+find = '''        if let Ok(false) = held {'''
+replace = '''        if true {'''
+
+[[mutant]]
+id = "daemon-review-pr5/delete-guard-refuses-every-removal"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_node_with_a_revision_is_never_removed_from_its_kb)"
+ref = "E7: a node without a revision is removed as before"
+[[mutant.edit]]
+file = "daemon/src/doc_store_delete_guard.rs"
+find = '''            Ok(held) if held.is_empty() => return None,'''
+replace = '''            Ok(held) if held.is_empty() && false => return None,'''
+
+[[mutant]]
+id = "daemon-review-pr5/delete-refusal-unpinned"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_node_with_a_revision_is_never_removed_from_its_kb)"
+ref = "E7: the refusal is the pinned invalid_transition"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/refusal.rs"
+find = '''        crate::storage::StorageError::NodeHasRevisions { ref nodes, .. } if !nodes.is_empty() => {'''
+replace = '''        crate::storage::StorageError::NodeHasRevisions { ref nodes, .. } if nodes.is_empty() => {'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-removal-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_update_dropping_a_node_with_a_revision_is_refused_before_any_write)"
+ref = "E7: a seed update dropping a node with a revision refuses before writing"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''    refuse_removing_revisions(store, t.kb_id, &nodes).await?;'''
+replace = '''    let _ = &nodes;'''
+
+[[mutant]]
+id = "daemon-review-pr5/published-view-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_published_view_is_the_in_force_revision_and_nothing_else)"
+ref = "D5: view published is honoured"
+[[mutant.edit]]
+file = "daemon/src/review/published.rs"
+find = '''        Some(Value::String(v)) if v == "published" => Ok(true),'''
+replace = '''        Some(Value::String(v)) if v == "published" => Ok(false),'''
+
+[[mutant]]
+id = "daemon-review-pr5/published-get-serves-approved"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_published_view_is_the_in_force_revision_and_nothing_else)"
+ref = "D5: an approved revision is published only once in force"
+[[mutant.edit]]
+file = "daemon/src/review/published.rs"
+find = '''&node, &["in_force"]))'''
+replace = '''&node, &["in_force", "approved"]))'''
+
+[[mutant]]
+id = "daemon-review-pr5/published-list-any-state"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_published_view_is_the_in_force_revision_and_nothing_else)"
+ref = "D5: the published list holds in-force revisions only"
+[[mutant.edit]]
+file = "daemon/src/review/store.rs"
+find = '''         WHERE kb_id = ?1 AND state = 'in_force' AND node_id > ?2'''
+replace = '''         WHERE kb_id = ?1 AND node_id > ?2'''
+
+[[mutant]]
+id = "daemon-review-pr5/published-view-ignores-review-off"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_review_off_it_is_the_working_copy_and_a_bad_view_is_refused)"
+ref = "D5: with review off the published view is the working copy"
+[[mutant.edit]]
+file = "daemon/src/review/published.rs"
+find = '''    Ok(g.policy.review_enabled.then_some(g))'''
+replace = '''    Ok(Some(g))'''
+
+[[mutant]]
+id = "daemon-review-pr5/published-list-no-lookahead"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_published_list_pages_in_node_order)"
+ref = "D5: the published list pages like the working one"
+[[mutant.edit]]
+file = "daemon/src/review/published.rs"
+find = '''            for r in store::in_force_after(c, &kb, &from, limit + 1)? {'''
+replace = '''            for r in store::in_force_after(c, &kb, &from, limit)? {'''

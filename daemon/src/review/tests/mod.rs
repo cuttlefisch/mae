@@ -22,6 +22,7 @@ mod freeze_race_tests;
 mod gate_tests;
 mod limits_tests;
 mod method_tests;
+mod published_view_tests;
 mod seed_author_tests;
 mod switch_race_tests;
 

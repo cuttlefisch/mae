@@ -442,6 +442,25 @@ pub(crate) fn node_revisions(
     collect(&mut stmt)
 }
 
+/// The in-force revisions of `kb_id` whose node id is after `after` in byte
+/// order, at most `limit`, by node id (D5's published view, paged).
+pub(crate) fn in_force_after(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    after: &str,
+    limit: usize,
+) -> Result<Vec<Revision>, StorageError> {
+    let mut stmt = conn.prepare(format!(
+        "SELECT {REV_COLUMNS} FROM kb_review_revisions
+         WHERE kb_id = ?1 AND state = 'in_force' AND node_id > ?2
+         ORDER BY node_id LIMIT ?3"
+    ))?;
+    stmt.bind((1, kb_id))?;
+    stmt.bind((2, after))?;
+    stmt.bind((3, i64::try_from(limit).unwrap_or(i64::MAX)))?;
+    collect(&mut stmt)
+}
+
 /// A request's member revisions, in request order.
 pub(crate) fn request_revisions(
     conn: &sqlite::Connection,
@@ -562,6 +581,26 @@ pub(crate) fn has_revisions(conn: &sqlite::Connection, kb_id: &str) -> Result<bo
     let mut stmt = conn.prepare("SELECT 1 FROM kb_review_revisions WHERE kb_id = ?1 LIMIT 1")?;
     stmt.bind((1, kb_id))?;
     Ok(stmt.next()? == sqlite::State::Row)
+}
+
+/// Which of `node_ids` hold a revision of `kb_id`, in any state (E7).
+pub(crate) fn nodes_with_revisions(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_ids: &[String],
+) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn
+        .prepare("SELECT 1 FROM kb_review_revisions WHERE kb_id = ?1 AND node_id = ?2 LIMIT 1")?;
+    let mut out = Vec::new();
+    for n in node_ids {
+        stmt.reset()?;
+        stmt.bind((1, kb_id))?;
+        stmt.bind((2, n.as_str()))?;
+        if stmt.next()? == sqlite::State::Row {
+            out.push(n.clone());
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- requests

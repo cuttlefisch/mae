@@ -94,6 +94,8 @@ pub async fn dispatch(
         return my_kbs(doc_store, principal).await;
     }
     let kb_id = required_str(params, "kb_id")?.to_string();
+    // ADR-113 D5: `view` (`list` reads it in `dispatch_scanning`).
+    let published = method == "kb/query.get" && crate::review::published::wants_published(params)?;
 
     match method {
         "kb/query.capabilities" => capabilities(doc_store, &kb_id, principal).await,
@@ -110,6 +112,31 @@ pub async fn dispatch(
         }
         "kb/query.revisions" => {
             crate::review::query_revisions(doc_store, &kb_id, principal, params).await
+        }
+        "kb/query.get" if published => {
+            let node_id = required_node_id(params)?;
+            let p = &crate::review::published::get;
+            match p(
+                doc_store,
+                &kb_id,
+                &node_id,
+                principal,
+                limits.max_body_bytes,
+            )
+            .await?
+            {
+                Some(v) => Ok(v),
+                None => {
+                    get(
+                        doc_store,
+                        &kb_id,
+                        &node_id,
+                        principal,
+                        limits.max_body_bytes,
+                    )
+                    .await
+                }
+            }
         }
         "kb/query.get" => {
             let node_id = required_node_id(params)?;
@@ -178,6 +205,12 @@ async fn dispatch_scanning(
             let limit = optional_count(params, "limit")?
                 .map_or(n, |l| l.min(n))
                 .max(1);
+            if crate::review::published::wants_published(params)? {
+                let p = crate::review::published::list(doc_store, kb_id, after, limit, principal);
+                if let Some(v) = p.await? {
+                    return Ok(v);
+                }
+            }
             list(doc_store, kb_id, after, limit, principal).await
         }
         "kb/query.neighborhood" => {

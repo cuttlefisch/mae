@@ -384,7 +384,7 @@ async fn a_named_version_is_refused_where_it_must_be() {
 }
 
 /// The owner's `kb/collection_op` with a collection update made by `edit`.
-async fn collection_op(
+pub(super) async fn collection_op(
     env: &mut Env,
     edit: impl FnOnce(&mut KbCollectionDoc) -> Vec<u8>,
 ) -> JsonRpcResponse {

@@ -154,6 +154,17 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
+    /// The node ids a collection document lists, read from the raw `doc`: a
+    /// daemon compares them around a write to see which nodes it removes.
+    pub fn node_ids_in(doc: &yrs::Doc) -> std::collections::BTreeSet<String> {
+        let root = doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = doc.transact();
+        match root.get(&txn, COLL_NODES_KEY) {
+            Some(Out::YMap(nodes)) => nodes.keys(&txn).map(str::to_string).collect(),
+            _ => std::collections::BTreeSet::new(),
+        }
+    }
+
     /// List all nodes in the collection: (node_id, title) pairs.
     pub fn list_nodes(&self) -> Vec<(String, String)> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);

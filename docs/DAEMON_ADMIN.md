@@ -518,8 +518,15 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `attachment_busy` | No image worker was free within 30 s, or the caller's tenant already has four uploads waiting or processing. Nothing was stored or charged; retry after `retry_after_secs` (also sent as `Retry-After`). HTTP `503`, `error: "temporarily_unavailable"`. | `POST /kb/<kb-id>/blobs` | `retry_after_secs` |
 | `review_not_enabled` | Publication review (ADR-113) is off for this KB; its owner turns it on with `kb/review.set_policy`. | every `kb/review.*` method but `set_policy` | — |
 | `stale_version` | The working copy is no longer at the `version` the request named: the requester froze what they saw, and must look again. Nothing was written. | `kb/review.request` | `node_id`, `current` |
-| `invalid_transition` | The act is not allowed from the revision's state (ADR-113 E1): a request for a node already in review, a withdrawal of an ended request. | `kb/review.request`, `kb/review.withdraw` | `from`, `act` |
-| `not_approver` | Only the requester withdraws a request until approver lists exist (ADR-113 PR-5). | `kb/review.withdraw` | — |
+| `invalid_transition` | The act is not allowed from the revision's state (ADR-113 E1): a request for a node already in review, a withdrawal of an ended request, an act out of order. Also the delete guard (E7): removing a node that holds a revision, on any path, is `act: "delete"`, `reason: "has_revisions"` (no `from`). | the `kb/review.*` acts, `kb/collection_node_remove`, any write to the KB's collection | `from`, `act`, `reason` |
+| `not_approver` | The caller is not on the KB's approver list (a named member or an IdP group their sign-in carries). | `kb/review.approve`, `.reject`, `.enter_into_force`, `.derogate`, `.withdraw` | — |
+| `not_reviewer` | The caller is not on the KB's reviewer list. | `kb/review.act` | — |
+| `author_cannot_approve` | The caller is an author of the revision (an editor since its last approval, or its requester). A soft block: acknowledged with `acknowledge_self_approval: true` and an `override_reason`, the act goes ahead and records the override. | every `kb/review.*` act | — |
+| `authors_unknown` | Who wrote the revision cannot be established (an unattested seed or another unattributed write). A soft block: `acknowledge_unknown_authors: true` and an `override_reason`. | every `kb/review.*` act | — |
+| `agent_forbidden` | An agent never acts on a revision, acknowledged or not. | every `kb/review.*` act | — |
+| `performer_not_person` | A named member on a reviewer or approver list is not bound as a person. | `kb/review.set_policy` | `member` |
+| `set_incomplete` | A set enters into force whole: some members are not approved yet. | `kb/review.enter_into_force` | `missing` |
+| `signed_pdf_required` | Under the `signed_pdf` approval record, entry into force waits for the signed PDF of each member. | `kb/review.enter_into_force` | `missing` |
 | `unknown_request` | This KB holds no request with that id. | `kb/review.withdraw` | — |
 | `unknown_revision` | This KB holds no revision with that id (or it is another node's). | `kb/query.get` with `revision` | — |
 | `revisions_hold_plaintext` | Switching the KB to E2E is refused while it holds any publication-review revision, whose frozen source is plaintext and is kept for good (ADR-113 O17). Code `-32600`. A mesh peer's update that would switch it is refused whole and counted. | any write to the KB's collection: `kb/collection_op`, `sync/update`, `sync/share`, `kb/share` | — |
@@ -1147,6 +1154,10 @@ the resume does not overwrite it, and the next update reports it. Readers see ea
 set to the new one in one step. Until the update finishes, another plan is refused and so is
 `kb export`. After it finishes, a re-run writes nothing (`already at this plan`). An end-to-end
 encrypted KB, a KB no seed made and a seed whose first apply never finished are refused.
+
+A page whose node holds a publication-review revision (ADR-113) is never removed: if the new revision
+drops its file, the update is refused before it writes anything, naming the node. Restore the file,
+or derogate the document through the review and keep the file.
 
 ### Who wrote the seeded content: `--author`
 

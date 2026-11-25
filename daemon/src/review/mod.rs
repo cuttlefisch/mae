@@ -25,6 +25,7 @@
 mod acts;
 pub mod chain;
 mod methods;
+pub mod published;
 mod reads;
 pub mod store;
 

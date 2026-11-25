@@ -111,6 +111,9 @@ pub enum ApplyRefusalKind {
     /// `--update` with a plan read from a repository other than the
     /// recorded one.
     DifferentRepo,
+    /// `--update` would remove nodes that hold publication-review revisions,
+    /// which are never deleted (ADR-113 E7).
+    HasRevisions,
     /// `--update` of an end-to-end encrypted KB, whose content the daemon
     /// cannot read or write.
     Encrypted,

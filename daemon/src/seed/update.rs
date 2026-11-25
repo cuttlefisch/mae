@@ -465,6 +465,7 @@ async fn begin(
             done: false,
         });
     }
+    refuse_removing_revisions(store, t.kb_id, &nodes).await?;
     let intent = SeedUpdate {
         kb_id: t.kb_id.to_string(),
         plan_hash: hash.to_string(),
@@ -480,6 +481,42 @@ async fn begin(
         .await
         .map_err(storage)?;
     Ok(nodes)
+}
+
+/// ADR-113 E7: a page whose file left the source is removed from the KB, but
+/// a node holding a publication-review revision is never deleted. Refused
+/// before the update records its intent or writes anything, naming the nodes;
+/// the collection write is guarded again in the store (`delete_guard`).
+async fn refuse_removing_revisions(
+    store: &DocStore,
+    kb_id: &str,
+    nodes: &[SeedUpdateNode],
+) -> Result<(), ApplyError> {
+    let removed: Vec<String> = nodes
+        .iter()
+        .filter(|n| n.remove)
+        .map(|n| n.row.node_id.clone())
+        .collect();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    let kb = kb_id.to_string();
+    let held = store
+        .review_read(move |c| crate::review::store::nodes_with_revisions(c, &kb, &removed))
+        .await
+        .map_err(storage)?;
+    if held.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(
+        ApplyRefusalKind::HasRevisions,
+        format!(
+            "KB '{kb_id}': the new revision drops pages whose nodes hold publication-review \
+             revisions, which are never deleted ({}); restore their files, or derogate them \
+             and keep the files",
+            held.join(", ")
+        ),
+    ))
 }
 
 /// The recorded nodes of an update cut short: they must name this plan's

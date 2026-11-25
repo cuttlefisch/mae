@@ -703,6 +703,19 @@ impl McpError {
         Self::kinded(-32603, message, "unknown_revision", serde_json::json!({}))
     }
 
+    /// A node holding a publication-review revision is never deleted, only
+    /// derogated (ADR-113 E7): `invalid_transition` with act `delete`, reason
+    /// `has_revisions`, on every delete path. A second constructor of an
+    /// existing kind, so not in `every_kinded_error`.
+    pub fn node_has_revisions(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "invalid_transition",
+            serde_json::json!({ "act": "delete", "reason": "has_revisions" }),
+        )
+    }
+
     /// A KB cannot be switched to E2E while it holds publication-review
     /// revisions: their frozen sources are plaintext and are never deleted
     /// (ADR-113 D1, E7; O17).

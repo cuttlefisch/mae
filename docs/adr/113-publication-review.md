@@ -163,6 +163,14 @@ After entry into force only a new revision supersedes (`invalid_transition`).
   same summary fields as the working view (title, kind, tags, properties, …) taken from that
   revision, its `version`, and its revision summary, with the same paging, byte order and parameter
   rules. A reader builds its structure from published revisions alone.
+
+  *(As built, PR-5: published is the node's `in_force` revision; publish-on-approval puts a set in
+  force at its last approval, so an approved revision waiting for entry into force is not
+  published. A node with none answers `node_not_in_kb` in this view. With review off, and on an E2E
+  KB, the published view is the working copy. Any other `view` is `invalid_params`. A list entry
+  carries the working view's summary fields from the frozen source, `version`, and
+  `revision: {revision_id, doc_code, rev, state, approved_at, in_force_at}`; the page also says
+  `view: "published"`.)*
 - `kb/query.revisions {kb_id, node_id}` lists a node's revisions with their dates.
 - **Deleting** a node that holds any revision, in any state, is refused on every delete path with
   `invalid_transition` (`data.act: "delete"`, `reason: "has_revisions"`), and such a node is never
@@ -937,6 +945,15 @@ successor.
     naming the node).
 
   The refusal is `invalid_transition` with `act: "delete"` and `reason: "has_revisions"`.
+
+  *(As built, PR-5: deleting a node is removing it from the KB's collection, and every write to a
+  collection passes the document store, so the guard sits there, on the state a write would
+  leave, beside the E2E-switch guard and under the same gate as a review request. It therefore
+  also covers a client's raw collection update, `sync/update` and `sync/share`, a mesh peer's
+  update (whose session then ends, as at a refused switch) and a replace. A write that removes a
+  guarded node is refused whole. Seed removal is checked again before the update records its
+  intent, so it writes nothing. There is no node purge to guard: the one purge, an E2E reseal's
+  replace, needs a switch to E2E, which O17 refuses while any revision is held.)*
 - **What it supersedes.** D5's rule allowed deleting a node with only ended revisions, and purging a
   node while keeping its revisions. Both are superseded: such a node is neither deleted nor purged.
 - **Out of scope.** Deleting drafts and mistakes (a node with no revision, or a revision made in

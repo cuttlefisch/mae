@@ -469,9 +469,23 @@ pub(super) async fn get_revision(
     max_body_bytes: usize,
 ) -> Result<Value, McpError> {
     let g = gate(store, kb_id, principal, false).await?;
-    let revision_id = required_str(params, "revision")?.to_string();
-    let named_node = optional_str(params, "node_id")?.map(str::to_string);
-    let (kb, id) = (kb_id.to_string(), revision_id.clone());
+    let revision_id = required_str(params, "revision")?;
+    let named_node = optional_str(params, "node_id")?;
+    revision_reply(store, &g, kb_id, revision_id, named_node, max_body_bytes).await
+}
+
+/// A revision's frozen content and record, as `kb/query.get` returns it, for
+/// a caller the gate admitted. `named_node`: the node the caller named, which
+/// the revision must be of.
+pub(super) async fn revision_reply(
+    store: &DocStore,
+    g: &super::Gated,
+    kb_id: &str,
+    revision_id: &str,
+    named_node: Option<&str>,
+    max_body_bytes: usize,
+) -> Result<Value, McpError> {
+    let (kb, id) = (kb_id.to_string(), revision_id.to_string());
     let found = store
         .review_read(move |c| {
             let Some(r) = store::revision(c, &kb, &id)? else {
@@ -485,7 +499,7 @@ pub(super) async fn get_revision(
         .map_err(storage_fault)?;
     let unknown = || McpError::unknown_revision("no such revision in this KB".into());
     let (r, src, acts) = found.ok_or_else(unknown)?;
-    if named_node.is_some_and(|n| n != r.node_id) {
+    if named_node.is_some_and(|n| n != r.node_id.as_str()) {
         return Err(unknown());
     }
     let fault = |what: &str| McpError::internal_fault(format!("revision {revision_id}: {what}"));

@@ -162,7 +162,8 @@ pub(crate) fn require_allow(
 /// The storage-error → JSON-RPC mapping for a handler that has nothing to
 /// add: a size refusal is `quota_exceeded`, a missing durable doc is
 /// `doc_not_found`, a refused switch to E2E `revisions_hold_plaintext` or
-/// `history_holds_plaintext`, anything else `internal`. The message is the
+/// `history_holds_plaintext`, a removal of a node holding a revision
+/// `invalid_transition` (act `delete`, ADR-113 E7), anything else `internal`. The message is the
 /// error's own.
 pub(crate) fn storage_error(e: crate::storage::StorageError) -> McpError {
     use crate::storage::PlaintextHeld;
@@ -172,6 +173,9 @@ pub(crate) fn storage_error(e: crate::storage::StorageError) -> McpError {
             PlaintextHeld::History => McpError::history_holds_plaintext(e.to_string()),
             PlaintextHeld::Unreadable => McpError::internal_fault(e.to_string()),
         },
+        crate::storage::StorageError::NodeHasRevisions { ref nodes, .. } if !nodes.is_empty() => {
+            McpError::node_has_revisions(e.to_string())
+        }
         crate::storage::StorageError::TooLarge { size, limit, .. } => {
             McpError::document_too_large(e.to_string(), size, limit)
         }

@@ -360,8 +360,8 @@ filter = "test(a_peer_offering_a_refused_switch_repeatedly_is_refused_once_and_t
 ref = "O17: a mesh peer's refused switch ends the session; it is never re-pulled and re-refused"
 [[mutant.edit]]
 file = "daemon/src/dialer.rs"
-find = '''            return Err(Diverged(e.to_string()))'''
-replace = '''            drop(e)'''
+find = '''        ) => return Err(Diverged(e.to_string())),'''
+replace = '''        ) => drop(e),'''
 
 [[mutant]]
 id = "daemon-review-pr4/e2e-switch-refusal-log-unlimited"

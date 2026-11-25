@@ -1,0 +1,168 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/query.get, kb/query.list",
+  "description": "D5's published view (built in PR-5): `view` is \"working\" (the default, unchanged) or \"published\". get returns the node's in-force revision exactly as a revision read does (kb/query.get with `revision`); list returns the nodes with an in-force revision, in node-id byte order, paged with `after`/`limit` like the working list, each with the working list's summary fields from that revision, its `version` and a revision summary, and the page carries `view`. An approved revision waiting for entry into force is not published; a node with none (never in force, or derogated) answers `node_not_in_kb` from get and is absent from list. With review off, and on an E2E KB, the published view IS the working view (same answer as without `view`). Any other `view` is invalid_params.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "get, published",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "view": "published"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "result": {
+          "aliases": [],
+          "attachments": {},
+          "body": "The approved text of the procedure.",
+          "body_truncated": false,
+          "created_at": "2000-01-02T12:00:00Z",
+          "encryption": "none",
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "kind": null,
+          "links": [],
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "org_header": null,
+          "priority": null,
+          "properties": {},
+          "property_order": null,
+          "revision": {
+            "acts": [
+              {
+                "act": "approved",
+                "at": "2000-01-06T09:00:00.000Z",
+                "override": null,
+                "principal": "SHA256:Qm9vZXhhbXBsZWFwcHJvdmVyMDAwMQ"
+              }
+            ],
+            "approved_at": "2000-01-06T09:00:00.000Z",
+            "attachments": [],
+            "doc_code": "PRO-001",
+            "in_force_at": "2000-01-01T00:00:00.000Z",
+            "rev": 1,
+            "revision_id": "rv-01a7c2-1",
+            "state": "in_force",
+            "superseded_at": null
+          },
+          "tags": [],
+          "title": "Purchasing procedure",
+          "todo_state": null,
+          "version": "6d5530453f3decd473f58dbea79c1252"
+        }
+      }
+    },
+    {
+      "name": "list, published, first page",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "kb/query.list",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "view": "published",
+          "limit": 1
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 71,
+        "result": {
+          "encryption": "none",
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "next_after": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "nodes": [
+            {
+              "aliases": [],
+              "attachments": {},
+              "created_at": "2000-01-02T12:00:00Z",
+              "id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "kind": null,
+              "org_header": null,
+              "priority": null,
+              "properties": {},
+              "property_order": null,
+              "revision": {
+                "approved_at": "2000-01-06T09:00:00.000Z",
+                "doc_code": "PRO-001",
+                "in_force_at": "2000-01-01T00:00:00.000Z",
+                "rev": 1,
+                "revision_id": "rv-01a7c2-1",
+                "state": "in_force"
+              },
+              "tags": [],
+              "title": "Purchasing procedure",
+              "todo_state": null,
+              "version": "6d5530453f3decd473f58dbea79c1252"
+            }
+          ],
+          "view": "published"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "a node with no published revision",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 72,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+          "view": "published"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 72,
+        "error": {
+          "code": -32603,
+          "message": "node '2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2' has no published revision in KB '0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f'",
+          "data": {
+            "kind": "node_not_in_kb"
+          }
+        }
+      }
+    },
+    {
+      "case": "a view other than working or published",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 73,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "view": "draft"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 73,
+        "error": {
+          "code": -32602,
+          "message": "view is \"working\" or \"published\"",
+          "data": {
+            "kind": "invalid_params",
+            "param": "view"
+          }
+        }
+      }
+    }
+  ]
+}
