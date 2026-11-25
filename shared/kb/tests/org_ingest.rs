@@ -376,6 +376,38 @@ fn body() -> impl Strategy<Value = String> {
     prop::collection::vec(piece, 0..40).prop_map(|v| v.concat())
 }
 
+/// A rewrite refused for the whole file, because of text outside every node,
+/// still leaves each node's body in store form: here the malformed `id:`
+/// link before the first headline refused the file's rewrite, and node
+/// `n1`'s `[[x][D]]` was stored as written, so re-deriving it alone changed
+/// it. Found by `stored_bodies_invent_no_edges`.
+#[test]
+fn a_refusal_outside_every_node_leaves_each_node_body_in_store_form() {
+    let b = "id:[[https://e.org][*b* c]]\n* \n:PROPERTIES:\n:ID: n1\n:END:\n[[x][D]]";
+    let file = payloads(b);
+    for n in parse_file(b).nodes {
+        assert_eq!(store_body(&n.body), n.body, "{}: not in store form", n.id);
+        for e in payloads(&n.body) {
+            assert!(file.contains(&e), "{}: {e:?} not in the file's edges", n.id);
+        }
+    }
+}
+
+/// A node under an excluded ancestor (`:noexport:`, COMMENT) is stored in its
+/// store form read alone. A regression pin: it held before the per-node
+/// `store_body` too, and must keep holding.
+#[test]
+fn a_node_under_an_excluded_ancestor_is_stored_as_it_reads_alone() {
+    for b in [
+        "* P :noexport:\n** C\n:PROPERTIES:\n:ID: c1\n:END:\n[[https://x.org][D]]\n",
+        "* COMMENT P\n** C\n:PROPERTIES:\n:ID: c1\n:END:\n[[https://x.org][D]]\n",
+    ] {
+        for n in parse_file(b).nodes {
+            assert_eq!(store_body(&n.body), n.body, "{}: not in store form", n.id);
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
