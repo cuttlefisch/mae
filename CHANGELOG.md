@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.197] - 2026-11-25
+
+
+
+
+### Documentation
+
+- *(adr)* ADR-120, the daemon's activity record ([a0a940c](https://github.com/cuttlefisch/mae/commit/a0a940cc1d5766e3a7dfaf8a32b2504b253ca8b2))
+- *(adr)* ADR-120 accepted, with the owner's decisions and the session header pinned ([12e7412](https://github.com/cuttlefisch/mae/commit/12e741211ae00eeab71b1848e136b8277fe5c853))
+- *(adr)* ADR-120 D13, the operator contract for monitoring and collection ([982a0c8](https://github.com/cuttlefisch/mae/commit/982a0c8bac28c78a8b70d155772d610791d643fa))
+
 ## [0.14.196] - 2026-11-25
 
 
@@ -14,6 +25,10 @@ All notable changes to this project will be documented in this file.
 - *(adr)* ADR-113 Amendment 4, the signed PDF as an interim record of approval by KB policy ([0e6b6f2](https://github.com/cuttlefisch/mae/commit/0e6b6f2ed38795dd17032525647d49660394f5f3))
 - *(adr)* ADR-113 O19 decided, entry into force waits for the signed PDF ([abb9d17](https://github.com/cuttlefisch/mae/commit/abb9d17a871716652a1ff97572b598f43f0fcb70))
 - *(adr)* ADR-113 Amendment 4, fixture and shape fixes from a client build ([03d4087](https://github.com/cuttlefisch/mae/commit/03d4087ab4564d96c3cf67161145d7332e57a777))
+
+### Miscellaneous
+
+- Bump version to 0.14.196 ([f6bfddb](https://github.com/cuttlefisch/mae/commit/f6bfddb0d2f6764723d17fb78899981c17b2a134))
 
 ## [0.14.195] - 2026-11-25
 
