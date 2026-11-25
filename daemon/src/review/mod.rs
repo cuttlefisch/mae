@@ -107,8 +107,48 @@ fn not_admitted() -> McpError {
     McpError::not_member("not a member of this KB".into())
 }
 
+/// A storage failure as the client sees it: a fixed message. The cause is
+/// logged here, never returned (it is the daemon's, not the caller's).
 pub(crate) fn storage_fault(e: StorageError) -> McpError {
-    McpError::internal_fault(format!("review storage: {e}"))
+    tracing::warn!(error = %e, "publication review: storage failure");
+    McpError::internal_fault("publication review could not read or write its record".into())
+}
+
+/// Most members one `kb/review.request` may name (E9). Each member is frozen
+/// for good: a history version no retention prunes (ADR-116 D5), a source
+/// copy that is never deleted (O8, E7), and an entry in the request's event,
+/// so one call's work and storage must be bounded by more than the scan
+/// limit. Fifty covers a procedure family revised together; a larger set is
+/// several requests. Never above `[kb_query] max_scan_nodes`.
+pub(crate) const MAX_REQUEST_NODES: usize = 50;
+/// Largest `reason` any review method takes, in UTF-8 bytes (E9). A reason is
+/// kept for good in the event chain; this is a long paragraph.
+pub(crate) const MAX_REASON_BYTES: usize = 2_048;
+/// Largest `set_name`, in UTF-8 bytes (E9): a title, as long as a version name.
+pub(crate) const MAX_SET_NAME_BYTES: usize = 200;
+/// Most `code_prefixes` a KB declares (E9). Each is kept in the policy and in
+/// its `policy_changed` event.
+pub(crate) const MAX_CODE_PREFIXES: usize = 32;
+
+/// `invalid_params` for `param` over its cap, with the cap in `data.limit`.
+pub(crate) fn over_limit(param: &str, message: String, limit: usize) -> McpError {
+    let mut e = McpError::invalid_params(param, message);
+    if let Some(d) = e.data.as_deref_mut() {
+        d["limit"] = serde_json::json!(limit);
+    }
+    e
+}
+
+/// Refuse a text parameter longer than `max` UTF-8 bytes.
+pub(crate) fn within_bytes(name: &str, s: &str, max: usize) -> Result<(), McpError> {
+    if s.len() > max {
+        return Err(over_limit(
+            name,
+            format!("{name} is at most {max} bytes"),
+            max,
+        ));
+    }
+    Ok(())
 }
 
 /// E9's gate. `need_enabled`: refuse `review_not_enabled` when the switch is
@@ -125,7 +165,12 @@ pub(crate) async fn gate(
     let coll = match collab_handler::load_collection(store, kb_id).await {
         Ok(c) => c,
         Err(r) if r.kind == collab_handler::RefusalKind::KbNotFound => return Err(not_admitted()),
-        Err(r) => return Err(McpError::internal_fault(r.message)),
+        Err(r) => {
+            tracing::warn!(kb_id, error = %r.message, "publication review: collection unreadable");
+            return Err(McpError::internal_fault(
+                "the KB's collection could not be read".into(),
+            ));
+        }
     };
     let admitted = collab_handler::kb_access_with_coll(
         store,

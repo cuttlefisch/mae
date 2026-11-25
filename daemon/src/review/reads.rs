@@ -46,7 +46,7 @@ fn waiting_for(p: &Policy, revision_id: Option<&str>) -> Vec<Value> {
 }
 
 /// One revision as `status` and `kb/query.revisions` list it (E9).
-fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>, p: &Policy) -> Value {
+fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>) -> Value {
     let superseded_by = all
         .iter()
         .find(|o| o.replaces.as_deref() == Some(&r.revision_id) && o.state != "in_review")
@@ -70,7 +70,7 @@ fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>, p: &Pol
         "superseded_by": superseded_by,
         "imported": null,
         "signed_pdf_sha256": null,
-        "approval_record": r.approval_record.clone().unwrap_or_else(|| p.approval_record.clone()),
+        "approval_record": r.approval_record,
     })
 }
 
@@ -153,13 +153,13 @@ pub(super) async fn status(
             "revision_id": r.revision_id,
             "rev": r.rev_no,
             "since": t(r.in_force_since),
-            "approval_record": r.approval_record.clone().unwrap_or_else(|| g.policy.approval_record.clone()),
+            "approval_record": r.approval_record,
             "signed_pdf_sha256": null,
         })
     });
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &g.policy))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r)))
         .collect();
     Ok(json!({
         "kb_id": kb_id,
@@ -286,8 +286,10 @@ pub(crate) async fn chain_page(
         None => Value::Null,
         Some(s) => {
             let (seq, hash) = last.map_or((0, ZERO_HASH.to_string()), |l| (l.seq, l.entry_hash));
-            chain::head_line(kb_id, seq, &hash, &time(store.now_ms() as i64), s)
-                .map_err(|e| McpError::internal_fault(format!("review head: {e}")))?
+            chain::head_line(kb_id, seq, &hash, &time(store.now_ms() as i64), s).map_err(|e| {
+                tracing::warn!(kb_id, error = %e, "publication review: head not signed");
+                McpError::internal_fault("the event chain's head could not be signed".into())
+            })?
         }
     };
     Ok((header, lines, more, head))
@@ -376,7 +378,7 @@ pub(super) async fn revisions(
     }
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &g.policy))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r)))
         .collect();
     Ok(json!({ "kb_id": kb_id, "node_id": node_id, "doc_code": code, "revisions": entries }))
 }
@@ -417,7 +419,10 @@ pub(super) async fn get_revision(
     if hex::encode(Sha256::digest(&src)) != r.source_sha256 {
         return Err(fault("its frozen source does not match its sha256"));
     }
-    let node = decode_content(&src).map_err(|e| fault(&e.to_string()))?;
+    let node = decode_content(&src).map_err(|e| {
+        tracing::warn!(kb_id, revision_id, error = %e, "publication review: source undecodable");
+        fault("its frozen source does not decode")
+    })?;
     if hex::encode(&node.digest()[..16]) != r.version {
         return Err(fault("its frozen source does not match its version"));
     }

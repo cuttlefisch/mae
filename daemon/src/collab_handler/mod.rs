@@ -1074,14 +1074,7 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
 /// collection: the daemon cannot read such content, so checks and history
 /// that need the plaintext stand aside for it.
 pub(crate) async fn kb_is_e2e(doc_store: &DocStore, kb_id: &str, coll: &KbCollectionDoc) -> bool {
-    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
-        Some(anchor) => matches!(
-            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
-            mae_sync::kb::Encryption::E2e
-        ),
-        None => false,
-    };
-    signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e)
+    doc_store.collection_is_e2e(kb_id, coll).await
 }
 
 /// Refuse a node update that would leave a known field of the node document
@@ -1173,7 +1166,7 @@ pub async fn resolve_content_anchor_with_coll(
     if let Some(a) = doc_store.kb_anchor(kb_id).await {
         return Some(a);
     }
-    let signer = doc_store.signer()?;
+    doc_store.signer()?;
     let loaded;
     let coll = match coll {
         Some(c) => c,
@@ -1182,11 +1175,7 @@ pub async fn resolve_content_anchor_with_coll(
             &loaded
         }
     };
-    if !coll.owner().is_empty() && coll.owner() == signer.fingerprint() {
-        Some(signer.public().to_bytes())
-    } else {
-        None
-    }
+    doc_store.content_anchor_in(kb_id, coll).await
 }
 
 /// ADR-036 §D3 relay-receive verification for a document named on the wire —
@@ -1244,15 +1233,28 @@ pub async fn verify_relayed_content_op(
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    (session_id, by): (u64, Attribution<'_>),
+    who: (u64, Attribution<'_>),
     kb_id: &str,
     update: &[u8],
 ) -> Result<u64, String> {
+    persist_and_broadcast_collection_typed(doc_store, broadcaster, who, kb_id, update)
+        .await
+        .map_err(|e| format!("failed to persist collection: {e}"))
+}
+
+/// [`persist_and_broadcast_collection`] keeping the storage error, for a
+/// caller that maps a refusal (a switch to E2E) to its own kind.
+async fn persist_and_broadcast_collection_typed(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    (session_id, by): (u64, Attribution<'_>),
+    kb_id: &str,
+    update: &[u8],
+) -> Result<u64, crate::storage::StorageError> {
     let collection_doc = format!("kbc:{kb_id}");
     let result = doc_store
         .apply_update(&collection_doc, update, None, by)
-        .await
-        .map_err(|e| format!("failed to persist collection: {e}"))?;
+        .await?;
     broadcaster
         .lock()
         .unwrap_or_else(|e| e.into_inner())

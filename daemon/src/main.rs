@@ -492,6 +492,18 @@ async fn main() {
         );
     }
 
+    // ADR-113 O17: switches to E2E refused over plaintext, a mesh peer's
+    // included (each also logged when it happened).
+    let refused = doc_store_for_query
+        .as_deref()
+        .map_or(0, |d| d.e2e_switches_refused());
+    if refused > 0 {
+        tracing::warn!(
+            count = refused,
+            "collab: refused writes that would switch a KB to E2E over plaintext this run"
+        );
+    }
+
     // Broadcast shutdown
     let _ = shutdown_tx.send(());
 

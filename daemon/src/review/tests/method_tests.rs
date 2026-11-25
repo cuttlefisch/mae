@@ -510,3 +510,109 @@ async fn a_blob_held_only_by_a_withdrawn_revisions_frozen_map_stays_live() {
         "the revision's blob left the live set"
     );
 }
+
+/// E1/E2: a withdrawal by anyone but the requester is refused identically,
+/// kind and message, whether the request is open, has ended, or is in force,
+/// so the refusal tells a non-requester nothing of where it stands. Kills a
+/// requester check placed after the state check.
+#[tokio::test]
+async fn a_non_requester_gets_one_refusal_whatever_the_request_state() {
+    let env = env().await;
+    enable(&env).await;
+    let mut ids = Vec::new();
+    for n in NODES {
+        ids.push(request(&env, &env.editor, &[n]).await.unwrap()["request_id"].clone());
+    }
+    let w = |who: String, id: Value| {
+        let env = &env;
+        async move {
+            let params = json!({"kb_id": KB, "request_id": id, "reason": "r"});
+            call(env, &who, "kb/review.withdraw", params).await
+        }
+    };
+    w(env.editor.clone(), ids[1].clone()).await.unwrap();
+    let in_force = ids[2].as_str().unwrap().to_string();
+    env.store
+        .review_write(move |c| {
+            let mut s = c.prepare(
+                "UPDATE kb_review_revisions SET state = 'in_force' WHERE request_id = ?1",
+            )?;
+            s.bind((1, in_force.as_str()))?;
+            s.next()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let mut seen = BTreeSet::new();
+    for id in &ids {
+        let e = w(env.owner.clone(), id.clone()).await.unwrap_err();
+        seen.insert((kind(&e), e.message));
+    }
+    let only = BTreeSet::from([(
+        "not_approver".to_string(),
+        "only the requester may withdraw this request".to_string(),
+    )]);
+    assert_eq!(seen, only);
+}
+
+/// E3: a revision keeps the record of approval in force when it was
+/// requested; changing the policy later changes the KB's answer, not the
+/// revision's. Kills a reader that falls back to the live policy.
+#[tokio::test]
+async fn a_revisions_approval_record_is_the_one_in_force_when_requested() {
+    let env = env().await;
+    enable(&env).await;
+    let r = request(&env, &env.editor, &["n1"]).await.unwrap();
+    call(
+        &env,
+        &env.owner,
+        "kb/review.set_policy",
+        json!({"kb_id": KB, "approval_record": "signed_pdf", "reason": "paper record"}),
+    )
+    .await
+    .unwrap();
+    let s = call(
+        &env,
+        &env.viewer,
+        "kb/review.status",
+        json!({"kb_id": KB, "node_id": "n1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(s["approval_record"], json!("signed_pdf"), "the KB's answer");
+    assert_eq!(
+        s["revisions"][0]["revision_id"],
+        r["revisions"][0]["revision_id"]
+    );
+    assert_eq!(s["revisions"][0]["approval_record"], json!("act"));
+    let q = call(
+        &env,
+        &env.viewer,
+        "kb/query.revisions",
+        json!({"kb_id": KB, "node_id": "n1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(q["revisions"][0]["approval_record"], json!("act"));
+}
+
+/// A storage failure reaches the client as `internal` with a fixed message;
+/// the database's own text (table names, SQL) stays in the daemon's log.
+/// Kills a fault that formats the storage error into the reply.
+#[tokio::test]
+async fn a_storage_fault_tells_the_client_nothing_of_the_database() {
+    let env = env().await;
+    enable(&env).await;
+    env.store
+        .review_write(|c| Ok(c.execute("DROP TABLE kb_review_requests")?))
+        .await
+        .unwrap();
+    let e = call(&env, &env.viewer, "kb/review.pending", json!({"kb_id": KB}))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&e), "internal");
+    assert_eq!(
+        e.message,
+        "publication review could not read or write its record"
+    );
+}

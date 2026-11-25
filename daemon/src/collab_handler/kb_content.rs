@@ -831,12 +831,17 @@ pub(super) async fn handle_kb_collection_op(
     // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
     // node doc under #171.) Additive flag — an old daemon ignores it.
     let scrub = params["scrub"].as_bool().unwrap_or(false);
-    if let Err(e) =
-        super::kb_history::refuse_e2e_switch_over_history(doc_store, &kb_id, &update).await
+    // A switch to E2E over plaintext is refused inside the write itself, on
+    // every path (`doc_store_e2e_switch`); here it only keeps its kind.
+    match super::persist_and_broadcast_collection_typed(
+        doc_store,
+        broadcaster,
+        who,
+        &kb_id,
+        &update,
+    )
+    .await
     {
-        return JsonRpcResponse::error(id, e);
-    }
-    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(wal_seq) => {
             if scrub {
                 let coll_doc = format!("kbc:{kb_id}");
@@ -877,7 +882,13 @@ pub(super) async fn handle_kb_collection_op(
                 serde_json::json!({ "applied": true, "wal_seq": wal_seq, "scrubbed": scrub }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
+        Err(e @ crate::storage::StorageError::E2eSwitchRefused { .. }) => {
+            JsonRpcResponse::error(id, super::storage_error(e))
+        }
+        Err(e) => JsonRpcResponse::error(
+            id,
+            McpError::internal_fault(format!("failed to persist collection: {e}")),
+        ),
     }
 }
 

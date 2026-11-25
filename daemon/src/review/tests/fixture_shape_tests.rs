@@ -246,6 +246,18 @@ async fn every_request_refusal_carries_its_fixtures_kind_and_fields() {
             &env.stranger,
             json!({}),
         ),
+        (
+            "more members than a request may name",
+            &env.editor,
+            json!({"nodes": (0..51)
+                .map(|i| json!({"node_id": format!("x{i}"), "version": v1}))
+                .collect::<Vec<_>>()}),
+        ),
+        (
+            "reason over its byte limit",
+            &env.editor,
+            json!({"reason": "x".repeat(2_049)}),
+        ),
     ];
     for (case, who, extra) in cases {
         let r = call(&env, who, "kb/review.request", ask(extra)).await;

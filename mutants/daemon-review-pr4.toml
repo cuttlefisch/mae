@@ -1,7 +1,7 @@
 # ADR-113 PR-4: the revision record, the request and the event chain. One
 # mutant per guard. Tests: daemon/src/review/tests/ and
-# daemon/src/review/chain_tests.rs (--lib), the history test for the E2E
-# switch, and mae-sync's retention tests. Format: tools/mutate/README.md.
+# daemon/src/review/chain_tests.rs (--lib), the history tests for the E2E
+# switch, the dialer's (--bin), and mae-sync's retention tests. Format: tools/mutate/README.md.
 
 [[mutant]]
 id = "daemon-review-pr4/stale-version-unchecked"
@@ -145,9 +145,9 @@ targets = ["--lib"]
 filter = "test(switching_to_e2e_is_refused_while_the_kb_holds_review_revisions)"
 ref = "O17: a KB holding revisions cannot switch to E2E"
 [[mutant.edit]]
-file = "daemon/src/collab_handler/kb_history.rs"
-find = '''        .review_read(move |c| crate::review::store::has_revisions(c, &kb))'''
-replace = '''        .review_read(move |c| crate::review::store::has_revisions(c, &kb).map(|_| false))'''
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''            .review_read(move |c| crate::review::store::has_revisions(c, &kb))'''
+replace = '''            .review_read(move |c| crate::review::store::has_revisions(c, &kb).map(|_| false))'''
 
 [[mutant]]
 id = "daemon-review-pr4/review-freeze-prunable"
@@ -271,3 +271,74 @@ ref = "E10: verify needs no daemon configuration or database"
 file = "daemon/src/main.rs"
 find = '''    if review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {'''
 replace = '''    if false && review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-unguarded-on-apply"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_without)"
+ref = "ADR-116 Amendment 1, O17: the switch guard is in apply_update, so a mesh peer's flip meets it"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''            refused = self
+                .e2e_switch_refusal(kb, state_before, &state_after)
+                .await;'''
+replace = '''            refused = None.filter(|_: &StorageError| kb.len() + state_before.len() + state_after.len() > 0);'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-unguarded-on-replace"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_write_path_refuses_a_switch_over_plaintext_whole)"
+ref = "ADR-116 Amendment 1, O17: share_doc and restore_doc meet the same guard"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''        let Some(kb) = kb else { return Ok(()) };'''
+replace = '''        let Some(kb) = kb.filter(|_| false) else { return Ok(()) };'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-refused-but-kept-in-memory"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_write_path_refuses_a_switch_over_plaintext_whole)"
+ref = "ADR-113 O17: a refused peer update is refused whole, never half-applied"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''            Some(refused) => {
+                self.restore_from_storage(doc_name, doc).await?;
+                Err(refused)'''
+replace = '''            Some(refused) => {
+                Err(refused)'''
+
+[[mutant]]
+id = "daemon-review-pr4/request-not-serialized-with-a-switch"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_switch_racing_a_paused_request_waits_and_is_refused) | test(a_request_racing_a_paused_switch_waits_and_is_refused)"
+ref = "O17: a request and a switch to E2E serialize on the KB's switch gate"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    let _switch = store.e2e_switch_gate(kb_id).await;'''
+replace = '''    let _switch = ();'''
+
+[[mutant]]
+id = "daemon-review-pr4/request-member-cap-is-the-scan-limit"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_request_names_at_most_fifty_members)"
+ref = "E9: a request names at most 50 members, below the scan limit"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''parse_nodes(params, MAX_REQUEST_NODES.min(limits.max_scan_nodes).max(1))'''
+replace = '''parse_nodes(params, limits.max_scan_nodes.max(1 + MAX_REQUEST_NODES * 0))'''
+
+[[mutant]]
+id = "daemon-review-pr4/text-caps-count-characters"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_free_text_parameter_is_capped_in_bytes)"
+ref = "E9: free-text caps are in UTF-8 bytes"
+[[mutant.edit]]
+file = "daemon/src/review/mod.rs"
+find = '''    if s.len() > max {'''
+replace = '''    if s.chars().count() > max {'''

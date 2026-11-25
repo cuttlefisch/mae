@@ -11,8 +11,9 @@ use serde_json::{json, Map, Value};
 
 use super::store::{self, NewEvent, Policy, Request, Revision};
 use super::{
-    actor, gate, optional_bool, optional_str, require_role, required_str, required_text, signer,
-    storage_fault, time,
+    actor, gate, optional_bool, optional_str, over_limit, require_role, required_str,
+    required_text, signer, storage_fault, time, within_bytes, MAX_CODE_PREFIXES, MAX_REASON_BYTES,
+    MAX_REQUEST_NODES, MAX_SET_NAME_BYTES,
 };
 use crate::doc_store::{DocStore, FreezeError, Frozen};
 use crate::kb_query::KbQueryLimits;
@@ -44,15 +45,23 @@ fn flatten<T>(r: TxnResult<T>) -> Result<T, McpError> {
     r.map_err(storage_fault)?
 }
 
-/// `nodes: [{node_id, version}]`: at least one, at most `max`, no node twice.
+/// `nodes: [{node_id, version}]`: at least one, at most `max` (refused with
+/// the cap in `data.limit`), no node twice.
 fn parse_nodes(params: &Value, max: usize) -> Result<Vec<(String, String)>, McpError> {
     let bad = |m: &str| McpError::invalid_params("nodes", m.to_string());
     let list = params
         .get("nodes")
         .and_then(Value::as_array)
         .ok_or_else(|| bad("nodes must be an array of {node_id, version}"))?;
-    if list.is_empty() || list.len() > max {
-        return Err(bad(&format!("nodes must hold 1 to {max} entries")));
+    if list.is_empty() {
+        return Err(bad("nodes must name at least one node"));
+    }
+    if list.len() > max {
+        return Err(over_limit(
+            "nodes",
+            format!("a request names at most {max} nodes"),
+            max,
+        ));
     }
     let mut seen = BTreeSet::new();
     let mut out = Vec::with_capacity(list.len());
@@ -105,9 +114,12 @@ pub(super) async fn request(
 ) -> Result<Value, McpError> {
     let g = gate(store, kb_id, Some(&who.principal), true).await?;
     require_role(&g, SyncRole::Editor, "a member with Edit")?;
-    let nodes = parse_nodes(params, limits.max_scan_nodes.max(1))?;
+    let nodes = parse_nodes(params, MAX_REQUEST_NODES.min(limits.max_scan_nodes).max(1))?;
     let reason = required_text(params, "reason")?.to_string();
+    within_bytes("reason", &reason, MAX_REASON_BYTES)?;
     let set_name = optional_str(params, "set_name")?.map(str::to_string);
+    let name = set_name.as_deref().unwrap_or_default();
+    within_bytes("set_name", name, MAX_SET_NAME_BYTES)?;
     let asked = optional_bool(params, "in_force_on_approval")?;
     // D3: a requester may only tighten; loosening is the owner's.
     if asked == Some(true) && !g.policy.in_force_on_approval && g.role != SyncRole::Owner {
@@ -130,6 +142,10 @@ pub(super) async fn request(
     {
         return Err(already_open(&n, &s));
     }
+    // Held to the commit, so a switch to E2E serializes with this request
+    // (`doc_store_e2e_switch`): under it, the KB must still be plaintext.
+    let _switch = store.e2e_switch_gate(kb_id).await;
+    still_plaintext(store, kb_id).await?;
     let mut frozen = Vec::with_capacity(nodes.len());
     for (node_id, version) in &nodes {
         frozen.push(match store.review_freeze(kb_id, node_id, version).await {
@@ -165,6 +181,23 @@ pub(super) async fn request(
     flatten(out)
 }
 
+/// Refuse `e2e_unsupported` when `kb_id` has become E2E since the gate read
+/// it. Called under the KB's switch gate.
+async fn still_plaintext(store: &DocStore, kb_id: &str) -> Result<(), McpError> {
+    let coll = crate::collab_handler::load_collection(store, kb_id)
+        .await
+        .map_err(|r| {
+            tracing::warn!(kb_id, error = %r.message, "publication review: collection unreadable");
+            McpError::internal_fault("the KB's collection could not be read".into())
+        })?;
+    if store.collection_is_e2e(kb_id, &coll).await {
+        return Err(McpError::e2e_unsupported(
+            "publication review serves plaintext KBs only".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The request's rows and its `request` event, in the caller's transaction.
 /// Re-checks that no node is already open: two requests racing past the
 /// first check are decided here, under the writer, and the loser writes
@@ -181,6 +214,7 @@ fn record_request(
         return Ok(Err(already_open(&n, &s)));
     }
     store::insert_request(c, &req)?;
+    let approval_record = store::policy(c, &req.kb_id)?.approval_record; // E3: when requested
     let mut answer = Vec::with_capacity(frozen.len());
     let mut logged = Vec::with_capacity(frozen.len());
     for (i, f) in frozen.into_iter().enumerate() {
@@ -203,7 +237,7 @@ fn record_request(
             doc_type: None,
             template_id: None,
             template_sha256: None,
-            approval_record: None,
+            approval_record: approval_record.clone(),
             replaces,
             created_by: req.requester.clone(),
             created_by_kind: req.requester_kind.clone(),
@@ -269,6 +303,7 @@ pub(super) async fn withdraw(
     gate(store, kb_id, Some(&who.principal), true).await?;
     let request_id = required_str(params, "request_id")?.to_string();
     let reason = required_text(params, "reason")?.to_string();
+    within_bytes("reason", &reason, MAX_REASON_BYTES)?;
     let signer = signer(store)?;
     let (kb, principal, actor) = (kb_id.to_string(), who.principal.clone(), actor(who));
     let at = store.now_ms() as i64;
@@ -297,6 +332,13 @@ fn record_withdrawal(
             "no such request in this KB".into(),
         )));
     };
+    // Before anything about its state: a non-requester learns nothing of where
+    // the request stands (open, ended or in force) from the refusal.
+    if req.requester != principal {
+        return Ok(Err(McpError::not_approver(
+            "only the requester may withdraw this request".into(),
+        )));
+    }
     let members = store::request_revisions(c, request_id)?;
     if let Some(r) = members
         .iter()
@@ -312,11 +354,6 @@ fn record_withdrawal(
             &r.state,
             "withdraw",
             None,
-        )));
-    }
-    if req.requester != principal {
-        return Ok(Err(McpError::not_approver(
-            "only the requester may withdraw this request".into(),
         )));
     }
     store::end_request_revisions(c, request_id, "withdrawn", at)?;
@@ -416,6 +453,13 @@ fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<S
         p.approval_record = r.to_string();
     }
     if let Some(prefixes) = string_list(params, "code_prefixes")? {
+        if prefixes.len() > MAX_CODE_PREFIXES {
+            return Err(over_limit(
+                "code_prefixes",
+                format!("a KB declares at most {MAX_CODE_PREFIXES} code prefixes"),
+                MAX_CODE_PREFIXES,
+            ));
+        }
         let unique: BTreeSet<&String> = prefixes.iter().collect();
         if unique.len() != prefixes.len() || !prefixes.iter().all(|x| valid_prefix(x)) {
             return Err(McpError::invalid_params(
@@ -428,6 +472,9 @@ fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<S
     let reason = optional_str(params, "reason")?
         .filter(|r| !r.trim().is_empty())
         .map(str::to_string);
+    if let Some(r) = &reason {
+        within_bytes("reason", r, MAX_REASON_BYTES)?;
+    }
     // E3: changing what counts as the record of approval needs a reason.
     if p.approval_record != current.approval_record && reason.is_none() {
         return Err(McpError::invalid_params(

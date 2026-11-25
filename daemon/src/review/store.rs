@@ -57,7 +57,7 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      doc_type TEXT,
      template_id TEXT,
      template_sha256 TEXT,
-     approval_record TEXT,
+     approval_record TEXT NOT NULL,
      replaces TEXT,
      created_by TEXT NOT NULL,
      created_by_kind TEXT NOT NULL,
@@ -221,8 +221,15 @@ pub struct Revision {
     pub doc_type: Option<String>,
     pub template_id: Option<String>,
     pub template_sha256: Option<String>,
-    /// E3: the policy in force when the revision was approved (PR-5).
-    pub approval_record: Option<String>,
+    /// E3: what counts as the record of approval for this revision: the
+    /// KB's policy when it was requested, stamped at the freeze, and re-stamped
+    /// at approval (PR-5).
+    ///
+    /// @ai-caution: [review] Never read from the live policy in its place: a
+    /// later `set_policy` would then rewrite what an existing revision says
+    /// its record of approval is. Hence NOT NULL, stamped in the request's
+    /// transaction.
+    pub approval_record: String,
     pub replaces: Option<String>,
     pub created_by: String,
     pub created_by_kind: String,
@@ -263,7 +270,7 @@ fn read_revision(stmt: &sqlite::Statement<'_>) -> Result<Revision, StorageError>
         doc_type: os("doc_type")?,
         template_id: os("template_id")?,
         template_sha256: os("template_sha256")?,
-        approval_record: os("approval_record")?,
+        approval_record: s("approval_record")?,
         replaces: os("replaces")?,
         created_by: s("created_by")?,
         created_by_kind: s("created_by_kind")?,
@@ -295,7 +302,7 @@ pub(crate) fn insert_revision(conn: &sqlite::Connection, r: &Revision) -> Result
         opt_text(r.doc_type.as_deref()),
         opt_text(r.template_id.as_deref()),
         opt_text(r.template_sha256.as_deref()),
-        opt_text(r.approval_record.as_deref()),
+        r.approval_record.as_str().into(),
         opt_text(r.replaces.as_deref()),
         r.created_by.as_str().into(),
         r.created_by_kind.as_str().into(),

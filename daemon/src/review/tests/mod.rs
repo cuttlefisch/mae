@@ -19,7 +19,9 @@ mod chain_store_tests;
 mod fixture_shape_tests;
 mod freeze_race_tests;
 mod gate_tests;
+mod limits_tests;
 mod method_tests;
+mod switch_race_tests;
 
 pub(super) const KB: &str = "kb-review";
 pub(super) const NODES: [&str; 3] = ["n1", "n2", "n3"];

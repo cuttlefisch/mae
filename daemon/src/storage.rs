@@ -58,6 +58,28 @@ pub enum StorageError {
         size: usize,
         limit: usize,
     },
+    /// A write to `kbc:{kb_id}` would switch the KB to end-to-end encryption
+    /// while this daemon holds plaintext the switch would leave readable
+    /// (ADR-116 Amendment 1, ADR-113 O17). Refused whole, before it is logged,
+    /// so the collection is left as it was. See `doc_store_e2e_switch`.
+    E2eSwitchRefused {
+        kb_id: String,
+        held: PlaintextHeld,
+    },
+}
+
+/// What a refused switch to E2E would have left readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaintextHeld {
+    /// Publication-review revisions, whose frozen sources are plaintext and
+    /// are never deleted (ADR-113 D1, E7).
+    Revisions,
+    /// Version history that still holds content (ADR-116).
+    History,
+    /// Neither could be read. Refused rather than allowed: a switch the
+    /// daemon cannot check is not one it may let through. The cause is logged
+    /// server-side, never returned to the client.
+    Unreadable,
 }
 
 impl std::fmt::Display for StorageError {
@@ -71,6 +93,24 @@ impl std::fmt::Display for StorageError {
                 "{doc} would hold {size} bytes, over the {limit}-byte limit \
                  ([collab.sync] max_document_size_bytes)"
             ),
+            Self::E2eSwitchRefused { kb_id, held } => match held {
+                PlaintextHeld::Revisions => write!(
+                    f,
+                    "KB '{kb_id}' cannot switch to end-to-end encryption: it holds \
+                     publication-review revisions, whose frozen sources are plaintext and are \
+                     kept for good"
+                ),
+                PlaintextHeld::History => write!(
+                    f,
+                    "KB '{kb_id}' cannot switch to end-to-end encryption while its version \
+                     history holds plaintext content"
+                ),
+                PlaintextHeld::Unreadable => write!(
+                    f,
+                    "KB '{kb_id}' cannot switch to end-to-end encryption: what it holds could \
+                     not be checked"
+                ),
+            },
         }
     }
 }

@@ -1297,3 +1297,7 @@ mod tests {
         assert_eq!(b_store.kb_anchor_record("kbh").await, kept);
     }
 }
+
+#[cfg(test)]
+#[path = "dialer_e2e_switch_tests.rs"]
+mod e2e_switch_tests;
