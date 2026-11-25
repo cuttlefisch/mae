@@ -107,21 +107,24 @@ async fn is_e2e(r: &Replica, kb: &str) -> bool {
     matches!(coll.encryption(), Encryption::E2e)
 }
 
-/// The peer's flip, relayed to `r` through the dialer's apply path.
-async fn relay_flip(r: &Replica, kb: &str) {
+/// The peer's flip, relayed to `r` through the dialer's apply path: whether
+/// it left the session diverged.
+async fn relay_flip(r: &Replica, kb: &str) -> bool {
     let kbc = format!("kbc:{kb}");
     let state = r.store.encode_state(&kbc).await.unwrap();
     let flip = KbCollectionDoc::from_bytes(&state)
         .unwrap()
         .set_encryption(Encryption::E2e);
-    apply_doc(&r.store, None, 0, &kbc, &flip, None, PEER).await;
+    apply_doc(&r.store, None, 0, &kbc, &flip, None, PEER)
+        .await
+        .is_err()
 }
 
 #[tokio::test]
 async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_without() {
     let r = replica("kb-hist").await;
     give_history(&r, "kb-hist").await;
-    relay_flip(&r, "kb-hist").await;
+    assert!(relay_flip(&r, "kb-hist").await, "history: diverged");
     assert!(
         !is_e2e(&r, "kb-hist").await,
         "history: the flip was applied"
@@ -130,7 +133,7 @@ async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_witho
 
     let r = replica("kb-rev").await;
     give_revision(&r, "kb-rev").await;
-    relay_flip(&r, "kb-rev").await;
+    assert!(relay_flip(&r, "kb-rev").await, "revision: diverged");
     assert!(
         !is_e2e(&r, "kb-rev").await,
         "revision: the flip was applied"
@@ -139,10 +142,46 @@ async fn a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_witho
 
     let r = replica("kb-clean").await;
     assert!(!r.store.history_holds_content("kb-clean").await.unwrap());
-    relay_flip(&r, "kb-clean").await;
+    assert!(!relay_flip(&r, "kb-clean").await, "neither: not diverged");
     assert!(
         is_e2e(&r, "kb-clean").await,
         "neither: the flip is accepted"
     );
     assert_eq!(r.store.e2e_switches_refused(), 0);
+}
+
+/// A session for KB `kbd` applies nothing pushed for another KB: neither the
+/// other KB's collection (here, a switch to E2E that would be refused there
+/// and end this session) nor one of its nodes, nor a non-KB document.
+#[tokio::test]
+async fn a_session_ignores_updates_for_another_kbs_documents() {
+    let r = replica("kbd").await;
+    let other = replica("kbo").await;
+    let peer_ep = iroh::SecretKey::from(Identity::generate("peer").secret_bytes()).public();
+    let ticket = JoinTicket::new(iroh::EndpointAddr::from_parts(peer_ep, Vec::new()), "kbd");
+    let push = |doc: &str, update: &[u8]| {
+        json!({"jsonrpc": "2.0", "method": "notifications/sync_update", "params": {"event": {"data": {
+            "buffer_name": doc, "update_base64": update_to_base64(update)}}}})
+        .to_string()
+    };
+    let (coll_state, _) = other.store.encode_state_and_sv("kbc:kbo").await.unwrap();
+    let foreign_node = KbNodeDoc::new_created_at("x", "Foreign", "body", &[], 1_700_000_000);
+    for (doc, update) in [
+        ("kbc:kbo", coll_state.clone()),
+        ("kbn:kbo:x", foreign_node.encode_state()),
+        ("shared:notes", foreign_node.encode_state()),
+    ] {
+        let bc: mae_mcp::broadcast::SharedBroadcaster = Arc::new(std::sync::Mutex::new(
+            mae_mcp::broadcast::EventBroadcaster::new(),
+        ));
+        let out = apply_inbound(&r.store, &bc, 1, &ticket, &push(doc, &update)).await;
+        assert!(
+            out.is_ok(),
+            "{doc}: a foreign document never ends the session"
+        );
+        assert!(
+            !r.store.has_doc(doc).await,
+            "{doc}: nothing of another KB is applied"
+        );
+    }
 }

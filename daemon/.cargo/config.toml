@@ -8,9 +8,10 @@
 # another writer's lock waited at least a second, hosted write throughput fell
 # from 162/s to about 20/s, and clients got "database is locked".
 #
-# The cc crate takes the first of CFLAGS_<target>, then HOST_CFLAGS (a native
-# build) or TARGET_CFLAGS (a cross build), then CFLAGS; both kinds are set so
-# the define holds natively and for the musl release alike.
+# The cc crate (1.2) concatenates CFLAGS, HOST_CFLAGS (a native build) or
+# TARGET_CFLAGS (a cross build), and CFLAGS_<target>, in that order; both kinds
+# are set so the define holds natively and for the musl release alike, next to
+# the repository config's x86-64 baseline flags.
 # `storage::tests::a_busy_lock_is_retried_in_milliseconds` fails without it.
 HOST_CFLAGS = "-DHAVE_USLEEP=1"
 TARGET_CFLAGS = "-DHAVE_USLEEP=1"

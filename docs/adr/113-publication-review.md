@@ -1827,12 +1827,25 @@ named.
     collection, `sync/update`, `sync/share`, `kb/share`, a mesh peer's update (the dialer), the
     legacy-collection migration, seeding, a checkpoint import, the control socket and `anchor_cli`.
     PR-4 first built it on `kb/collection_op` alone; its review found the dialer applying a peer's
-    flip with no check.
+    flip with no check. A write is checked in full only when it changes what the reading depends on
+    (the op-log, the display flag, the owner), which a deep observer on the collection reports,
+    including blocks a later update integrates from pending; any other collection write cannot switch
+    the KB and is not decoded.
+  - **The anchor.** The signed op-log reads as E2E only under the KB's content anchor, which is
+    stored outside the collection. While it is unknown, an owner-signed `SetEncryption` without the
+    display flag reads as plaintext and is admitted; recording the anchor afterwards would switch the
+    KB at no write. So both registrations, a mesh join's (`set_kb_anchor`) and an owner's or the
+    operator's (`record_kb_anchor_if_absent`), meet the same check under the same switch gate: an
+    anchor that would make a KB holding revisions or history read as E2E is refused, and the KB
+    stays unanchored and plaintext until its plaintext is dealt with.
   - **A refused peer update.** A mesh peer's update that would switch the KB is refused whole: none
     of it is logged or applied, including any other change it carries, and the refusal is logged and
-    counted (`DocStore::e2e_switches_refused`). The replica's collection then stops converging with
-    that peer's until the KB is dealt with. That is the price of not leaving plaintext readable on a
-    daemon that must hold none (ADR-037); half-applying the update would break the CRDT instead.
+    counted (`DocStore::e2e_switches_refused`; the warning is rate-limited to one a minute per KB).
+    The replica's collection then stops converging with that peer's until the KB is dealt with. That
+    is the price of not leaving plaintext readable on a daemon that must hold none (ADR-037);
+    half-applying the update would break the CRDT instead. E2E latches in the signed log, so the peer
+    never offers anything else: the dialer ends that session terminally at the first refusal, on a
+    live push or a join's pull, rather than re-pulling and re-refusing it on every reconnect.
   - **A request racing a switch.** `kb/review.request` takes the KB's switch gate, the one every
     collection write takes, from a re-check that the KB is still plaintext through its freezes and its
     commit. A switch therefore either lands first, and the request is refused `e2e_unsupported`, or
