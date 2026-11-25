@@ -230,7 +230,7 @@ replace = '''        .is_none_or(|_| false);'''
 id = "daemon-review-pr4/export-claiming-another-key-accepted"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(every_one_byte_change_to_the_fixture_fails)"
+filter = "test(a_change_in_any_field_of_any_line_fails)"
 ref = "E10: an export claiming another key than the trusted one is not this daemon's"
 [[mutant.edit]]
 file = "daemon/src/review/chain.rs"

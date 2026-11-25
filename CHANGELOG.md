@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.200] - 2026-11-25
+
+
+
+
+### Features
+
+- *(sync)* A review_freeze history version kind, always cut and never pruned ([c1ce8f1](https://github.com/cuttlefisch/mae/commit/c1ce8f1ab7def96324d565282476e411abbbaedf))
+- *(daemon)* Publication review's revision record, request and event chain ([9ca46f4](https://github.com/cuttlefisch/mae/commit/9ca46f410ead806a9d584dc419a20a025ac80fc0))
+- *(daemon)* Request answers carry their event, status follows the amended fixtures ([2e5931f](https://github.com/cuttlefisch/mae/commit/2e5931f2ede7b284c33f8976d65fd7559fea90a6))
+
+### Bug Fixes
+
+- *(daemon)* Guard every switch to E2E in the write, and bound review requests ([992f36b](https://github.com/cuttlefisch/mae/commit/992f36b540ab20eb9eff4648523ae740dc59de52))
+- *(daemon)* Guard an anchor that switches a KB to E2E, end a diverged mesh session, and check only writes that can switch ([d03140c](https://github.com/cuttlefisch/mae/commit/d03140c79046dced82aa6483afc1cf6a002d1bdf))
+- *(daemon)* A mesh session applies only its own KB's documents ([267d6a6](https://github.com/cuttlefisch/mae/commit/267d6a6fb9ad93cccd14ff3cd7daa3c9b9e10487))
+
+### Documentation
+
+- *(adr)* ADR-113 O7 and O8 decided, O17 decided provisionally, PR-4 built ([6fb5e53](https://github.com/cuttlefisch/mae/commit/6fb5e534c699b30aa4c1229fce4e8a803a090e55))
+- *(adr-113)* Record O17 as decided, the switch guard's reach, and E9's caps ([df8a9d5](https://github.com/cuttlefisch/mae/commit/df8a9d5a65d0c7866f2bb0c41d312ade0e2e82e5))
+- *(adr-113)* The switch guard reaches anchor registration, checks only writes that can switch, and ends a diverged mesh session ([59cd2dd](https://github.com/cuttlefisch/mae/commit/59cd2dda6979464b3f13d0fb495637f60839cf2a))
+
+### Testing
+
+- *(mutants)* ADR-113 PR-4's guards, one mutant each ([690d705](https://github.com/cuttlefisch/mae/commit/690d705e4f4cf333c368f0dc39e6426422468ffd))
+- *(mutants)* Release the freeze's lock across the window the test pauses in ([5cf0d6f](https://github.com/cuttlefisch/mae/commit/5cf0d6f940ba72150082191a46fe33ade4f7c1e5))
+- *(daemon)* Keep the chain's tamper tests inside the CI time budget ([0a5460b](https://github.com/cuttlefisch/mae/commit/0a5460b1f0bca7cbcf84a4a5497d9002487da68b))
+
+### Miscellaneous
+
+- Rebuild the ADR KB checksum after merging the amendment ([25dd53e](https://github.com/cuttlefisch/mae/commit/25dd53ea66c7dd6d935a3afc4f99366437c77303))
+- Rebuild the ADR KB checksum after merging main ([324be53](https://github.com/cuttlefisch/mae/commit/324be538c2978541933f3b95b0962cf9db52eeec))
+- Rebuild the ADR KB checksum after merging main ([ae162c1](https://github.com/cuttlefisch/mae/commit/ae162c178d522b3f8afac3329142494d0e9f3953))
+
+## [0.14.199] - 2026-11-25
+
+
+
+
+### Documentation
+
+- *(adr)* ADR-113, the revision read with its attachments, and O13 decided ([e2b5f4f](https://github.com/cuttlefisch/mae/commit/e2b5f4f2ab94f0a5afba7e3df7ce741e45b6abc8))
+
+### Miscellaneous
+
+- Bump version to 0.14.199 ([8af83d6](https://github.com/cuttlefisch/mae/commit/8af83d68e78869423c62ea2129ba1040a3101975))
+
 ## [0.14.198] - 2026-11-25
 
 
@@ -20,6 +68,10 @@ All notable changes to this project will be documented in this file.
 
 - *(release)* Name the faulting function in the baseline check; temporary compiler diagnostics ([526f16b](https://github.com/cuttlefisch/mae/commit/526f16b3ed8be1aa6fe838949b2436b7554dd067))
 - *(release)* Temporary: keep binaries that fail the baseline check ([bc59481](https://github.com/cuttlefisch/mae/commit/bc5948156e2769a31dd0a9e862bedafc702e4c5d))
+
+### Miscellaneous
+
+- Bump version to 0.14.198 ([b12d929](https://github.com/cuttlefisch/mae/commit/b12d92992d5b008935b2c3f131c7187b74960b03))
 
 ## [0.14.197] - 2026-11-25
 
