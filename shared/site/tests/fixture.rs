@@ -21,6 +21,7 @@ fn sources(dir: &Path) -> Vec<SourcePage> {
             } else if p.extension().is_some_and(|x| x == "org") {
                 let origin = p.strip_prefix(dir).unwrap().display().to_string();
                 out.push(SourcePage {
+                    attachments: Default::default(),
                     origin,
                     text: std::fs::read_to_string(&p).unwrap(),
                 });
@@ -37,6 +38,7 @@ fn export() -> Addressing {
 
 fn page(id: &str, extra: &str) -> SourcePage {
     SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{extra}\n"),
     }
@@ -150,6 +152,7 @@ fn links_resolve_to_pages_and_a_missing_id_stays_unresolved() {
 #[test]
 fn the_export_refuses_ids_equal_under_case_folding_and_the_live_app_does_not() {
     let page = |id: &str| SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nx\n"),
     };
@@ -238,6 +241,7 @@ fn a_dot_segment_id_is_withheld_and_never_becomes_an_href() {
 #[test]
 fn a_node_claiming_another_pages_id_withholds_both_and_links_resolve_nowhere() {
     let thief = SourcePage {
+        attachments: Default::default(),
         origin: "b.org".into(),
         text: ":PROPERTIES:\n:ID: b\n:END:\n#+title: B\n* Stolen\n:PROPERTIES:\n:ID: a\n:END:\n"
             .into(),
@@ -278,6 +282,7 @@ fn a_uuid_custom_id_on_two_pages_resolves_nowhere() {
     let uuid = "0a1b2c3d-0000-4000-8000-000000000abc";
     let holder = |id: &str| {
         SourcePage {
+ attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n* S\n:PROPERTIES:\n:CUSTOM_ID: {uuid}\n:END:\n"),
     }
@@ -342,6 +347,7 @@ fn an_addressing_cannot_be_built_from_a_bad_base_or_kb_id() {
 #[test]
 fn backlinks_are_the_published_pages_that_link_here_and_nothing_else() {
     let src = |id: &str, body: &str| SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n"),
     };
@@ -494,6 +500,7 @@ fn tags_are_the_valid_file_tags_each_listing_its_pages() {
 #[test]
 fn a_page_cannot_hold_the_tag_index_or_the_attachments_address() {
     let pg = |id: &str| SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nx\n"),
     };
@@ -551,6 +558,7 @@ fn the_toc_lists_every_rendered_heading_with_a_real_anchor() {
     }
     assert!(pages_with_toc >= 1, "the long page at least");
     let pg = |body: &str| SourcePage {
+        attachments: Default::default(),
         origin: "t.org".into(),
         text: format!(":PROPERTIES:\n:ID: t\n:END:\n#+title: T\n\n{body}\n"),
     };
@@ -577,6 +585,7 @@ fn a_body_has_no_h1_and_its_top_level_headlines_are_h2() {
     }
     let site = derive(
         &[SourcePage {
+            attachments: Default::default(),
             origin: "t.org".into(),
             text: ":PROPERTIES:\n:ID: t\n:END:\n#+title: T\n\n* A\n* B\n".into(),
         }],

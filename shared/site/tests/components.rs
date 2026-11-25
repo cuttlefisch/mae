@@ -1107,6 +1107,7 @@ fn a_derived_page_carries_its_file_properties_and_dates() {
     };
     let site = mae_site::derive_with(
         &[mae_site::SourcePage {
+            attachments: Default::default(),
             origin: "p.org".into(),
             text: text.into(),
         }],

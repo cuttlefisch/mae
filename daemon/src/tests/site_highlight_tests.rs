@@ -35,6 +35,7 @@ fn sample(g: Grammar) -> &'static str {
 
 fn page(id: &str, body: &str) -> SourcePage {
     SourcePage {
+        attachments: Default::default(),
         origin: id.into(),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n"),
     }

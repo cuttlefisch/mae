@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mae_org::{
-    parse, render, semantics, HeadlineIds, NodeOrigin, ParseOptions, RenderOptions, Rendered,
-    Resolved, Resolver,
+    parse, render, semantics, AttachmentState, HeadlineIds, NodeOrigin, ParseOptions,
+    RenderOptions, Rendered, Resolved, Resolver,
 };
 
 use crate::address::{export_collision_key, is_reserved, valid_id, valid_tag, Addressing};
@@ -26,6 +26,12 @@ pub struct SourcePage {
     /// only, never part of an address (D4).
     pub origin: String,
     pub text: String,
+    /// The node's attachments by NAME, as the host found each (ADR-115 E3):
+    /// [`AttachmentState::Resolved`] with the blob's URL when it holds the
+    /// bytes, [`AttachmentState::Missing`] when it does not. An
+    /// `[[attachment:NAME]]` link of the page whose NAME is not here renders
+    /// as missing: a page never shows a file its node does not bind.
+    pub attachments: BTreeMap<String, AttachmentState>,
 }
 
 /// A derived page. `title` is raw text: the chrome escapes it.
@@ -220,7 +226,7 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
             None => first.push((i, r)),
         }
     }
-    let resolver = resolver(&parsed, &first, addressing);
+    let mut resolver = resolver(&parsed, &first, addressing);
     let backlinks = backlinks(&parsed, &first, addressing);
 
     // Pass 2: every faithful page against the one resolver.
@@ -230,6 +236,9 @@ pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteO
         let Some(href) = addressing.page_href(&id) else {
             continue;
         };
+        // A page's attachments are its own: NAMEs are per node.
+        resolver.attachments.clear();
+        resolver.attachments.extend(page_attachments(p));
         let mut r = render(&p.doc, &p.sem, &options(), &resolver);
         scrub_nodes(&mut r.body, &opts.hidden_namespaces);
         // After scrubbing: a block is highlighted as it is shown.
@@ -553,6 +562,22 @@ fn addressable(
         ok.retain(|&i| !out[i]);
     }
     ok
+}
+
+/// What each `[[attachment:NAME]]` link of the page resolves to, keyed by
+/// the link's target as mae-org's resolver looks it up: the host's state for
+/// NAME, or missing when the node binds no such NAME.
+fn page_attachments<'a>(p: &'a Parsed) -> impl Iterator<Item = (String, AttachmentState)> + 'a {
+    p.sem.links.iter().filter_map(|l| {
+        let name = l.target.strip_prefix("attachment:")?;
+        let state = p
+            .source
+            .attachments
+            .get(name)
+            .cloned()
+            .unwrap_or(AttachmentState::Missing);
+        Some((l.target.clone(), state))
+    })
 }
 
 /// The KB's one resolver, over the pages that will publish: every page, every
