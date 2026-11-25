@@ -146,7 +146,10 @@ After entry into force only a new revision supersedes (`invalid_transition`).
   `revision: "<revision_id>"` for any revision, superseded and derogated included. A revision
   response adds `revision: {revision_id, doc_code, rev, state, approved_at, in_force_at, superseded_at,
   acts: [{act, principal, at}], attachments: [{kind, sha256, size, content_type, url}]}` — V5's
-  five items from one call.
+  five items from one call. *(Amendment 4: the revision also carries `approval_record`, and each
+  attachment `annulled`: `null` for a current one, else `{at, by, reason}` (B1). Annulled attachments
+  stay listed in upload order, and the current attachment of a kind is the newest one not annulled.
+  Fixture: `docs/verification/fixtures/review-api/query_get_revision.json`.)*
 - `version` keeps its meaning: a digest of the fields returned. For a revision it is the frozen
   digest and never changes.
 - `kb/query.list` gains `view: "published"`: only nodes with a published revision, each with the
@@ -1039,7 +1042,7 @@ wire (storage column names are the build's to choose):
 | `kb/review.enter_into_force` | `kb_id, request_id, effective_at` | `{event_id}` | C2's publisher |
 | `kb/review.derogate` | `kb_id, node_id, effective_at, reason` | `{event_id}` | a listed approver |
 | `kb/review.attach_signed_pdf` | `kb_id, revision_id, blob_sha256` | `{event_id, in_force_since}` (`in_force_since` set only when, under `signed_pdf` and `in_force_on_approval`, this attach completed the set; E3) | a listed approver (B3) |
-| `kb/review.attach_rendered_pdf` | `kb_id, revision_id, blob_sha256, source_sha256` | `{event_id}` | as O13 decides |
+| `kb/review.attach_rendered_pdf` | `kb_id, revision_id, blob_sha256, source_sha256` | `{event_id}` | the requester (O13) |
 | `kb/review.attach_controlled_copy` | `kb_id, revision_id, blob_sha256` | `{event_id}` | a listed approver (C6) |
 | `kb/review.annul_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner or the uploader (B1) |
 | `kb/review.delete_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner, after the period (B5) |
@@ -1759,9 +1762,8 @@ named.
 - **O12. Unnamed refusal kinds (PR-7, PR-9, PR-10).** None is defined for: a KB retention period
   below the floor, deletion before the period, an import overlapping existing revisions, an unmet
   performer or order on `publish` or `accept`, a ceiling or a grant refusal.
-- **O13. Who uploads `rendered_pdf` (PR-6).** D6 says the requester's client renders and uploads
-  it; B3 says "as D6". Decide whether only the requester may upload it, or any principal with
-  `Edit`.
+- **Decided 2026-11-25 (O13):** only the requester uploads `rendered_pdf`, as D6 says. Anyone
+  else is refused `role_forbidden`. It is a recorded act, not a controlled one (no second factor, E8).
 - **Decided 2026-11-16 (O14):** mutant lists move into the repository only after a confidentiality
   review of each list, and after a review of whether the harness should become proper tooling (a
   Rust runner over declared lists, or an existing tool) rather than the provisional scripts. That

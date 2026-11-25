@@ -1,0 +1,193 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/query.get",
+  "description": "A revision read (ADR-113 D5): kb/query.get with `revision` returns the node's frozen revision, with its acts and attachments. Use it to read a revision's rendered_pdf hash (to pass as approve's rendered_pdf_sha256) and its signed_pdf. `attachments` lists every attachment in upload order, annulled ones included: `annulled` is null for a current one, else {at, by, reason} (B1). The current attachment of a kind is the newest one whose `annulled` is null. `url` is the blob route (GET/HEAD, bearer token, the KB's read access). Built in PR-4 (the revision read) and PR-6 (the attachments list).",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "an approved revision waiting for its signed PDF; a wrongly attached rendered PDF was annulled and replaced",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "revision": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "encryption": "none",
+          "title": "Purchasing",
+          "version": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+          "body": "* Purpose\nThe frozen text of revision 1.\n",
+          "body_truncated": false,
+          "links": [],
+          "revision": {
+            "revision_id": "rv-01a7c2-1",
+            "doc_code": "PRO-1",
+            "rev": 1,
+            "state": "approved",
+            "approval_record": "signed_pdf",
+            "approved_at": "2000-01-06T09:00:00.000Z",
+            "in_force_at": null,
+            "superseded_at": null,
+            "acts": [
+              {
+                "act": "request",
+                "principal": "member:requester",
+                "at": "2000-01-05T10:00:00.000Z"
+              },
+              {
+                "act": "attach",
+                "principal": "member:requester",
+                "at": "2000-01-05T10:05:00.000Z"
+              },
+              {
+                "act": "annul_attachment",
+                "principal": "member:requester",
+                "at": "2000-01-05T10:20:00.000Z"
+              },
+              {
+                "act": "attach",
+                "principal": "member:requester",
+                "at": "2000-01-05T10:25:00.000Z"
+              },
+              {
+                "act": "approve",
+                "principal": "member:approver",
+                "at": "2000-01-06T09:00:00.000Z"
+              }
+            ],
+            "attachments": [
+              {
+                "kind": "rendered_pdf",
+                "sha256": "c3a1f0e9d2b4a6c8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5",
+                "size": 182344,
+                "content_type": "application/pdf",
+                "url": "/kb/0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/blobs/c3a1f0e9d2b4a6c8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5",
+                "annulled": {
+                  "at": "2000-01-05T10:20:00.000Z",
+                  "by": "member:requester",
+                  "reason": "rendered from the wrong template"
+                }
+              },
+              {
+                "kind": "rendered_pdf",
+                "sha256": "8f2e4d6c8a0b2d4f6e8a0c2e4f6a8b0d2f4e6a8c0b2d4f6e8a0c2e4f6a8b0d2f",
+                "size": 183020,
+                "content_type": "application/pdf",
+                "url": "/kb/0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/blobs/8f2e4d6c8a0b2d4f6e8a0c2e4f6a8b0d2f4e6a8c0b2d4f6e8a0c2e4f6a8b0d2f",
+                "annulled": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "in force under signed_pdf: the signed PDF is attached",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "revision": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 71,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "encryption": "none",
+          "title": "Purchasing",
+          "version": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+          "body": "* Purpose\nThe frozen text of revision 1.\n",
+          "body_truncated": false,
+          "links": [],
+          "revision": {
+            "revision_id": "rv-01a7c2-1",
+            "doc_code": "PRO-1",
+            "rev": 1,
+            "state": "in_force",
+            "approval_record": "signed_pdf",
+            "approved_at": "2000-01-06T09:00:00.000Z",
+            "in_force_at": "2000-01-06T11:00:00.000Z",
+            "superseded_at": null,
+            "acts": [
+              {
+                "act": "approve",
+                "principal": "member:approver",
+                "at": "2000-01-06T09:00:00.000Z"
+              },
+              {
+                "act": "attach",
+                "principal": "member:approver",
+                "at": "2000-01-06T11:00:00.000Z"
+              }
+            ],
+            "attachments": [
+              {
+                "kind": "rendered_pdf",
+                "sha256": "8f2e4d6c8a0b2d4f6e8a0c2e4f6a8b0d2f4e6a8c0b2d4f6e8a0c2e4f6a8b0d2f",
+                "size": 183020,
+                "content_type": "application/pdf",
+                "url": "/kb/0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/blobs/8f2e4d6c8a0b2d4f6e8a0c2e4f6a8b0d2f4e6a8c0b2d4f6e8a0c2e4f6a8b0d2f",
+                "annulled": null
+              },
+              {
+                "kind": "signed_pdf",
+                "sha256": "5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d",
+                "size": 241877,
+                "content_type": "application/pdf",
+                "url": "/kb/0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f/blobs/5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d",
+                "annulled": null
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "a revision id the node does not hold (or a non-reader: not_member, identically for every case)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 72,
+        "method": "kb/query.get",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "revision": "rv-ffffff-9"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 72,
+        "error": {
+          "code": -32602,
+          "message": "no such revision of this node",
+          "data": {
+            "kind": "unknown_revision"
+          }
+        }
+      }
+    }
+  ]
+}
