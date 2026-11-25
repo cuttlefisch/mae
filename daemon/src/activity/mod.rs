@@ -178,3 +178,6 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bench_tests;
