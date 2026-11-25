@@ -329,8 +329,11 @@ proptest! {
     }
 }
 
+/// A node with a fixed creation time: `KbNodeDoc::new` reads the clock, and
+/// two seals of "the same" node made a second apart hashed differently on a
+/// slow runner.
 fn node_with(title: &str) -> MaterializedNode {
-    KbNodeDoc::new(NODE, title, "", &[]).materialize()
+    KbNodeDoc::new_created_at(NODE, title, "", &[], 1_700_000_000).materialize()
 }
 
 /// The boundary cases a concatenation without length prefixes would merge.
