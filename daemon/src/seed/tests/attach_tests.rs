@@ -157,6 +157,14 @@ async fn seed_export_seed_round_trips_every_attachment() {
     let one = plan.nodes.iter().find(|n| n.file.id == P1).unwrap();
     let names: Vec<&str> = one.attachments.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["diagram.png", "photo.jpg", "spec.pdf"]);
+    // The dry run lists every file with its processed hash and size (D7).
+    let text = render_text(&plan);
+    for a in &one.attachments {
+        let line = format!("{} ({} bytes, {})", a.sha256, a.size, a.media_type);
+        assert!(text.contains(&line), "{line} in\n{text}");
+    }
+    let json = render_json(&plan, &[]);
+    assert_eq!(json["counts"]["attachments"], 4);
 
     let out = tempfile::tempdir().unwrap();
     let report = export(&store, KB, out.path(), false).await.unwrap();
@@ -467,6 +475,7 @@ async fn kb_query_get_lists_each_attachment_with_its_blob_url() {
         .collect();
     assert_eq!(want.len(), 3);
     assert_eq!(got["attachments"], serde_json::Value::Array(want));
+    check_fixture(&got);
     let p2 = super::apply_tests::get(&store, &owner, P2).await;
     assert_eq!(p2["attachments"].as_array().unwrap().len(), 1);
 
@@ -483,4 +492,33 @@ async fn kb_query_get_lists_each_attachment_with_its_blob_url() {
     let text = format!("{refused:?}");
     assert!(!text.contains(&one.attachments[0].sha256), "{text}");
     assert!(!text.contains("blobs"), "{text}");
+}
+
+/// `docs/verification/fixtures/kb-attach/query_get_attachments.json` is a
+/// `kb/query.get` answer this daemon gave (written with `MAE_BLESS_FIXTURES`
+/// set): the same fields, and every attachment's `url` its blob route.
+fn check_fixture(got: &serde_json::Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../docs/verification/fixtures/kb-attach/query_get_attachments.json");
+    if std::env::var_os("MAE_BLESS_FIXTURES").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(got).unwrap() + "\n").unwrap();
+    }
+    let fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let keys =
+        |v: &serde_json::Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+    assert_eq!(keys(&fixture), keys(got), "regenerate {}", path.display());
+    for v in [&fixture, got] {
+        let kb = v["kb_id"].as_str().unwrap();
+        for a in v["attachments"].as_array().unwrap() {
+            assert_eq!(
+                keys(a),
+                ["media_type", "name", "sha256", "size", "url"],
+                "{a}"
+            );
+            let url = format!("/kb/{kb}/blobs/{}", a["sha256"].as_str().unwrap());
+            assert_eq!(a["url"], url);
+        }
+    }
 }

@@ -1081,6 +1081,44 @@ Emacs could not read (an unterminated quote, a bad escape) gives the node no ali
 gets none, and `get`/`list` add `aliases_problems` saying why; so does an array found set anyway,
 whose values are not reported. Nothing copies the property into the array.
 
+### Photos and other files in a seeded repository (ADR-115 P4)
+
+A page's images and files seed with it when the repository is laid out as Emacs's org-attach lays
+it out with ID-based directories, and `oauth.attachments_enabled` is on (a plan with attachments is
+otherwise refused by name, never seeded without them):
+
+- **Link each file as `[[attachment:NAME]]`.** A `file:` link or a bare path is not an attachment and
+  is not carried.
+- **Put the file at `data/<ID[0:2]>/<ID[2:]>/NAME` next to the page**, where ID is the nearest `:ID:`
+  up the outline from the link: the headline's own if it has one, else its parent's, up to the file's
+  drawer. For `:ID: 0a1b…` on `notes/page.org`, a link under it names `notes/data/0a/1b…/NAME`. This
+  is what `org-attach` writes with `org-attach-id-dir` at its default `data/` and
+  `org-attach-use-inheritance` on. `:DIR:` and `:ATTACH_DIR:` are not supported.
+- **A NAME is one portable file name:** at most 255 bytes (decomposed, too), no `/` or `\`, no
+  control or invisible format character, none of `< > : " | ? *`, no `%`, not ending in a dot or a
+  space, not a Windows device name (`CON`, `nul.png`, …), and not `.` or `..`. Two NAMEs of one page
+  that differ only in case or Unicode normalization (`Foto.JPG`, `foto.jpg`) are one file and are
+  refused. The rule, in check order, with examples, is
+  `docs/verification/fixtures/kb-attach/name_rule.json`.
+- **The file is committed as itself:** not a symlink (nor under a symlinked directory), not a
+  submodule, not a Git LFS pointer or any path a checkout attribute changes, at most
+  `oauth.max_attachment_bytes`, and, for an image, at most `oauth.max_attachment_pixels`. AVIF is
+  refused.
+
+The dry run lists every file under `attachments` with the sha256 and size of what will be stored,
+and every file it cannot carry under `refusals`, each with its reason. `plan_hash` covers those
+processed hashes, so a changed image is a changed plan. Images are stored as an upload stores them:
+metadata (EXIF, GPS, XMP, comments) stripped and an orientation tag applied to the pixels. So `kb
+export` writes back the stored file: a PDF or a metadata-free PNG byte for byte, a photo with its
+metadata gone (and, if it carried an orientation tag, re-encoded upright). Seeding the export again
+binds the same hashes. `--update` stores new and changed files before any node binds them; a file a
+page no longer links stays in the store until the sweep (ADR-115 D5) finds no version that holds it.
+
+`kb/query.get` and `kb/query.list` report a node's files as `attachments`: one
+`{name, sha256, size, media_type, url}` per NAME, `url` being `/kb/<kb-id>/blobs/<sha256>` on the
+HTTPS listener, which checks the reader again. The live site shows an image the store holds at that
+URL, and a link whose file it lacks as a labelled `missing` placeholder.
+
 ### Refreshing a seeded KB to a new revision: `kb seed --update`
 
 A seeded KB is a one-way replica of its repository at one revision. To move it to a newer one, plan
