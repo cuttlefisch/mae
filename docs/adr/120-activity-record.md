@@ -115,7 +115,8 @@ Each event is a JSON object (its **body**). A field that does not apply is `null
 | `idp_sid` | The IdP token's `sid`, when present |
 | `transport` | `https`, `ws`, `mtls`, `mesh`, `kb_socket` or `cli` |
 | `route` | The JSON-RPC method, or the HTTP method with the route's template (`GET /kb/{kb}/blobs/{sha256}`): never the raw path, which can carry text a client chose |
-| `kb_id`, `node_ids`, `revision`, `blob` | The objects touched. `node_ids` is an array. |
+| `kb_id`, `node_ids`, `revision`, `blob` | The objects touched. `node_ids` is an array of at most 100 distinct ids, in the order the request named them, each truncated to 256 bytes. |
+| `node_ids_total` | `null`, unless the request named more than 100 distinct nodes: then their number, and `node_ids` holds the first 100. An index or a large listing can name thousands, and an event is written inside the group commit under `synchronous=FULL`, so an uncapped list would make one large result stall every other request's commit. The cap is the encoder's, like the address rule. |
 | `wal` | `{from, to}` for a write span, linking to the editor record |
 | `outcome` | `{result: "ok" | "refused" | "error", kind}`, where `kind` is the refusal or error kind the caller received |
 | `count`, `first_at`, `last_at` | For a coalesced refusal (D6); otherwise `1`, `at`, `at` |
@@ -224,6 +225,11 @@ committed. The same applies to the first frame of a document sent to a session.
   principal after authentication, then the KB and node, then the outcome.
 - The outer layer submits the event to a bounded in-process queue, with a one-shot acknowledgement,
   and awaits it before sending.
+- The dispatch and the commit run in a task of their own, which the connection only awaits. A
+  client that hangs up mid-request makes the HTTP server drop its side, and an effect already
+  handed to another thread (a blob commit) would then land with no event. The task holds the
+  connection's slot until its commit is done, so requests whose clients have gone stay bounded by
+  the connection cap.
 - One writer task drains the queue. Each batch is everything waiting, up to 512 events, in one
   `BEGIN IMMEDIATE` transaction. While one commit is in flight, the next batch gathers, which is
   group commit with no timer.
