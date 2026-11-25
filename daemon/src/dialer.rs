@@ -319,6 +319,17 @@ async fn apply_inbound(
     let Some((doc, update, header)) = parse_sync_update(msg) else {
         return Ok(());
     };
+    // A session is for ONE KB: its ticket's. A pushed update for any other
+    // document (another KB's collection or node, a file or shared buffer) is
+    // ignored, never applied: applying it was a cross-KB write by whoever
+    // hosts this session, and a refused switch in a KB the session is not for
+    // would have ended it.
+    // @ai-caution: [kb-scoping] Compare the parsed address's KB, never a
+    // string prefix (ADR-105 D1).
+    if !doc_is_for_kb(&doc, &ticket.kb_id) {
+        warn!(kb_id = %ticket.kb_id, doc = %doc, "mesh: ignored an update for a document outside this session's KB");
+        return Ok(());
+    }
     // Mesh require-signed: the owner is an untrusted relay, so an
     // unsigned/forged/mis-attributed op is rejected (shared check).
     match mae_daemon::collab_handler::verify_relayed_content_op(
@@ -387,6 +398,16 @@ async fn apply_inbound(
         }
     }
     Ok(())
+}
+
+/// Whether `doc` is a document of KB `kb_id`: its collection or one of its
+/// nodes, by parsed address.
+fn doc_is_for_kb(doc: &str, kb_id: &str) -> bool {
+    match mae_sync::DocAddress::parse(doc) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id: k })
+        | Some(mae_sync::DocAddress::KbNode { kb_id: k, .. }) => k == kb_id,
+        _ => false,
+    }
 }
 
 /// The terminal end of a session whose collection diverged ([`Diverged`]).
