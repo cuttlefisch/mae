@@ -107,6 +107,45 @@ pub struct OAuthConfig {
     /// home. Operator configuration, never content (D3). Never in a refusal:
     /// the not-found is identical for every caller (A5). Default none.
     pub site_title: std::collections::BTreeMap<String, String>,
+    /// ADR-115: whether a KB's attachments are served here: `POST
+    /// /kb/<kb-id>/blobs` (an editor uploads) and `GET`/`HEAD
+    /// /kb/<kb-id>/blobs/<sha256>` (a reader fetches), each gated by the KB's
+    /// own access. Default false (principle #12). Needs a `DocStore`, like
+    /// `kb_query_enabled`. The store lives under the collab data directory's
+    /// `blobs/`.
+    pub attachments_enabled: bool,
+    /// ADR-115 D3: the largest upload, bytes. A larger declared
+    /// `Content-Length` is refused (`413 quota_exceeded`) before any of the
+    /// body is read. Default [`DEFAULT_MAX_ATTACHMENT_BYTES`].
+    pub max_attachment_bytes: u64,
+    /// ADR-115 D3a: an image's width times height, read from its header and
+    /// refused above this before anything is decoded. Default 40 megapixels,
+    /// the ADR's figure.
+    pub max_attachment_pixels: u64,
+    /// ADR-115 D3: the longest an upload's body may go without a byte
+    /// arriving, seconds. Over it the upload is refused (`408
+    /// upload_timeout`), its temporary file deleted and nothing charged.
+    /// Default [`DEFAULT_ATTACHMENT_IDLE_TIMEOUT_SECS`]. Must be above 0.
+    pub attachment_idle_timeout_secs: u64,
+    /// ADR-115 D3: the longest a whole upload body may take to arrive,
+    /// seconds, however steadily it trickles (`408 upload_timeout`). Unset
+    /// means derived from `max_attachment_bytes`: the time a body at the cap
+    /// takes at [`ATTACHMENT_FLOOR_BYTES_PER_SEC`], so raising the cap raises
+    /// the deadline with it. Must be above 0 when set.
+    pub attachment_upload_deadline_secs: Option<u64>,
+    /// ADR-115 D3a: images processed at once. Default
+    /// [`DEFAULT_ATTACHMENT_IMAGE_WORKERS`]; see it for the memory each one
+    /// costs. Must be above 0.
+    pub attachment_image_workers: usize,
+    /// ADR-115 D3a: bytes the attachments of principals in no `[[tenant]]`
+    /// may total, together. In ADR-108's one-process-per-tenant deployment
+    /// no `[[tenant]]` is configured, so this is that tenant's budget;
+    /// every principal not listed in a `[[tenant]]` (agents included) is
+    /// charged to it, so no uploader is outside a budget. Default
+    /// [`crate::config::DEFAULT_MAX_STORAGE_BYTES`], the same as
+    /// `[tenant.quota] max_storage_bytes`, for the same reason. `0` is an
+    /// explicit opt-out: unlimited, still recorded.
+    pub default_storage_bytes: u64,
     /// Each KB's slot components (ADR-119 Amendment 4 H1), under
     /// `[oauth.site_components]`: KB ID → a directory holding
     /// `components.toml` and the files it names. Operator configuration,
@@ -247,6 +286,53 @@ pub struct OAuthConfig {
     pub ws_max_outbound_bytes: Option<usize>,
 }
 
+/// [`OAuthConfig::max_attachment_bytes`]'s default: 10 MiB, the daemon's
+/// largest document (`max_document_size_bytes`, ADR-109 D6), which holds a
+/// phone photo with room to spare. It is also the most a processing worker
+/// reads into memory at once; `the_attachment_defaults_fit_adr_109s_memory_budget`
+/// pins what that and the pixel bound cost.
+pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// [`OAuthConfig::max_attachment_pixels`]'s default: ADR-115 D3a's 40
+/// megapixels.
+pub const DEFAULT_MAX_ATTACHMENT_PIXELS: u64 = 40_000_000;
+
+/// [`OAuthConfig::attachment_idle_timeout_secs`]'s default: 30 seconds. A
+/// lossy mobile link's TCP retransmissions back off 1, 2, 4 and 8 seconds
+/// before giving up on a segment (15 s in all), so a client that is still
+/// there resumes inside this; one that sends nothing for longer has stalled,
+/// and holding its connection slot (`max_connections`) and temporary file any
+/// longer only serves an attacker holding many. The same figure as the
+/// processing timeout (`oauth_blobs::PROCESS_TIMEOUT`): no upload waits on
+/// the network longer than it may wait on the CPU.
+pub const DEFAULT_ATTACHMENT_IDLE_TIMEOUT_SECS: u64 = 30;
+
+/// The slowest steady upload the derived deadline admits: 64 KiB/s
+/// (512 kbit/s), a weak mobile uplink. A body at the default cap then has
+/// 160 seconds; anything slower is indistinguishable from a client holding a
+/// connection open on purpose.
+pub const ATTACHMENT_FLOOR_BYTES_PER_SEC: u64 = 64 * 1024;
+
+/// [`OAuthConfig::attachment_image_workers`]'s default: one. The slowest
+/// processing measured (`blob_bench`, a rotated 40-megapixel JPEG) peaks at
+/// +229 MiB in 2.5 s; ADR-109 D2 gives a tenant process 8 GB / 20 = 400 MB in
+/// all, so a second worker at that peak (~460 MiB together) would pass the
+/// process's whole share. Raise it only on a host with memory to match.
+pub const DEFAULT_ATTACHMENT_IMAGE_WORKERS: usize = 1;
+
+impl OAuthConfig {
+    /// The upload deadline (see
+    /// [`OAuthConfig::attachment_upload_deadline_secs`]), seconds: as set,
+    /// else the cap's transfer time at the floor throughput, rounded up.
+    pub fn attachment_upload_deadline(&self) -> u64 {
+        self.attachment_upload_deadline_secs.unwrap_or_else(|| {
+            self.max_attachment_bytes
+                .div_ceil(ATTACHMENT_FLOOR_BYTES_PER_SEC)
+                .max(1)
+        })
+    }
+}
+
 impl Default for OAuthConfig {
     fn default() -> Self {
         OAuthConfig {
@@ -272,6 +358,13 @@ impl Default for OAuthConfig {
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
             site_title: std::collections::BTreeMap::new(),
+            attachments_enabled: false,
+            max_attachment_bytes: DEFAULT_MAX_ATTACHMENT_BYTES,
+            max_attachment_pixels: DEFAULT_MAX_ATTACHMENT_PIXELS,
+            attachment_idle_timeout_secs: DEFAULT_ATTACHMENT_IDLE_TIMEOUT_SECS,
+            attachment_upload_deadline_secs: None,
+            attachment_image_workers: DEFAULT_ATTACHMENT_IMAGE_WORKERS,
+            default_storage_bytes: crate::config::DEFAULT_MAX_STORAGE_BYTES,
             site_components: std::collections::BTreeMap::new(),
             max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,

@@ -492,12 +492,12 @@ fn tags_are_the_valid_file_tags_each_listing_its_pages() {
 }
 
 #[test]
-fn a_page_cannot_hold_the_tag_index_address() {
+fn a_page_cannot_hold_the_tag_index_or_the_attachments_address() {
     let pg = |id: &str| SourcePage {
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nx\n"),
     };
-    for id in ["tags", "Tags"] {
+    for id in ["tags", "Tags", "blobs", "Blobs"] {
         let site = derive(&[pg(id), pg("ok")], &export());
         assert!(!site.pages.contains_key(id), "{id}");
         assert!(

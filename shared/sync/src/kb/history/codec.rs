@@ -3,9 +3,9 @@
 //! one encoding a value has, so stored content cannot carry a second,
 //! differently-hashed spelling of the same node.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use super::super::{MaterializedNode, OrgHeader};
+use super::super::{validate_attachment_name, AttachmentRef, MaterializedNode, OrgHeader};
 use super::{HistoryEntry, GENESIS};
 
 /// Why stored content is not a node's canonical encoding.
@@ -30,6 +30,10 @@ impl std::fmt::Display for ContentError {
 }
 
 const CONTENT_MAGIC: &[u8] = b"maenode/v1";
+/// Opens the `attachments` section, which only a node with attachments has:
+/// every encoding written before the field existed is unchanged, and so is
+/// its content hash.
+const ATTACHMENTS_MAGIC: &[u8] = b"attachments";
 const ENTRY_MAGIC: &[u8] = b"maehistory/v1";
 
 #[derive(Default)]
@@ -137,6 +141,7 @@ pub fn encode_content(node: &MaterializedNode) -> Vec<u8> {
         source,
         created_at,
         org_header,
+        attachments,
     } = node;
     let mut w = Writer::default();
     w.bytes(CONTENT_MAGIC);
@@ -167,6 +172,16 @@ pub fn encode_content(node: &MaterializedNode) -> Vec<u8> {
         w.strs(&h.property_order);
         w.flag(h.has_title_line);
         w.flag(h.has_filetags_line);
+    }
+    if !attachments.is_empty() {
+        w.bytes(ATTACHMENTS_MAGIC);
+        w.u64(attachments.len() as u64);
+        for (name, a) in attachments {
+            w.bytes(name.as_bytes());
+            w.bytes(a.sha256.as_bytes());
+            w.u64(a.size);
+            w.bytes(a.media_type.as_bytes());
+        }
     }
     w.0
 }
@@ -205,6 +220,7 @@ pub fn decode_content(bytes: &[u8]) -> Result<MaterializedNode, ContentError> {
             })
         })
         .transpose()?;
+    let attachments = read_attachments(&mut r)?;
     if !r.0.is_empty() {
         return Err(ContentError::Trailing);
     }
@@ -223,7 +239,55 @@ pub fn decode_content(bytes: &[u8]) -> Result<MaterializedNode, ContentError> {
         source,
         created_at,
         org_header,
+        attachments,
     })
+}
+
+/// The `attachments` section, if the content has one: at least one entry,
+/// names strictly increasing, every entry valid. Anything else is not the
+/// encoding [`encode_content`] writes, so it is refused.
+fn read_attachments(r: &mut Reader<'_>) -> Result<BTreeMap<String, AttachmentRef>, ContentError> {
+    let mut out = BTreeMap::new();
+    if r.0.is_empty() {
+        return Ok(out);
+    }
+    // Bytes that do not open a section are what they always were: bytes after
+    // the last field.
+    let opening = [
+        &(ATTACHMENTS_MAGIC.len() as u64).to_le_bytes()[..],
+        ATTACHMENTS_MAGIC,
+    ]
+    .concat();
+    if !r.0.starts_with(&opening) {
+        return Err(ContentError::Trailing);
+    }
+    r.bytes()?;
+    let n = r.u64()?;
+    if n == 0 {
+        return Err(ContentError::Malformed("empty attachments section"));
+    }
+    // Each entry takes at least its four 8-byte lengths.
+    if n > (r.0.len() / 32) as u64 {
+        return Err(ContentError::Truncated);
+    }
+    let mut last: Option<String> = None;
+    for _ in 0..n {
+        let name = r.string()?;
+        let entry = AttachmentRef {
+            sha256: r.string()?,
+            size: r.u64()?,
+            media_type: r.string()?,
+        };
+        if last.as_ref().is_some_and(|l| *l >= name) {
+            return Err(ContentError::Malformed("attachment order"));
+        }
+        if validate_attachment_name(&name).is_err() || entry.validate().is_err() {
+            return Err(ContentError::Malformed("attachment entry"));
+        }
+        last = Some(name.clone());
+        out.insert(name, entry);
+    }
+    Ok(out)
 }
 
 /// Properties, whose keys must be strictly increasing: the one order

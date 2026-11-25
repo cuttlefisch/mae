@@ -131,10 +131,50 @@ upload that would exceed it (`tenant_quota_exceeded`).
   valid org.
 - **The node's CRDT** gains an additive `attachments` map (ADR-093: a tolerant reader, no upcast on
   read). Each entry maps `NAME` to `{sha256, size, media_type}`.
+- **The map is a root type of the node document**, not a key inside the `node` map. Every node that
+  exists today has no such container, so a nested map could only be created lazily, which ADR-093 D4
+  forbids for a good reason: two peers attaching the first image to the same node concurrently would
+  each insert their own map at the key, and one of the two maps, with its image, would be dropped. A
+  root type has no creating operation, so every peer's writes land in the same map, and a document
+  without it reads as empty. Reading never creates it.
 - **Renaming** a file changes a map key, not the content. Replacing a file binds the name to a new
   hash.
 - Concurrent edits to different names merge cleanly. Two edits to the same name resolve last
-  writer wins, the CRDT map's own rule.
+  writer wins, the CRDT map's own rule. "Last" is yrs's deterministic order of the two writes by
+  client id, not wall-clock time, so every peer picks the same winner whatever order the updates
+  arrive in.
+
+**A NAME is one portable file name**, because an export writes it as a file on Linux, macOS or
+Windows (principle #13). It is 1 to 255 bytes of UTF-8, and at most 255 bytes in its NFD form too,
+because APFS stores names decomposed (85 `é` fit, 86 do not, though both are under 255 bytes as
+NFC). It is not `.` or `..`, and contains no `/`,
+`\`, control character (Unicode Cc), format character (Unicode Cf: bidi controls, zero-width
+characters), or any of `< > : " | ? *`. It does not end in a dot or a space, and it is not a Windows
+device name, case-insensitively, with or without an extension: `CON`, `PRN`, `AUX`, `NUL`,
+`COM1`–`COM9`, `LPT1`–`LPT9`, and, following Python's `ntpath.isreserved`, `CONIN$`, `CONOUT$` and the
+superscript-digit ports `COM¹`–`COM³`, `LPT¹`–`LPT³`.
+
+**No two NAMEs of one node may be one file.** Two NAMEs with the same canonical caseless key,
+`NFD(toCasefold(NFD(NAME)))` written in NFC, using full default case folding (the C and F mappings
+of `CaseFolding.txt`, not lowercase, and never the Turkic mappings, so no locale enters it and every
+peer computes the same key), are taken as the same file on APFS and NTFS. That is the seed's
+path-collision key too. `ſ` and `s`, `ς` and `σ`, `ß` and `ss` collide; `ı` and `i` do not, and `İ`
+is `i` with a combining dot. A writer refuses to bind the
+second, on set and on rename (a rename to another spelling of the same NAME is allowed). Two peers can
+still bind such a pair concurrently, each write valid where it was made. The reader keeps both
+rather than picking one, every peer converges on the same pair, and the export must refuse such a
+node, naming both NAMEs, unless a defined disambiguation exists by then (P4; an `@ai-caution` marks
+the place).
+
+**There are two readers, failing in opposite directions.** The display reader is tolerant: an entry
+with a bad NAME or shape is reported and left out, never repaired. The sweep's reader (D5) fails
+safe: every string anywhere in any entry, under any key and at any depth, that is 64 hex digits once
+ASCII whitespace is trimmed counts as referenced, whatever else about the entry is rejected, because
+an entry an older daemon rejects may be one a newer peer still binds, and leaving it out would delete
+its bytes. Its walk is bounded in depth and in values; a document past either bound, like a holder
+that cannot be read at all, marks the KB's live set incomplete, and a sweep collects nothing in that
+KB. For the same reason a rebirth copies the `attachments` root as stored, every key and value, and
+only the set, rename and remove operations apply the NAME rule.
 
 **The mapping is part of the node's content, everywhere content is fixed.** Replacing `diagram.png`
 under the same name must never change what a revision, a history version or an export shows. So the
@@ -389,6 +429,104 @@ P3 (mae-org's resolver, a mae-org release) comes first. It is the first blocker 
 and it lets the static site resolve images from the repository before the store exists. Then P1 (the
 store and its routes; a live page's `<img src>` is `/kb/<kb-id>/blobs/<sha256>`, authorised like the
 page), P2 and P4. P5 (MAE's editor) follows.
+
+## As built: P1 (2026-11-24)
+
+P1 (the store, its three routes, the storage quota, backup) departs from the text above in six
+places. Each is recorded here with its reason rather than left for the code to imply.
+
+### B1. AVIF is refused
+
+D3 lists `image/avif` on the allowlist, and D3a requires a memory-safe decoder. Every AVIF decoder the
+Rust image stack offers is C (dav1d, through libavif), and metadata cannot be stripped from a container
+the daemon does not parse. So an AVIF upload is refused, `415 attachment_unsupported`, rather than
+decoded by C or stored unprocessed. Revisit when a memory-safe decoder exists.
+
+### B2. The quota is charged to the uploader, and nobody is outside a budget
+
+D3a counts "the bytes each KB holds". A KB shared across tenants has no single tenant to charge, so
+each row records the tenant whose principal uploaded it (`charged_to`, a column beyond D1's), and a
+tenant's usage is the sum of its rows. The uploader is the one who chose to spend the space, and a KB
+owner's quota cannot be exhausted by another tenant's member uploading into it. An upload deduplicated
+within its KB adds no row and charges nothing.
+
+A principal in no configured `[[tenant]]` is charged to one shared bucket,
+`oauth.default_storage_bytes` (default 1 GiB, the same as `[tenant.quota] max_storage_bytes`; `0` is
+an explicit opt-out, unlimited but still recorded). Before this, such a principal, and every principal
+on a daemon with no `[[tenant]]`, had no storage limit at all. Under ADR-108's one process per tenant
+no `[[tenant]]` is configured, so the bucket is that tenant's budget. Agents land in it too: every
+self-issued token is an agent (ADR-098 C3), and an ADR-118 `agent:<id>` principal is in no tenant. The
+bucket's label (`unassigned`) and a tenant's (`tenant:<name>`) cannot collide whatever an operator
+names a tenant. Until ADR-118 maps an agent to its person, an agent of a person who is in a tenant is
+charged to the shared bucket, not to that person's tenant: counted, but in the wrong place.
+
+### B3. Backup copies every blob, every time
+
+D1 expected an incremental copy. `mae-daemon backup create` instead snapshots `blobs.db` and copies
+exactly the files its rows name, into the one archive, on every run. One archive stays self-contained
+and checkable on its own (`backup verify`); an incremental mode needs a chain of archives and a restore
+that walks it. Deferred until the backup benchmark, with real attachment volumes, says it matters.
+
+### B4. Blobs are cached, an exception to the listener's `no-store`
+
+Every other answer from the HTTPS listener is `no-store` (audit #588.3). A blob (`200`, and `304`) is
+served as D3 says, `private, max-age=31536000, immutable`: its address is its content, so it can never
+be stale. `private` keeps shared caches out; refusals on the blob routes are still `no-store`. The
+consequence, accepted: a member removed from a KB keeps, on each device, what that device already
+fetched, and can view it offline for up to a year. Removal stops new fetches only. They could equally
+have saved what they had already seen.
+
+### B5. Refusals: one 403 for everyone outside, 404 only for a reader
+
+D2's "no oracle", made exact. Every caller the KB does not admit gets one answer, byte for byte:
+`403 not_member`. That covers a non-member, an unbound identity-provider subject, a KB that does not
+exist, a malformed KB ID, a KB not shared over the hub, and a collection that cannot be read. It is
+decided before any blob is looked up. Only a reader is told `404 blob_missing`, for an address the KB
+does not hold; only a member is told that their role cannot upload (`403 role_forbidden`) or that the
+KB is end-to-end encrypted (`409 e2e_unsupported`).
+
+### B6. Uploads are bounded in time, and processing in workers and queue
+
+D3 bounded an upload's size, not its duration, and D3a's "bounded worker" had no queue policy. As
+built:
+
+- **Receiving.** `oauth.attachment_idle_timeout_secs` (default 30 s: a lossy link's TCP
+  retransmission backoff, 15 s in all, fits inside it) bounds every wait for the next piece of the
+  body, and `oauth.attachment_upload_deadline_secs` the whole body (unset: derived from the size cap
+  at a 64 KiB/s floor, 160 s at the default cap). Past either, `408 upload_timeout`: the temporary
+  file is deleted and nothing is charged. A daemon that crashes mid-upload leaves its temporary files
+  under `blobs/.tmp`, and the store clears that directory when it opens at startup.
+- **Workers.** `oauth.attachment_image_workers`, default 1: the slowest measured processing (a
+  rotated 40-megapixel JPEG) peaks at +229 MiB, and ADR-109 D2 gives a tenant process 400 MB in all.
+- **Queue.** A tenant has at most four uploads waiting for or holding a worker (a principal in no
+  tenant counts alone, so the people of a one-tenant process do not starve one another), and a job
+  waits at most 30 s for a worker. Past either, `503 attachment_busy` with `Retry-After: 10` (four
+  worst-case jobs), nothing stored or charged.
+- **Processing timeout.** Past 30 s an upload is refused, and its job is cancelled: one atomic claim
+  decides between the worker committing and the request cancelling, so a refused upload never stores
+  or charges anything afterwards. The worker, and the tenant's place in the queue, stay held until the
+  worker actually returns, so a decode the daemon cannot interrupt still counts against both bounds.
+- **SVG.** Beyond D3a's allowlist: an attribute holding a backslash is dropped (a CSS escape,
+  `\75rl(`, is `url(` in disguise), as is one calling `image-set()`, `image()` or `src()`. A document
+  is refused, `422 attachment_undecodable`, when its elements nest deeper than 256 (libxml2's default;
+  deeper exhausts a worker's stack), when a `<use>` chain is deeper than 8, when a `<use>` instantiates
+  its own ancestor, or when its `<use>`s expand to more than 200,000 elements (the parser's own node
+  bound). The expansion bound, not a count of `<use>` elements, is what stops fan-out: sixty `<use>`s,
+  ten per level over six levels, already expand to a million.
+
+### B7. Residuals, accepted and stated
+
+- **Principals in no tenant share one storage bucket.** One of them can fill it and refuse the others.
+  That is deliberate: a shared bucket bounds the disk, while a budget per principal would not (every new
+  principal would bring another gigabyte). Separating people is what `[tenant]` is for; the default
+  budget is a safety net, not a tenancy.
+- **Queue places are per principal**, so a person with several agent principals holds several places
+  against the worker pool. This holds until ADR-118 maps an agent to its person. Then key the queue,
+  and the storage charge, by the person.
+- **The request head has no read timeout.** The listener bounds the TLS handshake and caps connections
+  at accept, but a client that never finishes its headers holds a connection slot until the cap runs
+  out. That predates this store and applies to every route on the listener, so it is tracked as an
+  issue of its own, not fixed here.
 
 ## Rejected
 

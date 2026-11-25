@@ -13,6 +13,7 @@ fn make_store() -> (tempfile::TempDir, CozoKbStore) {
 mod agenda_tests;
 #[cfg(feature = "storage-sqlite")]
 mod atomicity_tests;
+mod attachments_tests;
 mod blocks_tests;
 mod d4_bench;
 mod db_tests;

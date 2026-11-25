@@ -455,6 +455,10 @@ fn projected_node(doc: &mae_sync::kb::KbNodeDoc, node_id: &str, body_format: Opt
         tracing::warn!(node = %node_id, %problem, "projection: node aliases");
     }
     node.aliases = derived.aliases;
+    // ADR-115 D4: a malformed entry never reaches the projection; say so.
+    for problem in doc.read_attachments().problems {
+        tracing::warn!(node = %node_id, %problem, "projection: node attachments");
+    }
     node
 }
 
@@ -477,6 +481,7 @@ fn projected_fields_differ(actual: &Node, expected: &Node) -> bool {
         || actual.aliases != expected.aliases
         || actual.properties != expected.properties
         || actual.source_version != expected.source_version
+        || actual.attachments != expected.attachments
 }
 
 /// Derive a node's kind from its id namespace (e.g. `concept:x` → Concept), defaulting
@@ -827,3 +832,7 @@ mod gate_c_tests;
 #[cfg(test)]
 #[path = "projector_aliases_tests.rs"]
 mod aliases_tests;
+
+#[cfg(test)]
+#[path = "projector_attachments_tests.rs"]
+mod attachments_tests;

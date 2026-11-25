@@ -376,6 +376,7 @@ Source: `shared/kb/src/lib.rs`
 | `SubgraphResult` | struct |
 | `NodeSource` | enum |
 | `Node` | struct |
+| `NodeAttachment` | struct |
 | `compute_code_block_ranges` | fn |
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |
@@ -583,6 +584,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb` | mod |
 | `membership` | mod |
 | `op_set` | mod |
+| `portable_name` | mod |
 | `text` | mod |
 | `wire` | mod |
 | `SyncError` | enum |

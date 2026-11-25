@@ -1879,6 +1879,11 @@ impl DocStore {
     }
 }
 
+// ADR-115 D5: the blobs a KB references, for the sweep.
+#[path = "attachment_refs.rs"]
+mod attachment_refs;
+pub use attachment_refs::ReferencedBlobs;
+
 #[cfg(test)]
 #[path = "doc_replace_race_tests.rs"]
 mod replace_race_tests;

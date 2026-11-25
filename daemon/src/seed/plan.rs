@@ -636,6 +636,10 @@ fn line_diff(a: &str, b: &str) -> (Vec<String>, Vec<String>) {
     )
 }
 
+/// @ai-caution: [kb-truth] Digests every input the apply writes into a node.
+/// A planned node carries no attachments yet; when seeding does (ADR-115 P4,
+/// D7), each node's processed NAME → sha256 map must be digested here, or two
+/// plans differing only in an image's bytes would share a hash.
 fn plan_hash(nodes: &[PlannedNode]) -> String {
     let mut h = Sha256::new();
     field(&mut h, b"mae-seed-plan");

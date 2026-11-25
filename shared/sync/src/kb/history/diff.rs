@@ -41,6 +41,7 @@ pub fn diff(a: &MaterializedNode, b: &MaterializedNode) -> Vec<FieldChange> {
         source,
         created_at,
         org_header,
+        attachments,
     } = a;
     let header = |h: &Option<super::super::OrgHeader>| {
         h.as_ref().map(|h| {
@@ -74,6 +75,10 @@ pub fn diff(a: &MaterializedNode, b: &MaterializedNode) -> Vec<FieldChange> {
         (
             "org_header",
             values(json!(header(org_header)), json!(header(&b.org_header))),
+        ),
+        (
+            "attachments",
+            values(json!(attachments), json!(b.attachments)),
         ),
     ];
     candidates

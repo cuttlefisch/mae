@@ -188,7 +188,8 @@ impl CozoKbStore {
     /// and links in another (two transactions, two fsyncs total) — for FAST
     /// migration. Unlike repeated `insert_node`, it does NOT re-derive links from
     /// node bodies: it writes the exact `links` given, so AI-authored /
-    /// non-`related_to` edges survive verbatim.
+    /// non-`related_to` edges survive verbatim. Each node's attachment rows
+    /// (ADR-115 D4) follow in a third `:put`.
     pub fn bulk_import(
         &self,
         nodes: &[Node],
@@ -224,6 +225,15 @@ impl CozoKbStore {
             self.run_mut_params(
                 Self::LINK_BULK_SCRIPT,
                 btree_params([("rows", DataValue::List(rows))]),
+            )
+            .map_err(cozo_err)?;
+        }
+        let attachment_rows: Vec<DataValue> =
+            nodes.iter().flat_map(Self::attachment_rows).collect();
+        if !attachment_rows.is_empty() {
+            self.run_mut_params(
+                Self::ATTACHMENTS_BULK_SCRIPT,
+                btree_params([("rows", DataValue::List(attachment_rows))]),
             )
             .map_err(cozo_err)?;
         }

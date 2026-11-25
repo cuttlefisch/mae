@@ -259,6 +259,13 @@ self_issued_token_ttl_secs = 3600               # default lifetime of `token min
 self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` refuses to exceed
 # kb_query_max_scan_nodes = 500                 # search/agenda/health scan cap — see below
 # site_enabled = true                          # the live KB site, GET /kb/<kb-id>/<id> (ADR-119)
+# attachments_enabled = true                   # a KB's attachments (ADR-115), below
+# max_attachment_bytes = 10485760              # largest upload; refused before its body is read
+# max_attachment_pixels = 40000000             # an image's width x height, checked before decoding
+# attachment_idle_timeout_secs = 30            # longest gap in an upload's body (408 upload_timeout)
+# attachment_upload_deadline_secs = 160        # whole body; unset = the cap at 64 KiB/s
+# attachment_image_workers = 1                 # images processed at once (~230 MiB each at worst)
+# default_storage_bytes = 1073741824           # attachments of principals in no [[tenant]]; 0 = unlimited
 # webview_enabled: deprecated and ignored (ADR-119 Amendment 2 B4)
 ```
 
@@ -296,6 +303,45 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   clamped rather than refused, as before: `search`'s `limit` and `neighborhood`'s `depth` (1–3).
   `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
 - **Every refusal names its reason in `error.data.kind`** — see [Error kinds](#error-kinds) below.
+- **Attachments (ADR-115), when `attachments_enabled`.** Three routes beside JSON-RPC, each with a
+  bearer token and the KB's own access (and `collab.enabled`, which that access needs):
+
+  | Request | Who | Answer |
+  |---|---|---|
+  | `POST /kb/<kb-id>/blobs` with `Content-Length` (optionally `Content-Digest: sha-256=:<base64>:`) | an editor | `200 {"sha256", "size", "media_type", "width"?, "height"?}` |
+  | `GET /kb/<kb-id>/blobs/<sha256>` | a reader | the blob, streamed |
+  | `HEAD /kb/<kb-id>/blobs/<sha256>` | a reader | its headers |
+
+  The daemon picks the address: it sniffs the type from the bytes (never the client's header),
+  strips image metadata (EXIF and its location, XMP, comments, text chunks), applies an EXIF
+  orientation to the pixels, sanitises SVG, decodes the result under `max_attachment_pixels` and a
+  1000-frame limit, and hashes what it will store. AVIF is refused (`attachment_unsupported`). A PDF
+  (`%PDF-` at the first byte) and any other file are stored exactly as sent, and served only as
+  downloads. The
+  same bytes in two KBs are two copies; nothing is shared across KBs. A download carries
+  `Content-Type` (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml`,
+  `application/pdf`, else `application/octet-stream`), `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox; default-src 'none'`, `ETag: "<sha256>"` (a matching
+  `If-None-Match` answers `304`) and `Cache-Control: private, max-age=31536000, immutable`; SVG and
+  anything not a raster image also `Content-Disposition: attachment`. A caller who cannot read the
+  KB gets one identical `403 not_member` whether or not the KB or the blob exists; a reader asking
+  for an address the KB does not hold gets `404 blob_missing`. An end-to-end encrypted KB refuses
+  attachments (`409 e2e_unsupported`). The bytes live under `<collab data_dir>/blobs/`
+  (`blobs.db` plus one file per blob), counted against the uploader's tenant `max_storage_bytes`
+  (`[tenant.quota]`, default 1 GiB, `0` = unlimited); a principal in no `[[tenant]]` (agents
+  included, and everyone on a daemon with none configured) shares `default_storage_bytes` instead,
+  so no uploader is unbounded. `backup` includes them. Nothing is deleted yet: collection arrives
+  with the node's attachment map (ADR-115 P2).
+
+  An upload's body must keep arriving: a gap over `attachment_idle_timeout_secs`, or a body still
+  arriving after `attachment_upload_deadline_secs`, is refused `408 upload_timeout` with its
+  temporary file deleted. Images are processed by `attachment_image_workers` workers; a tenant may
+  have four uploads waiting for or holding one (a principal in no tenant counts alone), and an
+  upload waits at most 30 s for a worker. Past either, `503 attachment_busy` with `Retry-After: 10`.
+  Processing over 30 s is refused (`422 attachment_undecodable`) and the upload is never stored
+  afterwards. Every refusal here stores and charges nothing. An SVG nested deeper than 256, with a
+  `<use>` chain deeper than 8, or whose `<use>`s expand to over 200,000 elements is refused as
+  undecodable; an attribute holding a CSS escape (a backslash) is dropped.
 
 #### Identity-provider tokens and the binding table (ADR-098 Phase C)
 
@@ -400,12 +446,12 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 
 | `kind` | Meaning | Methods | Extra `data` |
 |--------|---------|---------|--------------|
-| `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. | all | `param` |
-| `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
+| `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. On an upload: no `Content-Length` (HTTP `411`), a body that does not match it, or a malformed `Content-Digest` (HTTP `400`). | all | `param` |
+| `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. On an upload: a declared `Content-Length` over `max_attachment_bytes`, refused before the body is read; HTTP `413`, `error: "payload_too_large"`. | `kb/node_update`, `sync/update`, `sync/share`, `POST /kb/<kb-id>/blobs` | `size`, `limit` |
 | `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
 | `request_too_large` | A request is over the session's request cap (one document at `max_document_size_bytes`, as base64, plus 1 MiB; never under 10 MiB). Answered with `id` `null`, then the session ends. Send smaller requests: `kb/share` takes node batches. | any method, on the collab listener | `size`, `limit` |
 | `invalid_field` | A node update would leave a known field of the node document with the wrong type (for example `title` not text, `tags` not an array of strings, `org_header` malformed). A field already mistyped before the update, and any unknown key, are left alone. Nothing was applied. Not checked on E2E KBs, whose nodes the daemon cannot read, nor on updates a mesh peer relays (the daemon that accepted the write from its client checked it; refusing a relayed one would only diverge this replica). | `kb/node_update`, `sync/update` on a node document | `field` |
-| `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
+| `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. On an upload it can also mean the tenant's attachments would pass `max_storage_bytes`: HTTP `507`, `error: "insufficient_storage"` (a request-quota refusal on the blob routes is `429`). | every method, both listeners; the blob routes | — |
 | `too_many_open_docs` | A sync-WebSocket session already holds `ws_max_open_docs` documents and the request names another (ADR-099 B4). Nothing ran. | any method naming a document, on `/ws` | `limit` |
 | `credential_in_url` | A query string on `/ws` or `/ws/ticket`; credentials never travel in a URL. HTTP `400`, `error: "invalid_request"`. | `GET /ws`, `POST /ws/ticket` | — |
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
@@ -416,8 +462,8 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
 | `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
 | `kb_id_owned_by_another` | `kb/share` of an id another principal already owns. Mint a new id. Code `-32005`. | `kb/share` | — |
-| `not_member` | The caller is not a member of the KB. A principal on this daemon's local blocklist is not a member. | every `kb/*` method that names a KB, `kb/query.*`, and the self-gated `sync/*` methods on a KB document | — |
-| `role_forbidden` | A member whose role does not permit the operation. | writes (`editor`); membership, policy, governance, `kb/collection_op`, reseal and rebirth (`owner`) | `required` |
+| `not_member` | The caller is not a member of the KB. A principal on this daemon's local blocklist is not a member. On the blob routes, HTTP `403`, `error: "access_denied"`, one identical answer for every caller the KB does not admit, whatever exists. | every `kb/*` method that names a KB, `kb/query.*`, the self-gated `sync/*` methods on a KB document, and the blob routes | — |
+| `role_forbidden` | A member whose role does not permit the operation. | writes and `POST /kb/<kb-id>/blobs` (`editor`); membership, policy, governance, `kb/collection_op`, reseal and rebirth (`owner`) | `required` |
 | `transport_forbidden` | The KB is not shared over the transport the request came in on. | as `not_member` | `transport` (`hub`/`p2p`) |
 | `replication_restricted` | A live-query-only member (ADR-067) asked to replicate the KB. Use `kb/query.*`. | `kb/join` | — |
 | `kb_not_found` | No KB with this id is hosted here. | as `not_member` | — |
@@ -439,7 +485,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `self_issue_disabled` | This daemon does not issue tokens. | `kb/query.self_token` | — |
 | `no_content_anchor` | An E2E KB with no signed content anchor. | `kb/query.my_wrapped_key` | — |
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
-| `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
+| `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. On the blob routes, HTTP `409`, `error: "conflict"`: an E2E KB cannot hold attachments yet (ADR-115 D8). | `kb/query.search`, the blob routes | — |
 | `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
 | `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`; on a socket, a JSON-RPC error to `session/renew`, and the old deadline stands. | every authenticated route on the HTTPS listener, `session/renew` | — |
 | `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
@@ -448,6 +494,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
 | `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
 | `identity_not_bound` | An identity-provider token whose `(iss, sub)` is bound to no member key, on the sync WebSocket with `ws_accept_bound_idp` on (ADR-099 Amendment 2). It is never admitted as its raw subject; bind it first (proof of possession, or `mae-daemon binding bind`). HTTP `403`, `error: "access_denied"`. At a renewal, the subject was unbound since the socket opened: the socket closes `4403 principal_changed` instead. | `GET /ws`, `POST /ws/ticket` | — |
+| `blob_missing` | The KB holds no blob at that address: never uploaded, or collected. Only a caller who may read the KB gets it; anyone else gets `not_member` whether or not the blob exists (ADR-115 D2). HTTP `404`, `error: "not_found"`. | `GET`/`HEAD /kb/<kb-id>/blobs/<sha256>` | — |
+| `blob_hash_mismatch` | The upload's `Content-Digest` does not match the bytes that arrived. Nothing was stored; retry the upload. HTTP `400`, `error: "invalid_request"`. | `POST /kb/<kb-id>/blobs` | — |
+| `attachment_too_many_pixels` | An image whose header declares more than `max_attachment_pixels`, or an animation over 1000 frames or four times that many pixels in all. Refused before decoding. HTTP `413`, `error: "payload_too_large"`. | `POST /kb/<kb-id>/blobs` | `limit` |
+| `attachment_undecodable` | An image that is malformed, fails to decode within its limits, or takes over 30 seconds to process. Nothing was stored. HTTP `422`, `error: "unprocessable"`. | `POST /kb/<kb-id>/blobs` | — |
+| `attachment_unsupported` | A type the daemon recognises but cannot process: AVIF (its decoders are C), or an animation carrying an orientation tag. HTTP `415`, `error: "unsupported_media_type"`. | `POST /kb/<kb-id>/blobs` | — |
+| `upload_timeout` | The upload's body stopped arriving for longer than `attachment_idle_timeout_secs`, or was still arriving after `attachment_upload_deadline_secs`. Nothing was stored or charged. HTTP `408`, `error: "request_timeout"`. | `POST /kb/<kb-id>/blobs` | — |
+| `attachment_busy` | No image worker was free within 30 s, or the caller's tenant already has four uploads waiting or processing. Nothing was stored or charged; retry after `retry_after_secs` (also sent as `Retry-After`). HTTP `503`, `error: "temporarily_unavailable"`. | `POST /kb/<kb-id>/blobs` | `retry_after_secs` |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
@@ -862,7 +915,8 @@ mae-daemon backup verify /tmp/mae-restore               # key=number lines; exit
 ```
 
 `create` writes ONE archive holding every KB store (the daemon's own `daemon-kb.cozo` and every
-store `kb-registry.toml` names), the collab store `state.db`, the registry, and the identity
+store `kb-registry.toml` names), the collab store `state.db`, the attachment store (its `blobs.db`,
+snapshotted, then exactly the blob files that snapshot's rows name), the registry, and the identity
 (`id_ed25519`, `id_ed25519.pub`, `known_hosts`, `authorized_keys`, `trusted_keys`). It also writes a
 `manifest.json` with every file's SHA-256 and each store's KB node count. Every SQLite file is
 copied with `VACUUM INTO`, which reads inside one transaction and includes writes still in the WAL,
@@ -898,6 +952,7 @@ silently re-applying writes the backup did not contain):
 | `kb-registry.toml` | `<data_dir>/kb-registry.toml` |
 | `collab/state.db` | `<collab data_dir>/state.db` |
 | `collab/identity-bindings.db` | `<collab data_dir>/identity-bindings.db` (ADR-098 bindings) |
+| `collab/blobs/` | `<collab data_dir>/blobs/` (ADR-115 attachments: `blobs.db` and the files its rows name) |
 | `identity/*` | the identity dir / `authorized_keys` / `keystore` paths from `daemon.toml` |
 
 What it does **not** contain: the editor-side recovery material (`collections/`, `content_keys/`,

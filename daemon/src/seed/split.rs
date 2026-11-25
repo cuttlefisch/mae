@@ -533,33 +533,8 @@ fn remove_ranges(text: &str, mut ranges: Vec<Range<usize>>) -> String {
     out
 }
 
-/// Unicode general category Cf (format: zero-width and bidirectional controls,
-/// soft hyphen, tags, …), from Unicode 15.1 `DerivedGeneralCategory.txt`. An id
-/// carrying one looks identical to an id without it.
+/// Unicode general category Cf: an id carrying one looks identical to an id
+/// without it. One table, shared with the attachment NAME rule.
 fn is_format(c: char) -> bool {
-    const CF: &[(u32, u32)] = &[
-        (0x00AD, 0x00AD),
-        (0x0600, 0x0605),
-        (0x061C, 0x061C),
-        (0x06DD, 0x06DD),
-        (0x070F, 0x070F),
-        (0x0890, 0x0891),
-        (0x08E2, 0x08E2),
-        (0x180E, 0x180E),
-        (0x200B, 0x200F),
-        (0x202A, 0x202E),
-        (0x2060, 0x2064),
-        (0x2066, 0x206F),
-        (0xFEFF, 0xFEFF),
-        (0xFFF9, 0xFFFB),
-        (0x110BD, 0x110BD),
-        (0x110CD, 0x110CD),
-        (0x13430, 0x1343F),
-        (0x1BCA0, 0x1BCA3),
-        (0x1D173, 0x1D17A),
-        (0xE0001, 0xE0001),
-        (0xE0020, 0xE007F),
-    ];
-    let c = c as u32;
-    CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+    mae_sync::portable_name::is_format_char(c)
 }

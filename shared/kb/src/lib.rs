@@ -31,7 +31,7 @@
 //! and `make audit-metrics-check` fails if it grows.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub mod activity;
 pub mod adr_kb;
@@ -421,10 +421,50 @@ pub struct Node {
     /// falls back to "now" on first insert, as it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+    /// The node document's `attachments` map (ADR-115 D4), NAME to blob: a
+    /// projection of the CRDT, never authored here. Stored in the
+    /// `node_attachments` relation, replaced with the node row.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attachments: BTreeMap<String, NodeAttachment>,
     /// The edges of `body`, cached against the body itself (#941 G3). Never
     /// serialized; see [`edge_cache`].
     #[serde(skip)]
     edge_cache: edge_cache::EdgeCache,
+}
+
+/// One entry of a node's `attachments` map (ADR-115 D4): the blob an
+/// attachment NAME is bound to.
+///
+/// Plain data: entries come from `mae_sync::kb::KbNodeDoc::attachments`, whose
+/// tolerant reader is the one place an entry is checked, so this type does not
+/// check again. A separate type rather than `mae_sync`'s only because `Node`
+/// exists without the `crdt` feature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeAttachment {
+    /// Lowercase hex SHA-256 of the stored bytes: the blob's address in its KB.
+    pub sha256: String,
+    pub size: u64,
+    pub media_type: String,
+}
+
+#[cfg(feature = "crdt")]
+impl From<mae_sync::kb::AttachmentRef> for NodeAttachment {
+    fn from(a: mae_sync::kb::AttachmentRef) -> Self {
+        Self {
+            sha256: a.sha256,
+            size: a.size,
+            media_type: a.media_type,
+        }
+    }
+}
+
+/// A node document's attachments as a `Node` holds them.
+#[cfg(feature = "crdt")]
+fn node_attachments(doc: &mae_sync::kb::KbNodeDoc) -> BTreeMap<String, NodeAttachment> {
+    doc.attachments()
+        .into_iter()
+        .map(|(name, a)| (name, a.into()))
+        .collect()
 }
 
 impl Node {
@@ -449,6 +489,7 @@ impl Node {
             source_file: None,
             crdt_doc: None,
             created_at: None,
+            attachments: BTreeMap::new(),
             edge_cache: Default::default(),
         }
     }
@@ -511,6 +552,7 @@ impl Node {
             let mut doc =
                 mae_sync::kb::KbNodeDoc::new(&self.id, &self.title, &self.body, &self.tags);
             self.write_v2_fields(&mut doc);
+            self.write_attachments(&mut doc);
             Ok(doc)
         }
     }
@@ -528,6 +570,35 @@ impl Node {
         // re-stamped `Federation`, so `Seed`-marked read-only content becomes
         // editable at the peer.
         let _ = doc.set_source(self.source.map(|s| s.as_str()));
+    }
+
+    /// Put this node's attachments into a document being MINTED (a fresh
+    /// lineage), never into an existing one: the map is authored through
+    /// `KbNodeDoc::set_attachment` and only projected onto a `Node`, so a
+    /// `Node` that lost its map (an org re-ingest, which cannot express it)
+    /// must not be able to delete it from a shared document.
+    ///
+    /// Every entry the `Node` holds is written as held (`copy_attachments`),
+    /// with no NAME rule, shape check or collision rule: the map is a copy of
+    /// what peers converged on, which can hold a pair of NAMEs two peers bound
+    /// concurrently that fold to one key, and refusing either would delete an
+    /// image. A minted lineage has no stored root to copy raw; rebirth,
+    /// which does, copies that instead (`KbNodeDoc::reborn`).
+    #[cfg(feature = "crdt")]
+    fn write_attachments(&self, doc: &mut mae_sync::kb::KbNodeDoc) {
+        let entries = self
+            .attachments
+            .iter()
+            .map(|(name, a)| {
+                let entry = mae_sync::kb::AttachmentRef {
+                    sha256: a.sha256.clone(),
+                    size: a.size,
+                    media_type: a.media_type.clone(),
+                };
+                (name.clone(), entry)
+            })
+            .collect();
+        let _ = doc.copy_attachments(&entries);
     }
 
     /// Update this node's fields from a `KbNodeDoc`, and store the encoded CRDT
@@ -559,6 +630,9 @@ impl Node {
         if let Some(c) = doc.created_at() {
             self.created_at = Some(c);
         }
+        // Unconditional: the document is the map's only source, and one
+        // without it has none.
+        self.attachments = node_attachments(doc);
         self.crdt_doc = Some(doc.encode());
     }
 
@@ -599,6 +673,11 @@ impl Node {
         node.aliases = mat.aliases;
         node.properties = mat.properties;
         node.created_at = mat.created_at;
+        node.attachments = mat
+            .attachments
+            .into_iter()
+            .map(|(name, a)| (name, a.into()))
+            .collect();
         node.crdt_doc = Some(doc.encode());
         // Populate links from materialized links array.
         // (links are also parseable from body, but CRDT links array is authoritative)
@@ -993,6 +1072,7 @@ fn fresh_v2_doc(node: &Node, client_id: u64) -> mae_sync::kb::KbNodeDoc {
         client_id,
     );
     node.write_v2_fields(&mut doc);
+    node.write_attachments(&mut doc);
     doc
 }
 
@@ -1204,6 +1284,9 @@ impl KnowledgeBase {
 
         let update_bytes = crdt_doc.encode_state();
         let mut node = node;
+        // The document's map, whatever the caller's copy held: the editor does
+        // not author attachments, so an existing lineage keeps its own.
+        node.attachments = node_attachments(&crdt_doc);
         node.crdt_doc = Some(update_bytes.clone());
         self.insert(node);
 
@@ -1256,6 +1339,7 @@ impl KnowledgeBase {
             let mut node = Node::new(mat.id, mat.title, NodeKind::Note, mat.body);
             node.tags = mat.tags;
             node.source = Some(NodeSource::Federation);
+            node.attachments = node_attachments(&crdt_doc);
             node.crdt_doc = Some(crdt_doc.encode());
             self.insert(node);
             Ok(true)
@@ -1283,18 +1367,23 @@ impl KnowledgeBase {
     ) -> Result<bool, mae_sync::SyncError> {
         let crdt_doc = mae_sync::kb::KbNodeDoc::from_bytes(state)?;
         let mat = crdt_doc.materialize();
+        let attachments = node_attachments(&crdt_doc);
         // Preserve an existing node's kind (org import sets a real kind); default to
         // Note for a brand-new node. Compute `changed` against the prior content.
         let (kind, changed) = match self.nodes.get(node_id) {
             Some(n) => (
                 n.kind,
-                n.title != mat.title || n.body != mat.body || n.tags != mat.tags,
+                n.title != mat.title
+                    || n.body != mat.body
+                    || n.tags != mat.tags
+                    || n.attachments != attachments,
             ),
             None => (NodeKind::Note, true),
         };
         let mut node = Node::new(mat.id, mat.title, kind, mat.body);
         node.tags = mat.tags;
         node.source = Some(NodeSource::Federation);
+        node.attachments = attachments;
         node.crdt_doc = Some(crdt_doc.encode());
         self.insert(node);
         // Rebuild the reverse-link index for this node (mirror apply_remote_update).
@@ -1646,7 +1735,7 @@ impl KnowledgeBase {
                     // downstream — e.g. `source` by `is_residency_exempt`,
                     // `kind` by the canvas conversion); drop only the
                     // confirmed-heavy fields (body/properties/source_file/
-                    // crdt_doc) that the graph view never reads.
+                    // crdt_doc/attachments) that the graph view never reads.
                     nodes.push(Node {
                         id: node.id.clone(),
                         title: node.title.clone(),
@@ -1662,6 +1751,7 @@ impl KnowledgeBase {
                         source_file: None,
                         crdt_doc: None,
                         created_at: None,
+                        attachments: BTreeMap::new(),
                         edge_cache: Default::default(),
                     });
                 }
