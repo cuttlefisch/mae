@@ -17,7 +17,7 @@ fn refused_for(name: &str, why: &str) -> bool {
 }
 
 #[test]
-fn the_name_rule_on_named_cases() {
+fn the_name_rule_accepts_named_cases() {
     for ok in [
         "a.png",
         "ñandú.jpg",
@@ -36,6 +36,10 @@ fn the_name_rule_on_named_cases() {
     ] {
         assert_eq!(validate_attachment_name(ok), Ok(()), "{ok:?}");
     }
+}
+
+#[test]
+fn the_name_rule_refuses_named_cases() {
     let long = "x".repeat(256);
     let long_utf8 = "ñ".repeat(128); // 255 BYTES, not characters.
     let mut bad: Vec<(&str, &str)> = vec![
@@ -675,9 +679,16 @@ fn the_name_rule_fixture_is_generated_from_the_rule() {
     for n in accepted {
         assert_eq!(reason(n), None, "{n:?}");
     }
-    let text = serde_json::to_string_pretty(&doc).unwrap() + "\n";
+    assert_fixture_is("kb-attach/name_rule.json", &doc);
+}
+
+/// The committed fixture `rel` (under docs/verification/fixtures/) equals
+/// `doc` pretty-printed; with `MAE_BLESS_FIXTURES` set, it is written first.
+fn assert_fixture_is(rel: &str, doc: &serde_json::Value) {
+    let text = serde_json::to_string_pretty(doc).unwrap() + "\n";
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/verification/fixtures/kb-attach/name_rule.json");
+        .join("../../docs/verification/fixtures")
+        .join(rel);
     if std::env::var_os("MAE_BLESS_FIXTURES").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &text).unwrap();

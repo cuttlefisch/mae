@@ -43,10 +43,10 @@ filter = "test(a_crash_at_every_step_then_a_rerun_converges)"
 [[mutant.edit]]
 file = "daemon/src/seed/update.rs"
 find = '''    crash::at(crash::Step::Begun)?;
-    write(store, t, plan, &nodes).await'''
+    // ADR-115 D7: every blob the plan binds is stored before any node binds'''
 replace = '''    store.seed_update_finish(t.kb_id, t.now).await.map_err(storage)?;
     crash::at(crash::Step::Begun)?;
-    write(store, t, plan, &nodes).await'''
+    // ADR-115 D7: every blob the plan binds is stored before any node binds'''
 [[mutant.edit]]
 file = "daemon/src/storage_seed_update.rs"
 find = '''    if open.read::<i64, _>(0)? != 0 {'''

@@ -25,7 +25,7 @@ replace = ''''''
 id = "daemon-kb-images/percent-accepted"
 runner = "editor"
 targets = ["-p", "mae-sync", "--lib"]
-filter = "test(the_name_rule_on_named_cases)"
+filter = "test(the_name_rule_refuses_named_cases)"
 [[mutant.edit]]
 file = "shared/sync/src/kb/node/attachments.rs"
 find = '''    if name.contains('%') {'''

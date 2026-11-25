@@ -212,29 +212,9 @@ async fn seed_export_seed_round_trips_every_attachment() {
 /// run lists them all, and an apply writes nothing: no node, no blob.
 /// Kills: dropping any one refusal, following a symlink, or reading past the
 /// size cap.
-#[tokio::test]
-async fn a_hostile_repository_is_refused_by_name_and_nothing_is_written() {
-    let id = |n: u8| format!("0d000000-0000-4000-8000-0000000000{n:02x}");
-    let page = |i: u8, link: &str| {
-        (
-            format!("hostile/p{i}.org"),
-            format!(
-                ":PROPERTIES:\n:ID: {}\n:END:\n#+title: P{i}\n{link}\n",
-                id(i)
-            ),
-        )
-    };
-    let at = |i: u8, name: &str| format!("hostile/{}{name}", dir_of(&id(i)));
-    let mut bomb = b"\x89PNG\r\n\x1a\n".to_vec();
-    let mut ihdr = 50_000u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&50_000u32.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
-    bomb.extend(png_chunk(b"IHDR", &ihdr));
-    bomb.extend(png_chunk(b"IDAT", b"not zlib"));
-    bomb.extend(png_chunk(b"IEND", b""));
-    let avif = b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf".to_vec();
-    let cap = 32 * 1024;
-    let cases: Vec<(u8, &str, ProblemKind)> = vec![
+/// Each hostile link, the page number it is on, and the refusal it must get.
+fn hostile_cases() -> Vec<(u8, &'static str, ProblemKind)> {
+    vec![
         (
             1,
             "[[attachment:../../../etc/passwd]]",
@@ -269,7 +249,36 @@ async fn a_hostile_repository_is_refused_by_name_and_nothing_is_written() {
             "[[attachment:absent.png]]",
             ProblemKind::AttachmentMissing,
         ),
-    ];
+    ]
+}
+
+/// The cap the hostile repository's oversized file is one byte over.
+const HOSTILE_CAP: u64 = 32 * 1024;
+
+/// A repository of hostile attachment links, one per case (page `p<i>`
+/// refused with the kind given), plus an ID that climbs out of its
+/// directory (`p11`) and one good page; committed and tagged `v1`.
+fn hostile_repo() -> (Repo, Vec<(u8, &'static str, ProblemKind)>) {
+    let id = |n: u8| format!("0d000000-0000-4000-8000-0000000000{n:02x}");
+    let page = |i: u8, link: &str| {
+        (
+            format!("hostile/p{i}.org"),
+            format!(
+                ":PROPERTIES:\n:ID: {}\n:END:\n#+title: P{i}\n{link}\n",
+                id(i)
+            ),
+        )
+    };
+    let at = |i: u8, name: &str| format!("hostile/{}{name}", dir_of(&id(i)));
+    let mut bomb = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = 50_000u32.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&50_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    bomb.extend(png_chunk(b"IHDR", &ihdr));
+    bomb.extend(png_chunk(b"IDAT", b"not zlib"));
+    bomb.extend(png_chunk(b"IEND", b""));
+    let avif = b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf".to_vec();
+    let cases = hostile_cases();
     let mut pages: Vec<(String, String)> = cases.iter().map(|c| page(c.0, c.1)).collect();
     // An ID that would climb out of the page's directory.
     pages.push((
@@ -288,7 +297,7 @@ async fn a_hostile_repository_is_refused_by_name_and_nothing_is_written() {
     let files = vec![
         (at(7, "bomb.png"), bomb),
         (at(8, "photo.avif"), avif),
-        (at(9, "huge.bin"), vec![0x5a; cap as usize + 1]),
+        (at(9, "huge.bin"), vec![0x5a; HOSTILE_CAP as usize + 1]),
         (format!("hostile/{}ok.png", dir_of(P1)), plain_png(1)),
     ];
     let r = Repo::new();
@@ -314,6 +323,13 @@ async fn a_hostile_repository_is_refused_by_name_and_nothing_is_written() {
     );
     r.commit(T);
     r.git(&["tag", "v1"]);
+    (r, cases)
+}
+
+#[tokio::test]
+async fn a_hostile_repository_is_refused_by_name_and_nothing_is_written() {
+    let (r, cases) = hostile_repo();
+    let cap = HOSTILE_CAP;
 
     let mut opts = plan_opts(r.path(), "v1");
     opts.attachment_limits.max_bytes = cap;

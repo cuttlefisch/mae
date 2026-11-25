@@ -91,7 +91,7 @@ replace = '''        for (name, value) in map.iter(txn) {
 id = "sync-attachment-map/windows-device-name-admitted"
 runner = "editor"
 targets = ["-p", "mae-sync", "--lib"]
-filter = "test(the_name_rule_on_named_cases)"
+filter = "test(the_name_rule_refuses_named_cases)"
 ref = "a NAME is not a Windows device name, with or without an extension (D4, principle #13)"
 [[mutant.edit]]
 file = "shared/sync/src/kb/node/attachments.rs"
