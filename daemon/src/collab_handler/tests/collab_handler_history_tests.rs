@@ -471,3 +471,50 @@ async fn switching_to_e2e_is_refused_while_history_holds_plaintext() {
         r.error
     );
 }
+
+/// ADR-113 O17 (decided provisionally in PR-4): switching a KB to E2E is
+/// refused while it holds any publication-review revision, even with no
+/// history at all, and the collection is left as it was; a KB of the same
+/// shape without one switches. A revision in any state counts: they are never
+/// deleted (E7). Kills a switch guard that reads history alone.
+#[tokio::test]
+async fn switching_to_e2e_is_refused_while_the_kb_holds_review_revisions() {
+    for state in ["in_review", "withdrawn"] {
+        let mut env = shared_kb().await;
+        let rev = crate::review::store::Revision {
+            revision_id: "rv-1".into(),
+            kb_id: KB.into(),
+            node_id: NODE.into(),
+            request_id: "rq-1".into(),
+            doc_code: None,
+            rev_no: None,
+            source_sha256: "00".repeat(32),
+            version: "00".repeat(16),
+            cutoff_wal: 0,
+            history_seq: 1,
+            state: state.into(),
+            doc_type: None,
+            template_id: None,
+            template_sha256: None,
+            approval_record: None,
+            replaces: None,
+            created_by: fp("bob"),
+            created_by_kind: "person".into(),
+            created_at: 0,
+            approved_at: None,
+            in_force_since: None,
+            ended_at: None,
+        };
+        env.store
+            .review_write(move |c| crate::review::store::insert_revision(c, &rev))
+            .await
+            .unwrap();
+        assert!(history(&env).await.is_empty(), "precondition: no history");
+        let r = collection_op(&mut env, |c| {
+            c.set_encryption(mae_sync::kb::Encryption::E2e)
+        })
+        .await;
+        assert_eq!(error_kind(&r), "revisions_hold_plaintext", "{state}");
+        assert!(!is_e2e(&env).await, "the refused switch was not applied");
+    }
+}

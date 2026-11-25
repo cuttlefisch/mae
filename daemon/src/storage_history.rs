@@ -408,7 +408,8 @@ fn editors_after(
 /// inclusive), and the editors recorded there. Either way it starts a new
 /// session.
 /// Returns `None` without writing when the content equals the previous
-/// version's and the cut is not a named one (a no-op save adds nothing, D2),
+/// version's and the cut is not one that is always written (a no-op save adds
+/// nothing, D2; a named version or a review freeze is always written),
 /// and when the KB's history key is released: an E2E KB is not versioned.
 pub(super) fn cut_in_txn(
     conn: &sqlite::Connection,
@@ -423,7 +424,7 @@ pub(super) fn cut_in_txn(
     let wal_from = prev.as_ref().map_or(0, |p| p.wal_to);
     let wal_to = editor_record::high_water(conn, doc_name)?.max(wal_from);
     mark_session(conn, &cp.kb_id, &cp.node_id, wal_to)?;
-    if cp.kind != VersionKind::Named
+    if !cp.kind.always_cut()
         && prev
             .as_ref()
             .is_some_and(|p| p.content_hash == key.content_hash(&cp.content))

@@ -180,6 +180,9 @@ pub(crate) struct Pauses {
     pub apply: std::sync::Mutex<Option<Pause>>,
     /// `compact_doc`, between reading the state and writing the snapshot.
     pub compact: std::sync::Mutex<Option<Pause>>,
+    /// `review_freeze` (ADR-113 A2), between reading the content and reading
+    /// the high-water mark.
+    pub freeze: std::sync::Mutex<Option<Pause>>,
 }
 
 /// Number of [`DocStore::replace_gates`] stripes.
@@ -1883,6 +1886,11 @@ impl DocStore {
 #[path = "attachment_refs.rs"]
 mod attachment_refs;
 pub use attachment_refs::ReferencedBlobs;
+
+// ADR-113 D1/D2: the review tables, and the freeze of a node for a request.
+#[path = "doc_store_review.rs"]
+mod review_freeze;
+pub use review_freeze::{FreezeError, Frozen};
 
 #[cfg(test)]
 #[path = "doc_replace_race_tests.rs"]

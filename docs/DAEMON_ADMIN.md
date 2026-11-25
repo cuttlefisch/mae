@@ -303,6 +303,19 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   clamped rather than refused, as before: `search`'s `limit` and `neighborhood`'s `depth` (1–3).
   `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
 - **Every refusal names its reason in `error.data.kind`** — see [Error kinds](#error-kinds) below.
+- **Publication review (ADR-113), off per KB until its owner turns it on.** The same listener serves
+  `kb/review.request`, `.withdraw` (by the requester), `.status`, `.pending`, `.set_policy`,
+  `.set_code` and `.events` (the owner's paged read of the signed event chain), plus
+  `kb/query.revisions` and `kb/query.get` with `revision`. Shapes are the fixtures in
+  `docs/verification/fixtures/review-api/`. A request freezes each node at the version the
+  requester saw, keeps its own copy of the frozen source and cuts a `review_freeze` history version
+  that is never pruned. Every change is an event, hash-chained and signed with the daemon's identity
+  (the key history heads use), so a daemon in `collab.auth.mode = "key"` is required to record any.
+  `mae-daemon kb review export --kb-id <id> --out <file>` writes the chain (daemon stopped);
+  `mae-daemon kb review verify --in <file> --key <base64> [--against <head-file>]` checks it with no
+  configuration or database. Keep the head line an export prints somewhere the daemon's key and
+  database do not reach: only `--against` it shows the chain's last events removed. A KB holding any
+  revision cannot be switched to E2E (`revisions_hold_plaintext`).
 - **Attachments (ADR-115), when `attachments_enabled`.** Three routes beside JSON-RPC, each with a
   bearer token and the KB's own access (and `collab.enabled`, which that access needs):
 
@@ -485,7 +498,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `self_issue_disabled` | This daemon does not issue tokens. | `kb/query.self_token` | — |
 | `no_content_anchor` | An E2E KB with no signed content anchor. | `kb/query.my_wrapped_key` | — |
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
-| `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. On the blob routes, HTTP `409`, `error: "conflict"`: an E2E KB cannot hold attachments yet (ADR-115 D8). | `kb/query.search`, the blob routes | — |
+| `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. On the blob routes, HTTP `409`, `error: "conflict"`: an E2E KB cannot hold attachments yet (ADR-115 D8). Every publication-review method refuses an E2E KB (ADR-113 D1), checked after membership. | `kb/query.search`, the blob routes, `kb/review.*`, `kb/query.revisions`, `kb/query.get` with `revision` | — |
 | `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
 | `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`; on a socket, a JSON-RPC error to `session/renew`, and the old deadline stands. | every authenticated route on the HTTPS listener, `session/renew` | — |
 | `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
@@ -501,6 +514,14 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `attachment_unsupported` | A type the daemon recognises but cannot process: AVIF (its decoders are C), or an animation carrying an orientation tag. HTTP `415`, `error: "unsupported_media_type"`. | `POST /kb/<kb-id>/blobs` | — |
 | `upload_timeout` | The upload's body stopped arriving for longer than `attachment_idle_timeout_secs`, or was still arriving after `attachment_upload_deadline_secs`. Nothing was stored or charged. HTTP `408`, `error: "request_timeout"`. | `POST /kb/<kb-id>/blobs` | — |
 | `attachment_busy` | No image worker was free within 30 s, or the caller's tenant already has four uploads waiting or processing. Nothing was stored or charged; retry after `retry_after_secs` (also sent as `Retry-After`). HTTP `503`, `error: "temporarily_unavailable"`. | `POST /kb/<kb-id>/blobs` | `retry_after_secs` |
+| `review_not_enabled` | Publication review (ADR-113) is off for this KB; its owner turns it on with `kb/review.set_policy`. | every `kb/review.*` method but `set_policy` | — |
+| `stale_version` | The working copy is no longer at the `version` the request named: the requester froze what they saw, and must look again. Nothing was written. | `kb/review.request` | `node_id`, `current` |
+| `invalid_transition` | The act is not allowed from the revision's state (ADR-113 E1): a request for a node already in review, a withdrawal of an ended request. | `kb/review.request`, `kb/review.withdraw` | `from`, `act` |
+| `not_approver` | Only the requester withdraws a request until approver lists exist (ADR-113 PR-5). | `kb/review.withdraw` | — |
+| `unknown_request` | This KB holds no request with that id. | `kb/review.withdraw` | — |
+| `unknown_revision` | This KB holds no revision with that id (or it is another node's). | `kb/query.get` with `revision` | — |
+| `revisions_hold_plaintext` | Switching the KB to E2E is refused while it holds any publication-review revision, whose frozen source is plaintext and is kept for good (ADR-113 O17). Code `-32600`. | `kb/collection_op` | — |
+| `doc_code_taken` | That document code is assigned to another node of the KB; a code once given is never given to another. | `kb/review.set_code` | `holder` |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any

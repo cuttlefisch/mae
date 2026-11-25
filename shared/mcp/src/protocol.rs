@@ -656,6 +656,75 @@ impl McpError {
         )
     }
 
+    /// Publication review is off for this KB (ADR-113 D3).
+    pub fn review_not_enabled(message: String) -> Self {
+        Self::kinded(-32603, message, "review_not_enabled", serde_json::json!({}))
+    }
+
+    /// A review request named a version the node's working copy no longer has
+    /// (ADR-113 D2). `current` is the version it has now.
+    pub fn stale_version(message: String, node_id: &str, current: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "stale_version",
+            serde_json::json!({ "node_id": node_id, "current": current }),
+        )
+    }
+
+    /// A review act against a state ADR-113 E1's table does not allow from.
+    /// `reason` is set for the delete guard (E7).
+    pub fn invalid_transition(
+        message: String,
+        from: &str,
+        act: &str,
+        reason: Option<&str>,
+    ) -> Self {
+        let mut extra = serde_json::json!({ "from": from, "act": act });
+        if let Some(r) = reason {
+            extra["reason"] = serde_json::Value::from(r);
+        }
+        Self::kinded(-32603, message, "invalid_transition", extra)
+    }
+
+    /// The caller may not perform an approver's act on this revision or
+    /// request (ADR-113 D3, B3): not on the KB's approver list.
+    pub fn not_approver(message: String) -> Self {
+        Self::kinded(-32603, message, "not_approver", serde_json::json!({}))
+    }
+
+    /// A review request this KB does not hold (ADR-113 D8).
+    pub fn unknown_request(message: String) -> Self {
+        Self::kinded(-32603, message, "unknown_request", serde_json::json!({}))
+    }
+
+    /// A revision this KB does not hold (ADR-113 E9).
+    pub fn unknown_revision(message: String) -> Self {
+        Self::kinded(-32603, message, "unknown_revision", serde_json::json!({}))
+    }
+
+    /// A KB cannot be switched to E2E while it holds publication-review
+    /// revisions: their frozen sources are plaintext and are never deleted
+    /// (ADR-113 D1, E7; O17).
+    pub fn revisions_hold_plaintext(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "revisions_hold_plaintext",
+            serde_json::json!({}),
+        )
+    }
+
+    /// A document code already assigned to another node (ADR-113 D2).
+    pub fn doc_code_taken(message: String, holder: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "doc_code_taken",
+            serde_json::json!({ "holder": holder }),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -722,6 +791,14 @@ pub const ERROR_KINDS: &[&str] = &[
     "attachment_unsupported",
     "upload_timeout",
     "attachment_busy",
+    "review_not_enabled",
+    "stale_version",
+    "invalid_transition",
+    "not_approver",
+    "unknown_request",
+    "unknown_revision",
+    "revisions_hold_plaintext",
+    "doc_code_taken",
     "internal",
 ];
 
@@ -920,6 +997,14 @@ mod tests {
             McpError::attachment_unsupported(m()),
             McpError::upload_timeout(m()),
             McpError::attachment_busy(m(), 10),
+            McpError::review_not_enabled(m()),
+            McpError::stale_version(m(), "n", "v"),
+            McpError::invalid_transition(m(), "in_force", "withdraw", None),
+            McpError::not_approver(m()),
+            McpError::unknown_request(m()),
+            McpError::unknown_revision(m()),
+            McpError::revisions_hold_plaintext(m()),
+            McpError::doc_code_taken(m(), "n"),
             McpError::internal_fault(m()),
         ]
     }

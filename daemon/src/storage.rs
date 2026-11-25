@@ -341,7 +341,23 @@ pub trait StorageBackend: Send + Sync {
     async fn seed_removed(&self, _kb_id: &str) -> Result<Vec<SeedRemoved>, StorageError> {
         Err(no_seed_tables())
     }
+
+    /// Run `op` against the publication-review tables (ADR-113 D1) in one
+    /// transaction: a write transaction as the store's one writer when
+    /// `write`, else a read snapshot. `op`'s error rolls everything back.
+    /// No silent default: a backend without the tables answers an error,
+    /// never "no revisions", which would let a guard treat a KB as having none.
+    async fn review_txn(&self, _write: bool, _op: ReviewOp) -> Result<ReviewOut, StorageError> {
+        Err(StorageError::Sqlite(
+            "this storage backend has no publication-review tables".into(),
+        ))
+    }
 }
+
+/// What [`StorageBackend::review_txn`] returns: the op's own value, boxed.
+pub type ReviewOut = Box<dyn std::any::Any + Send>;
+/// An operation over the review tables (see [`StorageBackend::review_txn`]).
+pub type ReviewOp = Box<dyn FnOnce(&sqlite::Connection) -> Result<ReviewOut, StorageError> + Send>;
 
 fn no_seed_tables() -> StorageError {
     StorageError::Sqlite("this storage backend has no seed record".into())
@@ -438,6 +454,7 @@ impl SqlitePool {
                 seed_update::ensure_schema(&conn)?;
                 history::ensure_schema(&conn)?;
                 kb_anchor::ensure_schema(&conn)?;
+                crate::review::store::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
                 let _ =
@@ -490,6 +507,7 @@ impl SqlitePool {
         seed_update::ensure_schema(&conn)?;
         history::ensure_schema(&conn)?;
         kb_anchor::ensure_schema(&conn)?;
+        crate::review::store::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
             writer: WriterLock::default(),
@@ -543,6 +561,22 @@ impl SqlitePool {
     /// The primary shard, held as the store's one writer.
     async fn write_primary(&self) -> WriteConn<'_> {
         self.writer.write(|| self.lock_primary()).await
+    }
+}
+
+/// A connection held either as the store's one writer or for reading.
+enum Either<'a> {
+    Write(WriteConn<'a>),
+    Read(std::sync::MutexGuard<'a, sqlite::Connection>),
+}
+
+impl std::ops::Deref for Either<'_> {
+    type Target = sqlite::Connection;
+    fn deref(&self) -> &sqlite::Connection {
+        match self {
+            Either::Write(w) => w,
+            Either::Read(r) => r,
+        }
     }
 }
 
@@ -697,6 +731,29 @@ impl StorageBackend for SqliteBackend {
 
     async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
         history::holds_content(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn review_txn(&self, write: bool, op: ReviewOp) -> Result<ReviewOut, StorageError> {
+        // A read takes a snapshot too, so a method's several reads agree.
+        let (conn, begin) = if write {
+            (
+                Either::Write(self.pool.write_primary().await),
+                "BEGIN IMMEDIATE",
+            )
+        } else {
+            (Either::Read(self.pool.lock_primary()), "BEGIN")
+        };
+        conn.execute(begin)?;
+        match op(&conn) {
+            Ok(out) => {
+                conn.execute("COMMIT")?;
+                Ok(out)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError> {

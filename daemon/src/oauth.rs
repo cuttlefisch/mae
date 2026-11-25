@@ -1072,15 +1072,21 @@ pub(crate) async fn route_authenticated_request(
             if principal.credential == oauth_self_issue::Credential::IdpUnbound {
                 return unbound_answer(rpc.id, &rpc.method);
             }
-            let rpc_response = match mae_daemon::kb_query::dispatch(
-                &rpc.method,
-                &params,
-                store,
-                Some(&principal.principal),
-                limits,
-            )
-            .await
-            {
+            // ADR-113 E9: `kb/review.*` on this listener, for any bearer
+            // principal the KB admits; the module applies its own gate.
+            let answer = if mae_daemon::review::is_review_method(&rpc.method) {
+                mae_daemon::review::dispatch(&rpc.method, &params, store, principal, limits).await
+            } else {
+                mae_daemon::kb_query::dispatch(
+                    &rpc.method,
+                    &params,
+                    store,
+                    Some(&principal.principal),
+                    limits,
+                )
+                .await
+            };
+            let rpc_response = match answer {
                 Ok(result) => mae_mcp::protocol::JsonRpcResponse::success(rpc.id, result),
                 Err(e) => mae_mcp::protocol::JsonRpcResponse::error(rpc.id, e),
             };

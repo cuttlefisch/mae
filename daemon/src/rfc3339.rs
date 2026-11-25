@@ -20,6 +20,13 @@ pub fn utc(secs: i64) -> String {
     )
 }
 
+/// Unix milliseconds as `YYYY-MM-DDTHH:MM:SS.mmmZ` (ADR-113 E9's times).
+pub fn utc_millis(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let base = utc(secs);
+    format!("{}.{:03}Z", &base[..base.len() - 1], ms.rem_euclid(1000))
+}
+
 /// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to (y, m, d).
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
@@ -47,6 +54,19 @@ mod tests {
             (4_102_444_799, "2099-12-31T23:59:59Z"),
         ] {
             assert_eq!(super::utc(secs), want);
+        }
+    }
+
+    /// Milliseconds are zero-padded, and an instant before the epoch rounds
+    /// down to its second, as `date -u -d @-0.001 +%T.%3N` does.
+    #[test]
+    fn millis_are_padded_and_floor_before_the_epoch() {
+        for (ms, want) in [
+            (0, "1970-01-01T00:00:00.000Z"),
+            (1_600_000_000_007, "2020-09-13T12:26:40.007Z"),
+            (-1, "1969-12-31T23:59:59.999Z"),
+        ] {
+            assert_eq!(super::utc_millis(ms), want);
         }
     }
 }

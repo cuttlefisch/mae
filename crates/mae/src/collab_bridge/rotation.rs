@@ -176,6 +176,7 @@ const REFUSED_BEFORE_APPLYING: &[&str] = &[
     "signature_required",
     "not_author",
     "history_holds_plaintext",
+    "revisions_hold_plaintext",
 ];
 
 fn refused_before_applying(err: &serde_json::Value) -> bool {

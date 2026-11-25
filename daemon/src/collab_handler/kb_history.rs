@@ -411,6 +411,11 @@ async fn verify(
 /// it applies it to a copy of the collection and asks whether the KB is E2E
 /// before and after. An update that does not apply is left to the write path.
 /// A history that cannot be read refuses the switch rather than allowing it.
+///
+/// ADR-113 O17 (decided provisionally in PR-4): the same switch is refused
+/// while the KB holds any publication-review revision, whose frozen source is
+/// plaintext and is never deleted (D1, E7), so the refusal is permanent for
+/// that KB. Unreadable review tables refuse it too.
 pub(super) async fn refuse_e2e_switch_over_history(
     doc_store: &DocStore,
     kb_id: &str,
@@ -427,6 +432,24 @@ pub(super) async fn refuse_e2e_switch_over_history(
     };
     if after.apply_update(update).is_err() || !kb_is_e2e(doc_store, kb_id, &after).await {
         return Ok(());
+    }
+    let kb = kb_id.to_string();
+    match doc_store
+        .review_read(move |c| crate::review::store::has_revisions(c, &kb))
+        .await
+    {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(McpError::revisions_hold_plaintext(format!(
+                "KB '{kb_id}' cannot switch to end-to-end encryption: it holds publication-review \
+                 revisions, whose frozen sources are plaintext and are kept for good"
+            )))
+        }
+        Err(e) => {
+            return Err(McpError::internal_fault(format!(
+                "KB '{kb_id}': its review revisions could not be read to check the switch: {e}"
+            )))
+        }
     }
     match doc_store.history_holds_content(kb_id).await {
         Ok(false) => Ok(()),
