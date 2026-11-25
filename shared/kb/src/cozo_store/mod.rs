@@ -31,6 +31,7 @@ pub use rederive::{RederiveReport, DERIVATION_VERSION};
 pub use typed_repair::{TypedRepairReport, TYPED_REPAIR_SUMMARY};
 
 mod agenda;
+mod attachments;
 mod blocks;
 mod db;
 mod graph;

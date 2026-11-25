@@ -113,12 +113,14 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         | "kb/revoke"
         | "kb/claim_lease"
         | "kb/reimport"
-        | "kb/query.self_token" => RequestCost::Mutation,
+        | "kb/query.self_token"
+        // ADR-115: an upload is received, decoded and written.
+        | "kb/blobs.upload" => RequestCost::Mutation,
 
         // Everything else — bounded lookups (`sync/state_vector`, `sync/diff`,
         // `kb/node_fetch`, `docs/metadata`, `docs/stats`, `kb/list_pending`,
         // `kb/blocklist`, `kb/query.get`, `kb/query.capabilities`,
-        // `kb/query.my_wrapped_key`) and unknown methods.
+        // `kb/query.my_wrapped_key`, `kb/blobs.get`) and unknown methods.
         _ => RequestCost::Read,
     }
 }
@@ -324,6 +326,19 @@ impl TenantRegistry {
         self.resolve_and_charge(tenant_name, cost)
     }
 
+    /// ADR-115: the storage quota `principal`'s tenant uploads under. The
+    /// principal key, as the OAuth listener's request quota uses. `None` for
+    /// a principal in no tenant, which the blob routes charge to
+    /// `oauth.default_storage_bytes` instead.
+    pub fn storage_quota(&self, principal: &str) -> Option<mae_daemon::blob_store::StorageQuota> {
+        let name = self.by_principal.get(principal)?;
+        let cfg = self.configs.get(name)?;
+        Some(mae_daemon::blob_store::StorageQuota::tenant(
+            name,
+            cfg.quota.max_storage_bytes,
+        ))
+    }
+
     /// Manual eviction (the `daemon/evict_tenant` RPC — the rust-analyzer/
     /// Emacs-precedent operator escape hatch: don't wait for an idle window
     /// a still-connected tenant may never hit). Idempotent — evicting an
@@ -377,6 +392,7 @@ mod tests {
                 budget_per_minute,
                 max_result_bytes: 4_194_304,
                 idle_evict_secs: 1800,
+                max_storage_bytes: 0,
             },
         }
     }
@@ -675,6 +691,10 @@ mod tests {
 pub struct TenantQuota(pub Arc<TenantRegistry>);
 
 impl mae_daemon::quota::QuotaCharger for TenantQuota {
+    fn storage_quota(&self, principal: &str) -> Option<mae_daemon::blob_store::StorageQuota> {
+        self.0.storage_quota(principal)
+    }
+
     fn charge(
         &self,
         principal: Option<&str>,

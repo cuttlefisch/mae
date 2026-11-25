@@ -110,11 +110,13 @@ impl CozoKbStore {
             .map_err(cozo_err)?;
 
         if let Some(row) = result.rows.first() {
-            let node = row_to_node(row)?;
+            let mut node = row_to_node(row)?;
             // Sled backend may leave ghost rows after :rm — treat as absent
             if node.title.is_empty() && node.body.is_empty() && node.tags.is_empty() {
                 Ok(None)
             } else {
+                // Read back with the row, so a load, edit and store keeps the map.
+                node.attachments = self.attachments_of(id)?;
                 Ok(Some(node))
             }
         } else {
@@ -148,9 +150,10 @@ impl KbStore for CozoKbStore {
     fn delete_node(&self, id: &str) -> Result<(), KbStoreError> {
         // `:rm` (not `:delete`): `:rm` removes whole rows.
         let script = format!(
-            "{{ ?[id] <- [[$id]]\n:rm nodes {{id}} }}\n{{ {} }}\n{{ {} }}",
+            "{{ ?[id] <- [[$id]]\n:rm nodes {{id}} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}",
             Self::LINKS_FROM_RM_SCRIPT,
             Self::META_MEMBERS_RM_SCRIPT,
+            Self::ATTACHMENTS_RM_SCRIPT,
         );
         self.run_mut_params(&script, btree_params([("id", dv_str(id))]))
             .map_err(cozo_err)?;
@@ -537,6 +540,7 @@ impl KbStore for CozoKbStore {
                 tracing::warn!(error = %e, "KB store: failed to reconstruct source_file index — nodes will report no source file");
             }
         }
+        self.load_attachments_into(&mut nodes)?;
         Ok(nodes)
     }
 

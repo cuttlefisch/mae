@@ -555,7 +555,19 @@ pub struct TenantQuotaConfig {
     /// never idle-evict). Eviction is a pure cache-drop: the next request
     /// rebuilds fresh state (see `TenantRegistry::evict_idle`).
     pub idle_evict_secs: u64,
+    /// ADR-115: bytes this tenant's attachments may total, counted from the
+    /// blob store's rows (an upload deduplicated within a KB adds nothing). An
+    /// upload that would pass it is refused, `507 tenant_quota_exceeded`.
+    /// `0` = unlimited. Charged to the uploading principal's tenant.
+    pub max_storage_bytes: u64,
 }
+
+/// [`TenantQuotaConfig::max_storage_bytes`]'s default: 1 GiB. ADR-109 D2's
+/// launch budget is 100 GB of disk for T = 20 tenants, with ~5.5 GB of KB
+/// nodes (D1); 20 tenants at this quota, doubled for a backup archive beside
+/// the live store, is 40 GiB, leaving that budget's headroom for D3 to D5.
+/// `default_storage_quota_fits_adr_109s_disk_budget` pins it.
+pub const DEFAULT_MAX_STORAGE_BYTES: u64 = 1 << 30;
 
 impl Default for TenantQuotaConfig {
     fn default() -> Self {
@@ -564,6 +576,7 @@ impl Default for TenantQuotaConfig {
             budget_per_minute: 1000,
             max_result_bytes: 4_194_304,
             idle_evict_secs: 1800,
+            max_storage_bytes: DEFAULT_MAX_STORAGE_BYTES,
         }
     }
 }

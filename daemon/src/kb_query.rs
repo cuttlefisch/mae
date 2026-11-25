@@ -246,7 +246,7 @@ pub(crate) async fn may_copy_whole_kb(
 /// unsigned collection-doc flag (a key-blind relay could spoof that).
 /// `resolve_content_anchor` mirrors `kb_access`'s own owned-vs-joined
 /// anchor resolution exactly (principle #8).
-async fn trusted_encryption(
+pub(crate) async fn trusted_encryption(
     doc_store: &DocStore,
     kb_id: &str,
     coll: &KbCollectionDoc,

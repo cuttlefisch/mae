@@ -513,7 +513,7 @@ fn a_pre_rebirth_op_replayed_after_the_boundary_is_fenced_not_merged() {
     }
     let pre_state = original.encode_state();
 
-    let reborn = original.reborn(c_after);
+    let reborn = original.reborn(c_after).unwrap();
     let reborn_state = reborn.encode_state();
 
     // --- Case 1: a single stale op cannot land at all. ---
@@ -562,7 +562,7 @@ fn a_post_rebirth_edit_under_the_current_epoch_still_passes_the_fence() {
     let c_after = derive_kb_client_id(fp, 4);
 
     let original = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 7);
-    let reborn = original.reborn(c_after);
+    let reborn = original.reborn(c_after).unwrap();
     let reborn_state = reborn.encode_state();
 
     let mut current = KbNodeDoc::from_bytes_with_client_id(&reborn_state, c_after).unwrap();
@@ -597,7 +597,7 @@ fn peers_that_adopt_a_rebirth_converge_byte_identically() {
 
     // The owner rebirths; two peers adopt by replacing their copy, as `share_doc`
     // does. The third stays offline and keeps the old lineage.
-    let reborn = origin.reborn(4242);
+    let reborn = origin.reborn(4242).unwrap();
     let published = reborn.encode_state();
 
     let peer_a = KbNodeDoc::from_bytes(&published).expect("peer A adopts");

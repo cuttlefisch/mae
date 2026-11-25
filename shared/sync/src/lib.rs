@@ -13,6 +13,7 @@ pub mod encoding;
 pub mod kb;
 pub mod membership;
 pub mod op_set;
+pub mod portable_name;
 pub mod text;
 pub mod wire;
 

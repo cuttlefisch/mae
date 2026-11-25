@@ -376,7 +376,10 @@ pub(crate) fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
 /// Apply the no-caching headers every response from this listener needs.
 ///
 /// @ai-caution: [security] EVERY response builder in this module must go
-/// through here (audit #588.3). This listener serves bearer-token-authenticated
+/// through here (audit #588.3). One deliberate exception, ADR-115 D3: a blob
+/// (`oauth_blobs`) is served `private, max-age=31536000, immutable`, since its
+/// address is its content and it is fetched by KB and hash, never by name; a
+/// refusal on those routes still goes through here. This listener serves bearer-token-authenticated
 /// KB content (`kb/query.*` responses and the live site's pages), and without
 /// `no-store` a browser writes it to its on-disk cache and an intermediary
 /// proxy may retain it. `no-store` is
@@ -594,6 +597,31 @@ async fn validate_token(
             e => AuthFailure::Invalid(format!("{e:?}")),
         }
     })
+}
+
+/// Every response body the listener sends: a whole one, or a blob streamed
+/// from disk (ADR-115).
+pub(crate) type ResponseBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
+
+/// A whole-body response as a [`ResponseBody`].
+pub(crate) fn boxed(r: Response<Full<Bytes>>) -> Response<ResponseBody> {
+    use http_body_util::BodyExt;
+    r.map(|b| b.map_err(|never| match never {}).boxed())
+}
+
+/// The listener's service: a KB's blob routes (ADR-115), when enabled, and
+/// everything else through [`handle_request`].
+pub(crate) async fn serve(
+    req: Request<Incoming>,
+    listener: Arc<Listener>,
+    conn: Arc<ConnGuard>,
+) -> Result<Response<ResponseBody>, std::convert::Infallible> {
+    if let Some(routes) = listener.blobs.as_ref() {
+        if crate::oauth_blobs::blob_path(req.uri().path()).is_some() {
+            return Ok(crate::oauth_blobs::handle(req, &listener, routes).await);
+        }
+    }
+    handle_request(req, listener, conn).await.map(boxed)
 }
 
 /// Per-request handler: serves the public surface (`public_response`)
@@ -1175,6 +1203,9 @@ pub(crate) struct Listener {
     /// ADR-098 Amendment 1, C2: the proof-of-possession routes, `Some` only
     /// when `identity_binding_enabled` and the table is open.
     pub binding_routes: Option<crate::oauth_binding::BindingRoutes>,
+    /// ADR-115: a KB's attachments, `Some` only when `attachments_enabled`
+    /// and a `DocStore` exists.
+    pub blobs: Option<Arc<crate::oauth_blobs::BlobRoutes>>,
 }
 
 impl Listener {
@@ -1187,6 +1218,12 @@ impl Listener {
     ) -> Self {
         self.binding_routes = routes.filter(|_| bindings.is_some());
         self.bindings = bindings;
+        self
+    }
+
+    /// Attach the blob routes (ADR-115).
+    pub(crate) fn with_blobs(mut self, blobs: Option<Arc<crate::oauth_blobs::BlobRoutes>>) -> Self {
+        self.blobs = blobs;
         self
     }
 
@@ -1213,6 +1250,7 @@ impl Listener {
             ws,
             bindings: None,
             binding_routes: None,
+            blobs: None,
         })
     }
 }
@@ -1276,7 +1314,7 @@ pub async fn run_oauth_listener(
             };
             let io = hyper_util::rt::TokioIo::new(tls_stream);
             let service = hyper::service::service_fn(move |req| {
-                handle_request(req, Arc::clone(&state), Arc::clone(&guard))
+                serve(req, Arc::clone(&state), Arc::clone(&guard))
             });
             if let Err(e) =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())

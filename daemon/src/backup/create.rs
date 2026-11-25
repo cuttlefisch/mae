@@ -88,6 +88,9 @@ pub(crate) fn sources(config: &DaemonConfig) -> Vec<Source> {
         });
     }
     out.extend(side_files(config, &data_dir));
+    out.extend(super::blobs::db_source(
+        &config.instance_paths().collab_data_dir,
+    ));
     out
 }
 
@@ -237,7 +240,7 @@ fn remove_with_sidecars(path: &Path) {
 pub(crate) fn stage_all(sources: &[Source], staging: &Path, now: u64) -> Result<Manifest, String> {
     let mut stores = Vec::new();
     let mut files = Vec::new();
-    for source in sources {
+    let mut staged = |source: &Source| -> Result<(), String> {
         if let Some(store) = stage(source, staging)? {
             stores.push(store);
         }
@@ -248,6 +251,18 @@ pub(crate) fn stage_all(sources: &[Source], staging: &Path, now: u64) -> Result<
             sha256,
             bytes,
         });
+        Ok(())
+    };
+    for source in sources {
+        staged(source)?;
+        // ADR-115: the blob files that the STAGED database snapshot names.
+        if source.archive_path == super::blobs::db_archive_path() {
+            let live = source.src.parent().unwrap_or(Path::new("."));
+            let db = staging.join(&source.archive_path);
+            for blob in super::blobs::file_sources(&db, live)? {
+                staged(&blob)?;
+            }
+        }
     }
     if stores.is_empty() {
         return Err("no KB store found to back up: a backup of nothing is not a backup".into());

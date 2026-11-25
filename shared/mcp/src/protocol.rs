@@ -593,6 +593,69 @@ impl McpError {
         Self::kinded(-32600, message, "identity_not_bound", serde_json::json!({}))
     }
 
+    /// ADR-115: this KB holds no blob at that address (never uploaded, or
+    /// collected). Only a caller who may read the KB is told this; anyone else
+    /// gets `not_member` whether or not the blob exists.
+    pub fn blob_missing(message: String) -> Self {
+        Self::kinded(-32600, message, "blob_missing", serde_json::json!({}))
+    }
+
+    /// ADR-115 D3: the upload's `Content-Digest` does not match the bytes
+    /// that arrived. Nothing was stored.
+    pub fn blob_hash_mismatch(message: String) -> Self {
+        Self::kinded(-32600, message, "blob_hash_mismatch", serde_json::json!({}))
+    }
+
+    /// ADR-115 D3a: an image whose declared size is over the pixel limit, or
+    /// an animation over its frame or pixel budget. Refused before decoding.
+    pub fn attachment_too_many_pixels(message: String, limit: u64) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "attachment_too_many_pixels",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
+    /// ADR-115 D3a: an image that is malformed or fails to decode within its
+    /// limits.
+    pub fn attachment_undecodable(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "attachment_undecodable",
+            serde_json::json!({}),
+        )
+    }
+
+    /// ADR-115 D3a: a type the daemon recognises but cannot process (AVIF).
+    pub fn attachment_unsupported(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "attachment_unsupported",
+            serde_json::json!({}),
+        )
+    }
+
+    /// ADR-115 D3: an upload's body stalled past the idle timeout, or did not
+    /// finish inside the upload deadline. Nothing was stored or charged.
+    pub fn upload_timeout(message: String) -> Self {
+        Self::kinded(-32600, message, "upload_timeout", serde_json::json!({}))
+    }
+
+    /// ADR-115 D3a: no image worker was free in time, or the caller's tenant
+    /// already has its share of uploads waiting or processing. Nothing was
+    /// stored or charged; retry after `retry_after_secs`.
+    pub fn attachment_busy(message: String, retry_after_secs: u64) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "attachment_busy",
+            serde_json::json!({ "retry_after_secs": retry_after_secs }),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -652,6 +715,13 @@ pub const ERROR_KINDS: &[&str] = &[
     "binding_conflict",
     "too_many_challenges",
     "identity_not_bound",
+    "blob_missing",
+    "blob_hash_mismatch",
+    "attachment_too_many_pixels",
+    "attachment_undecodable",
+    "attachment_unsupported",
+    "upload_timeout",
+    "attachment_busy",
     "internal",
 ];
 
@@ -843,6 +913,13 @@ mod tests {
             McpError::binding_conflict(m(), "subject"),
             McpError::too_many_challenges(m(), 4),
             McpError::identity_not_bound(m()),
+            McpError::blob_missing(m()),
+            McpError::blob_hash_mismatch(m()),
+            McpError::attachment_too_many_pixels(m(), 1),
+            McpError::attachment_undecodable(m()),
+            McpError::attachment_unsupported(m()),
+            McpError::upload_timeout(m()),
+            McpError::attachment_busy(m(), 10),
             McpError::internal_fault(m()),
         ]
     }

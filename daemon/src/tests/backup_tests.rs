@@ -392,3 +392,53 @@ fn write_with_symlink(path: &Path, entries: &[(String, Vec<u8>)]) {
     }
     b.finish().unwrap();
 }
+
+/// ADR-115 D1: the attachment store is in the backup, its database snapshotted
+/// and exactly the blob files that snapshot's rows name. A file no row names
+/// (a crash between rename and row) and an upload in progress are not.
+#[test]
+fn a_backup_carries_every_rowed_blob_and_nothing_else_of_the_blob_store() {
+    use mae_daemon::blob_store::{list_rows, BlobStore, MediaType, DB_FILE, DIR, TMP_DIR};
+    let f = fixture();
+    let root = f.config.instance_paths().collab_data_dir.join(DIR);
+    let store = BlobStore::open(&root).unwrap();
+    let put = |kb: &str, bytes: &[u8]| {
+        let staged = store.stage(bytes).unwrap();
+        store
+            .commit(kb, staged, (MediaType::Other, None, None), None)
+            .unwrap()
+            .sha256
+    };
+    let blobs = [
+        ("kb-a", put("kb-a", b"alpha bytes"), &b"alpha bytes"[..]),
+        ("kb-b", put("kb-b", b"alpha bytes"), &b"alpha bytes"[..]),
+        ("kb-a", put("kb-a", b"gamma bytes"), &b"gamma bytes"[..]),
+    ];
+    let orphan = store.blob_path("kb-a", &"ab".repeat(32));
+    std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+    std::fs::write(&orphan, b"no row names me").unwrap();
+    std::fs::write(root.join(TMP_DIR).join("in-progress"), b"partial").unwrap();
+
+    // Taken with the store open, as from a running daemon.
+    let archive = f.root.join("out/backup.tar");
+    std::fs::create_dir_all(archive.parent().unwrap()).unwrap();
+    backup::run_create(&f.config, &archive).unwrap();
+    let dir = f.root.join("restored");
+    backup::run_restore(&archive, &dir).unwrap();
+    lines(&dir);
+
+    let restored = dir.join("collab").join(DIR);
+    assert_eq!(list_rows(&restored.join(DB_FILE)).unwrap().len(), 3);
+    for (kb, sha, bytes) in &blobs {
+        let p = restored.join(kb).join(&sha[..2]).join(sha);
+        assert_eq!(std::fs::read(&p).unwrap(), *bytes, "{kb}/{sha}");
+    }
+    let m = read_manifest(&dir);
+    let blob_files: Vec<_> = m
+        .files
+        .iter()
+        .filter(|e| e.path.starts_with("collab/blobs/") && !e.path.ends_with(DB_FILE))
+        .collect();
+    assert_eq!(blob_files.len(), 3, "rowed files only: {blob_files:?}");
+    assert!(!restored.join(TMP_DIR).exists());
+}

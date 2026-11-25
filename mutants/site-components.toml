@@ -55,8 +55,8 @@ targets = ["--bin", "mae-daemon"]
 filter = "test(a_node_whose_id_is_site_is_withheld)"
 [[mutant.edit]]
 file = "shared/site/src/address.rs"
-find = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site"];'''
-replace = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json"];'''
+find = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site", "blobs"];'''
+replace = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "blobs"];'''
 
 [[mutant]]
 id = "site-components/failed-render-output-kept-in-the-shell"
@@ -78,3 +78,13 @@ filter = "test(a_component_asset_is_served_at_its_hash_only)"
 file = "daemon/src/site_components.rs"
 find = '''        let name = asset_name(kind, body);'''
 replace = '''        let name = file.to_string();'''
+
+[[mutant]]
+id = "site-components/blobs-id-not-reserved"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_node_whose_id_is_blobs_is_withheld)"
+[[mutant.edit]]
+file = "shared/site/src/address.rs"
+find = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site", "blobs"];'''
+replace = '''pub const RESERVED_IDS: &[&str] = &["tags", "index.json", "explorer.json", "site"];'''

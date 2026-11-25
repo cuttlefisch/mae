@@ -406,7 +406,7 @@ impl CozoKbStore {
         .map_err(cozo_err)?;
 
         // Counter for pending_updates auto-increment
-        self.run_mut(
+        self.create_if_absent(
             r#"
             :create pending_counter {
                 key: String
@@ -414,16 +414,7 @@ impl CozoKbStore {
                 val: Int
             }
             "#,
-        )
-        .or_else(|e| {
-            if e.to_string().contains("already exists") || e.to_string().contains("conflicts with")
-            {
-                Ok(NamedRows::default())
-            } else {
-                Err(e)
-            }
-        })
-        .map_err(cozo_err)?;
+        )?;
 
         // Initialize counter if empty
         let result = self
@@ -623,6 +614,9 @@ impl CozoKbStore {
                 last_import: Int
             }"#,
         )?;
+
+        // ADR-115 D4: each node's attachments map, projected with the node.
+        self.create_if_absent(Self::ATTACHMENTS_DDL)?;
 
         // Generate instance_id UUID if not already set
         self.ensure_instance_id()?;

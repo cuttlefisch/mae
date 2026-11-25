@@ -2520,6 +2520,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "icu_casemap"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "070f98b5b82798fcb93654bf96ed9f40064fc44c86f51a09ea711092cd5cc5be"
+dependencies = [
+ "icu_casemap_data",
+ "icu_collections",
+ "icu_locale_core",
+ "icu_properties",
+ "icu_provider",
+ "potential_utf",
+ "writeable",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_casemap_data"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "846b0857ca091204be3c874bc93daaf89d4777e8d2d20b0d3ffe8f671d98014b"
+
+[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2527,6 +2549,7 @@ checksum = "2984d1cd16c883d7935b9e07e44071dca8d917fd52ecc02c04d5fa0b5a3f191c"
 dependencies = [
  "displaydoc",
  "potential_utf",
+ "serde",
  "utf8_iter",
  "yoke",
  "zerofrom",
@@ -2541,6 +2564,7 @@ checksum = "92219b62b3e2b4d88ac5119f8904c10f8f61bf7e95b640d25ba3075e6cac2c29"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
@@ -2594,6 +2618,8 @@ checksum = "139c4cf31c8b5f33d7e199446eff9c1e02decfc2f0eec2c8d71f65befa45b421"
 dependencies = [
  "displaydoc",
  "icu_locale_core",
+ "serde",
+ "stable_deref_trait",
  "writeable",
  "yoke",
  "zerofrom",
@@ -3142,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3184,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "mae-agent-cli"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3203,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3227,11 +3253,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.194"
+version = "0.14.195"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "serde",
  "serde_json",
@@ -3239,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "criterion",
  "hex",
@@ -3311,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "mae-core",
  "serde",
@@ -3322,11 +3348,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.194"
+version = "0.14.195"
 
 [[package]]
 name = "mae-export"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "mae-babel",
  "mae-org",
@@ -3337,11 +3363,11 @@ dependencies = [
 
 [[package]]
 name = "mae-format"
-version = "0.14.194"
+version = "0.14.195"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -3355,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "cozo",
  "hex",
@@ -3381,14 +3407,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "serde",
  "serde_json",
@@ -3398,14 +3424,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3454,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3465,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -3480,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme-extra"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "mae-scheme",
  "parking_lot 0.13.0",
@@ -3488,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "alacritty_terminal",
  "mae-mcp",
@@ -3514,20 +3540,21 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.194"
+version = "0.14.195"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.194"
+version = "0.14.195"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.194"
+version = "0.14.195"
 dependencies = [
  "base64 0.23.1",
  "criterion",
  "ed25519-dalek",
  "hex",
+ "icu_casemap",
  "mae-crypto",
  "proptest",
  "rand 0.10.3",
@@ -3538,6 +3565,7 @@ dependencies = [
  "similar",
  "tempfile",
  "tracing",
+ "unicode-normalization",
  "yrs",
  "zeroize",
 ]
@@ -4914,6 +4942,8 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0103b1cef7ec0cf76490e969665504990193874ea05c85ff9bab8b911d0a0564"
 dependencies = [
+ "serde_core",
+ "writeable",
  "zerovec",
 ]
 
@@ -6943,6 +6973,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8323304221c2a851516f22236c5722a72eaa19749016521d6dff0824447d96d"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -8669,6 +8700,7 @@ dependencies = [
  "displaydoc",
  "yoke",
  "zerofrom",
+ "zerovec",
 ]
 
 [[package]]
@@ -8677,6 +8709,7 @@ version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90f911cbc359ab6af17377d242225f4d75119aec87ea711a880987b18cd7b239"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",

@@ -1087,7 +1087,8 @@ pub(crate) async fn kb_is_e2e(doc_store: &DocStore, kb_id: &str, coll: &KbCollec
 /// Refuse a node update that would leave a known field of the node document
 /// mistyped (`invalid_field`), checked on the document as it would be after
 /// the update and before anything is persisted. `replace` checks the update
-/// alone (a purge-and-recreate). Only a violation the update INTRODUCES
+/// alone (a purge-and-recreate), against the document it replaces. Only a
+/// violation the update INTRODUCES
 /// counts, so a legacy document stays writable. E2E KBs are not checked: the
 /// daemon cannot read their nodes. A document or update that does not decode
 /// is left to the write path's own validation.
@@ -1123,14 +1124,29 @@ pub(crate) async fn refuse_mistyped_node_update(
     // on disk, not in memory (`has_doc` would say "new" and the check would
     // pass a delta the real apply then lands on the reloaded document). One
     // that exists and cannot be read is refused, never checked as empty.
-    let base = if replace || !doc_store.has_durable_doc(node_doc).await {
-        Vec::new()
+    let stored = if doc_store.has_durable_doc(node_doc).await {
+        Some(doc_store.encode_state(node_doc).await)
     } else {
-        doc_store.encode_state(node_doc).await.map_err(|e| {
-            McpError::internal_fault(format!("node '{node_doc}' could not be read to check: {e}"))
-        })?
+        None
     };
-    match mae_sync::kb::KbNodeDoc::field_type_introduced(&base, update) {
+    // A replacement is the update alone, judged against what it replaces: a
+    // rebirth carries the node's attachments root raw, legacy entries too.
+    // One whose old document cannot be read is judged alone, as before.
+    let checked = match (replace, stored) {
+        (true, Some(Ok(existing))) => {
+            mae_sync::kb::KbNodeDoc::field_type_introduced_replacing(&existing, update)
+        }
+        (_, None) | (true, Some(Err(_))) => {
+            mae_sync::kb::KbNodeDoc::field_type_introduced(&[], update)
+        }
+        (false, Some(Ok(base))) => mae_sync::kb::KbNodeDoc::field_type_introduced(&base, update),
+        (false, Some(Err(e))) => {
+            return Err(McpError::internal_fault(format!(
+                "node '{node_doc}' could not be read to check: {e}"
+            )))
+        }
+    };
+    match checked {
         Ok(Some(field)) => Err(McpError::invalid_field(
             field,
             format!("the update leaves the node's '{field}' field with the wrong type"),
