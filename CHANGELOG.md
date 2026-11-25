@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.202] - 2026-11-25
+
+
+
+
+### Features
+
+- *(daemon)* The activity record, its chains and its writer (ADR-120 P1a) ([0e89a96](https://github.com/cuttlefisch/mae/commit/0e89a96308c124f1c1de85e2f33291d766f06d52))
+- *(daemon)* Record every request on the HTTPS listener (ADR-120 P1a) ([61e0d65](https://github.com/cuttlefisch/mae/commit/61e0d654f21877263cd06fe59a76f56c8b7e1b04))
+
+### Bug Fixes
+
+- *(kb)* Keep each node's stored body in store form when the file's rewrite is refused ([a8960b5](https://github.com/cuttlefisch/mae/commit/a8960b536c94486fb76c625bbad12b587c22999c))
+- *(daemon)* An effect keeps its event when the client hangs up, and the record's events stay bounded ([d81bcb1](https://github.com/cuttlefisch/mae/commit/d81bcb1f92764f0749b4e3a74d89bc3a03373215))
+- *(daemon)* Bound a connection's detached requests, drain them at stop, and count refusals during an outage ([93d9171](https://github.com/cuttlefisch/mae/commit/93d9171ce9cfdcce669c35dc21b3e938856a8284))
+- *(daemon)* Admit a connection with a compare-and-swap loop, not fetch_update ([62861b5](https://github.com/cuttlefisch/mae/commit/62861b5426503f448cb4cf4508606047ed6904f5))
+
+### Documentation
+
+- *(adr-120)* Cap node_ids at 100 with node_ids_total, and detach a recorded request from its connection ([38b3df2](https://github.com/cuttlefisch/mae/commit/38b3df209418bb363461d26fb1b4e21ff8c699ca))
+
+### Testing
+
+- *(kb)* Pin excluded-ancestor nodes in store form; state the node_of rule plainly ([2bf6f4f](https://github.com/cuttlefisch/mae/commit/2bf6f4fa9e9b75a6301b88989bd6af062f5bb280))
+- *(daemon)* The activity record's operator contract against the real binary ([5994965](https://github.com/cuttlefisch/mae/commit/599496544b58f4ae70a419583044b9bfd0e47082))
+- *(daemon)* The activity record's mutants and its latency benchmark ([956173e](https://github.com/cuttlefisch/mae/commit/956173e507ee69938be91aef25d657808736b5ea))
+- *(daemon)* Close the activity record's surviving mutant, and document it ([36f7bf0](https://github.com/cuttlefisch/mae/commit/36f7bf08eade34b78ddb69904594ad71c460c72e))
+- *(daemon)* Make the acknowledgement mutant stop awaiting the commit ([aea0197](https://github.com/cuttlefisch/mae/commit/aea0197813ed07f5234475fbc772e85a16d157ad))
+- *(daemon)* Keep the activity chain's tamper test inside the CI time budget ([4cdb844](https://github.com/cuttlefisch/mae/commit/4cdb84419b15f7491ee94769da0b1b88f191186d))
+- *(mcp)* List activity_record_unavailable among the constructed error kinds ([8c028a6](https://github.com/cuttlefisch/mae/commit/8c028a6688556fffe168fe721b8e93c983656743))
+
+### Miscellaneous
+
+- Bump version to 0.14.201 ([431b801](https://github.com/cuttlefisch/mae/commit/431b8019421d5d4c5b8f3785167a534f9c224695))
+
 ## [0.14.200] - 2026-11-25
 
 
@@ -36,6 +71,7 @@ All notable changes to this project will be documented in this file.
 - Rebuild the ADR KB checksum after merging the amendment ([25dd53e](https://github.com/cuttlefisch/mae/commit/25dd53ea66c7dd6d935a3afc4f99366437c77303))
 - Rebuild the ADR KB checksum after merging main ([324be53](https://github.com/cuttlefisch/mae/commit/324be538c2978541933f3b95b0962cf9db52eeec))
 - Rebuild the ADR KB checksum after merging main ([ae162c1](https://github.com/cuttlefisch/mae/commit/ae162c178d522b3f8afac3329142494d0e9f3953))
+- Bump version to 0.14.200 ([d09f402](https://github.com/cuttlefisch/mae/commit/d09f40227db7e3c53508e1b6efccba93498de35c))
 
 ## [0.14.199] - 2026-11-25
 

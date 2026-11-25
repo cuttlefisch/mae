@@ -346,6 +346,11 @@ impl TenantRegistry {
         ))
     }
 
+    /// The tenant `principal` is configured under, if any.
+    pub fn tenant_of(&self, principal: &str) -> Option<String> {
+        self.by_principal.get(principal).cloned()
+    }
+
     /// Manual eviction (the `daemon/evict_tenant` RPC — the rust-analyzer/
     /// Emacs-precedent operator escape hatch: don't wait for an idle window
     /// a still-connected tenant may never hit). Idempotent — evicting an
@@ -700,6 +705,10 @@ pub struct TenantQuota(pub Arc<TenantRegistry>);
 impl mae_daemon::quota::QuotaCharger for TenantQuota {
     fn storage_quota(&self, principal: &str) -> Option<mae_daemon::blob_store::StorageQuota> {
         self.0.storage_quota(principal)
+    }
+
+    fn tenant_of(&self, principal: &str) -> Option<String> {
+        self.0.tenant_of(principal)
     }
 
     fn charge(

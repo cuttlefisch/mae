@@ -165,8 +165,8 @@ filter = "test(a_body_holds_its_own_text_only)"
 ref = "a node's body is the store form of its body_span"
 [[mutant.edit]]
 file = "shared/kb/src/org_ingest.rs"
-find = '''    let body = apply_edits(text, n.body_span.range(), edits);'''
-replace = '''    let body = apply_edits(text, n.body_span.range(), &edits[..0]);'''
+find = '''    let body = store_body(&apply_edits(text, n.body_span.range(), edits));'''
+replace = '''    let body = apply_edits(text, 0..0, edits);'''
 
 [[mutant]]
 id = "kb-org-ingest/adapter-transclusion-source"
@@ -211,3 +211,14 @@ ref = "a node's body takes only the edits inside its span: an earlier node's mus
 file = "shared/kb/src/org_ingest.rs"
 find = '''    let first = edits.partition_point(|e| e.range.start < range.start);'''
 replace = '''    let first = 0;'''
+
+[[mutant]]
+id = "kb-org-ingest/node-body-not-in-store-form-after-a-file-refusal"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(a_refusal_outside_every_node_leaves_each_node_body_in_store_form)"
+ref = "a node's stored body is in store form even when the file's rewrite was refused"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    let body = store_body(&apply_edits(text, n.body_span.range(), edits));'''
+replace = '''    let body = apply_edits(text, n.body_span.range(), edits);'''

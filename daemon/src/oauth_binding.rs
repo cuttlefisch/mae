@@ -356,7 +356,12 @@ pub(crate) async fn handle(
     match (path.as_str(), listener.bindings.as_ref()) {
         (CHALLENGE_PATH, _) => issue_challenge(routes, &vp, audience, &body, now),
         (_, Some(store)) => match check_proof(routes, &vp, audience, &body, now) {
-            Ok(fp) => record_binding_off_runtime(Arc::clone(store), vp, fp).await,
+            Ok(fp) => {
+                // ADR-120 D1: a binding proof is a sign-in the daemon performs;
+                // recorded only if the binding is then written (an `ok` answer).
+                crate::oauth_activity::binding_proved();
+                record_binding_off_runtime(Arc::clone(store), vp, fp).await
+            }
             Err(resp) => *resp,
         },
         (_, None) => unavailable(),

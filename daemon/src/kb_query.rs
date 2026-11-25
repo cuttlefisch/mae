@@ -78,6 +78,24 @@ impl Default for KbQueryLimits {
     }
 }
 
+/// Every method [`dispatch`] serves. The activity record classes each one
+/// (ADR-120 D1), and a test holds this list to the dispatcher's own arms.
+pub const METHODS: &[&str] = &[
+    "kb/query.my_kbs",
+    "kb/query.capabilities",
+    "kb/query.get",
+    "kb/query.revisions",
+    "kb/query.search",
+    "kb/query.graph",
+    "kb/query.my_wrapped_key",
+    "kb/query.links",
+    "kb/query.titles",
+    "kb/query.list",
+    "kb/query.neighborhood",
+    "kb/query.agenda",
+    "kb/query.health",
+];
+
 /// Dispatch one `kb/query.*` method. `principal` is always `Some` in
 /// practice — the caller has already validated a bearer token before
 /// reaching here — but kept as `Option` to match `check_kb_read_access`'s

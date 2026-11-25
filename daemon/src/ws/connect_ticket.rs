@@ -44,6 +44,8 @@ pub(crate) const MAX_UNUSED_TICKETS_PER_PRINCIPAL: usize = 8;
 /// and the mint request's `Origin`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TicketGrant {
+    /// The minting principal's kind, for the activity record (ADR-120 D2).
+    pub actor: mae_daemon::activity::event::ActorKind,
     pub issuer: String,
     pub subject: String,
     pub principal: String,

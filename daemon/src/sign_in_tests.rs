@@ -18,6 +18,7 @@ fn signed_in(amr: &[&str], acr: Option<&str>) -> SignIn {
         acr: acr.map(String::from),
         auth_time: None,
         groups: Vec::new(),
+        sid: None,
     }
 }
 

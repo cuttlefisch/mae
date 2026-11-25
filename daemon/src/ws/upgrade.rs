@@ -67,12 +67,13 @@ pub(crate) async fn handle(
         .as_ref()
         .expect("routed here only when ws is Some");
     if req.uri().path() == "/ws/ticket" {
+        let origin = cors_origin(&req, &listener);
         let mut resp = if req.method() == Method::OPTIONS {
             preflight(&req, ws)
         } else {
             mint_ticket(&req, &listener, ws).await
         };
-        allow_origin(&mut resp, &req, ws);
+        with_cors(&mut resp, origin);
         return resp;
     }
     upgrade(req, &listener, conn).await
@@ -292,6 +293,15 @@ async fn credential(
         (Some(token), 0) => bearer_auth(token, origin, listener).await,
         (None, 1) => {
             let grant = tickets.into_iter().next().flatten();
+            // ADR-120 D1: a redeemed ticket is a sign-in the daemon performs.
+            if let Some(g) = &grant {
+                crate::oauth_activity::ticket_redeemed(
+                    &g.principal,
+                    &g.issuer,
+                    &g.subject,
+                    g.actor,
+                );
+            }
             spend_ticket(grant, &origin, listener)
                 .await
                 .map_err(|why| match why {
@@ -407,6 +417,9 @@ async fn upgrade(
             supported,
         );
     }
+    // ADR-120 D4: the connection's own session id, which the upgrade's
+    // response carries and its later events use.
+    let _connection = crate::oauth_activity::connection_opened();
     let on_upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(super::session::run(
         on_upgrade,
@@ -424,18 +437,32 @@ const CORS_ALLOWED_HEADERS: &[&str] = &["authorization", "content-type"];
 /// a ticket (its `Authorization` header makes the POST preflighted). Only an
 /// origin in `ws_allowed_origins` is ever named, exactly; no credentials mode
 /// (MAE uses no cookies, the token travels in the header). A response to any
-/// other origin carries no CORS header, so the browser withholds it.
-fn allow_origin(resp: &mut HttpResponse, req: &Request<Incoming>, ws: &WsState) {
-    let Ok(Some(origin)) = request_origin(req) else {
+/// other origin, or on any other route, carries no CORS header, so the browser
+/// withholds it.
+///
+/// The origin a response to `req` may name, decided from the request alone,
+/// so a response built after the request is consumed (the activity record's
+/// `503`, ADR-120 D5) gets exactly what the route's own answers get.
+pub(crate) fn cors_origin(req: &Request<Incoming>, listener: &Listener) -> Option<HeaderValue> {
+    let ws = listener.ws.as_ref()?;
+    if req.uri().path() != "/ws/ticket" {
+        return None;
+    }
+    let origin = request_origin(req).ok()??;
+    if !ws.settings.allowed_origins.iter().any(|a| a == &origin) {
+        return None;
+    }
+    HeaderValue::from_str(&origin).ok()
+}
+
+/// Name `origin` (from [`cors_origin`]) on `resp`: the one place a CORS header
+/// is set.
+pub(crate) fn with_cors<B>(resp: &mut Response<B>, origin: Option<HeaderValue>) {
+    let Some(origin) = origin else {
         return;
     };
-    if !ws.settings.allowed_origins.iter().any(|a| a == &origin) {
-        return;
-    }
     let h = resp.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(&origin) {
-        h.insert(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
-    }
+    h.insert(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
     h.append(hyper::header::VARY, HeaderValue::from_static("Origin"));
 }
 
@@ -499,6 +526,7 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
     // The token's own `exp`, uncapped: a bound IdP ticket is capped when it
     // is spent (`spend_ticket`), from when its binding is read again.
     let grant = TicketGrant {
+        actor: crate::oauth_activity::actor_kind(&vp),
         bound_idp: vp.credential == Credential::IdpBound,
         issuer: vp.issuer,
         subject: vp.subject,
