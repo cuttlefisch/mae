@@ -1,0 +1,631 @@
+# ADR-120 P1a: the activity record, its writer and the HTTPS listener.
+# One mutant per guard; each names the test that must catch it. Tests:
+# daemon/src/activity/tests.rs (--lib), daemon/src/tests/activity_listener_tests.rs
+# (--bin), daemon/tests/activity_e2e.rs. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "daemon-activity-p1a/ack-await-removed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_writer_refuses_at_the_timeout_and_recovers)"
+ref = "ADR-120 D5: no answer before its event commits"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''            match done.await {
+                Ok(true) => Ok(()),
+                _ => Err(Unavailable),
+            }'''
+replace = '''            // The answer goes without waiting for the commit.
+            drop(done);
+            Ok::<(), Unavailable>(())'''
+
+[[mutant]]
+id = "daemon-activity-p1a/ack-await-removed-on-the-listener"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_held_writer_refuses_a_read_and_sends_none_of_it)"
+ref = "ADR-120 D5: no answer before its event commits"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''            match done.await {
+                Ok(true) => Ok(()),
+                _ => Err(Unavailable),
+            }'''
+replace = '''            // The answer goes without waiting for the commit.
+            drop(done);
+            Ok::<(), Unavailable>(())'''
+
+[[mutant]]
+id = "daemon-activity-p1a/address-rule-skipped-for-reads"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_address_survives_only_where_the_rule_allows_it)"
+ref = "ADR-120 D2: the address rule is the encoder's"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''        matches!(self.kind, EventKind::SignIn | EventKind::SessionStart)'''
+replace = '''        matches!(self.kind, EventKind::SignIn | EventKind::SessionStart | EventKind::Read)'''
+
+[[mutant]]
+id = "daemon-activity-p1a/prev-hash-left-out-of-the-link"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_link_carries_its_position_and_predecessor)"
+ref = "ADR-120 D7: link = {v, chain, seq, gseq, prev_hash, body_hash}"
+[[mutant.edit]]
+file = "daemon/src/activity/chain.rs"
+find = '''            "prev_hash": self.prev_hash,
+'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-activity-p1a/gseq-left-out-of-the-link"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_link_carries_its_position_and_predecessor)"
+ref = "ADR-120 D7: gseq is in the link"
+[[mutant.edit]]
+file = "daemon/src/activity/chain.rs"
+find = '''            "gseq": self.gseq,
+'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-activity-p1a/salt-left-out-of-the-body-hash"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_salt_makes_the_body_hash_hiding)"
+ref = "ADR-120 D7: the salt makes body_hash hiding"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''            "salt": data_encoding::BASE64.encode(salt),'''
+replace = '''            "salt": null,'''
+
+[[mutant]]
+id = "daemon-activity-p1a/column-check-removed-from-verify"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(editing_an_indexed_column_fails_verify_and_export)"
+ref = "ADR-120 D3: columns are recomputed from the body"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''            Some(c) if c == self.columns => Ok(()),'''
+replace = '''            Some(_) => Ok(()),'''
+
+[[mutant]]
+id = "daemon-activity-p1a/update-trigger-dropped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_triggers_refuse_update_and_unanchored_delete)"
+ref = "ADR-120 D3: a trigger refuses every UPDATE"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''{SCHEMA}{NO_UPDATE_TRIGGER}{NO_DELETE_TRIGGER}'''
+replace = '''{SCHEMA}{NO_DELETE_TRIGGER}'''
+
+[[mutant]]
+id = "daemon-activity-p1a/delete-trigger-dropped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_triggers_refuse_update_and_unanchored_delete)"
+ref = "ADR-120 D3: a trigger refuses a DELETE past the anchor"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''{SCHEMA}{NO_UPDATE_TRIGGER}{NO_DELETE_TRIGGER}'''
+replace = '''{SCHEMA}{NO_UPDATE_TRIGGER}'''
+
+[[mutant]]
+id = "daemon-activity-p1a/session-start-insert-inverted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_session_and_a_sign_in_start_once)"
+ref = "ADR-120 D4: a session start is the first event with its id"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''if !self.exists("sessions", "session", session)? {'''
+replace = '''if self.exists("sessions", "session", session)? {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/sign-in-recorded-every-time"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_session_and_a_sign_in_start_once)"
+ref = "ADR-120 D1: a sign-in is a (iss, sub, auth_time) not seen before"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''if !self.exists("sign_ins", "key", key)? {'''
+replace = '''if true {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/refusal-sends-the-prepared-body"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_held_writer_refuses_a_read_and_sends_none_of_it)"
+ref = "ADR-120 D5: nothing of the answer is sent"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''        Err(_) => oauth::boxed(unavailable(record.settings().commit_timeout_ms, cors)),'''
+replace = '''        Err(_) => with_session_header(resp, header),'''
+
+[[mutant]]
+id = "daemon-activity-p1a/read-classed-into-long"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(only_successful_reads_are_short_lived)"
+ref = "ADR-120 D7: a successful read is short-lived"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''            OutcomeResult::Ok => Chain::Short,'''
+replace = '''            OutcomeResult::Ok => Chain::Long,'''
+
+[[mutant]]
+id = "daemon-activity-p1a/tip-read-from-a-cache"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(concurrent_appenders_leave_both_chains_linear)"
+ref = "ADR-120 D5: each chain's tip is read inside the transaction"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''        let mut pos = Position::read(&self.conn)?;'''
+replace = '''        thread_local! {
+            static TIPS: std::cell::RefCell<Vec<(usize, Tip, Tip, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let me = self as *const Self as usize;
+        let mut pos = Position::read(&self.conn)?;
+        TIPS.with(|t| {
+            if let Some((_, l, s, g)) = t.borrow().iter().find(|e| e.0 == me) {
+                pos.long = l.clone();
+                pos.short = s.clone();
+                pos.gseq = *g;
+            }
+        });'''
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''        done.last_gseq = pos.gseq;'''
+replace = '''        done.last_gseq = pos.gseq;
+        TIPS.with(|t| {
+            let mut t = t.borrow_mut();
+            t.retain(|e| e.0 != me);
+            t.push((me, pos.long.clone(), pos.short.clone(), pos.gseq));
+        });'''
+
+[[mutant]]
+id = "daemon-activity-p1a/clock-step-not-recorded"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_backward_clock_step_is_recorded)"
+ref = "ADR-120 D10: a step back is recorded"
+[[mutant.edit]]
+file = "daemon/src/activity/store.rs"
+find = '''            if ev.at_us + 1_000_000 < latest {'''
+replace = '''            if false && ev.at_us + 1_000_000 < latest {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/health-ignores-the-record"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(health_fails_with_the_writer_and_recovers_by_itself)"
+ref = "ADR-120 D13: 503 while the writer has failed"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    match listener.activity.as_ref().is_some_and(|r| !r.healthy()) {'''
+replace = '''    match false {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/record-starts-healthy-unopened"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(health_is_503_from_the_start_when_the_record_cannot_open)"
+ref = "ADR-120 D13: 503 from the first request"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''                tracing::error!(reason = %e, "{LOG_UNAVAILABLE}");
+                None'''
+replace = '''                tracing::error!(reason = %e, "{LOG_UNAVAILABLE}");
+                shared.healthy.store(true, Ordering::SeqCst);
+                None'''
+
+[[mutant]]
+id = "daemon-activity-p1a/no-recovery-after-a-failure"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_writer_failure_fails_health_and_recovers_by_itself)"
+ref = "ADR-120 D13: recovers by itself"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''                shared.recover();'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-activity-p1a/abandoned-event-stored-as-ok"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_writer_refuses_at_the_timeout_and_recovers)"
+ref = "ADR-120 D5: the record states what the caller received"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        if gave_up {
+            for ev'''
+replace = '''        if false && gave_up {
+            for ev'''
+
+[[mutant]]
+id = "daemon-activity-p1a/session-id-not-lowercase"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(session_ids_have_the_pinned_shape_and_follow_the_token)"
+ref = "ADR-120 D4: ^[a-z2-7]{26}$"
+[[mutant.edit]]
+file = "daemon/src/activity/session.rs"
+find = '''        .encode(bits128)
+        .to_ascii_lowercase()'''
+replace = '''        .encode(bits128)'''
+
+[[mutant]]
+id = "daemon-activity-p1a/session-header-on-a-401"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(the_session_header_is_the_recorded_id_and_follows_the_token)"
+ref = "ADR-120 D4: a 401 carries no header"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    let header = (resp.status() != StatusCode::UNAUTHORIZED)'''
+replace = '''    let header = (resp.status() != StatusCode::IM_A_TEAPOT)'''
+
+[[mutant]]
+id = "daemon-activity-p1a/session-header-read-as-a-credential"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(no_entry_point_reads_the_session_header)"
+ref = "ADR-120 D4: an identifier, never a credential"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''        .and_then(|v| v.strip_prefix("Bearer "))
+}'''
+replace = '''        .and_then(|v| v.strip_prefix("Bearer "))
+        .or_else(|| req.headers().get("mae-activity-session").and_then(|v| v.to_str().ok()))
+}'''
+
+[[mutant]]
+id = "daemon-activity-p1a/first-refusal-not-committed"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_bad_token_flood_is_coalesced_and_its_first_waits_for_the_commit)"
+ref = "ADR-120 D6: the first of a window commits before its answer"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    if !admit.commit {'''
+replace = '''    if true {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/coalesced-count-lost"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(ten_thousand_refusals_coalesce_to_a_bounded_count_that_sums)"
+ref = "ADR-120 D6: counts flushed, never dropped"
+[[mutant.edit]]
+file = "daemon/src/activity/coalesce.rs"
+find = '''            ev.count = self.count;'''
+replace = '''            ev.count = 1;'''
+
+[[mutant]]
+id = "daemon-activity-p1a/window-bound-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_spread_flood_is_aggregated_without_addresses)"
+ref = "ADR-120 D6: a spread flood is bounded"
+[[mutant.edit]]
+file = "daemon/src/activity/coalesce.rs"
+find = '''        if aggregate || inner.windows.len() >= self.max_windows {'''
+replace = '''        if aggregate {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/untrusted-forwarded-recorded"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(the_listener_records_the_address_only_where_the_rule_allows)"
+ref = "ADR-120 D2: forwarded only from a trusted proxy"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''        .contains(&addr.ip())'''
+replace = '''        .is_empty()'''
+
+[[mutant]]
+id = "daemon-activity-p1a/idp-sid-not-read"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_idp_sign_in_is_recorded_once_and_sid_is_optional)"
+ref = "ADR-120 D4: idp_sid recorded when present"
+[[mutant.edit]]
+file = "daemon/src/sign_in.rs"
+find = '''            sid: claims
+                .get("sid")'''
+replace = '''            sid: claims
+                .get("no-such-claim")'''
+
+[[mutant]]
+id = "daemon-activity-p1a/verify-trusts-the-link-order"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(removing_swapping_or_reordering_rows_fails_verify)"
+ref = "ADR-120 D8: seq, gseq and prev_hash are each checked"
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''        if link.gseq <= self.last_gseq {'''
+replace = '''        if false && link.gseq <= self.last_gseq {'''
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''        if link.gseq > self.last_gseq + 1 && link.gseq - 1 > self.floor {'''
+replace = '''        if false && link.gseq > self.last_gseq + 1 && link.gseq - 1 > self.floor {'''
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''        if link.seq != *seq + 1 {'''
+replace = '''        if false && link.seq != *seq + 1 {'''
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''        if &link.prev_hash != prev {'''
+replace = '''        if false && &link.prev_hash != prev {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/verify-skips-the-body-hash"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(flipping_sampled_bytes_of_every_stored_link_and_body_fails_verify)"
+ref = "ADR-120 D8 step 5: body_hash recomputed"
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''    if chain::body_hash(body) != link.body_hash {'''
+replace = '''    if false && chain::body_hash(body) != link.body_hash {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/verify-misses-a-truncated-tail"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_altered_stub_a_missing_line_or_no_proof_fails_verify)"
+ref = "ADR-120 D8: a missing range is reported"
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''            if to > self.last_gseq {'''
+replace = '''            if false && to > self.last_gseq {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/no-proof-export-accepted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_altered_stub_a_missing_line_or_no_proof_fails_verify)"
+ref = "ADR-120 D8: --no-proof is refused by verify"
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''    if header["no_proof"] != json!(false) {'''
+replace = '''    if false && header["no_proof"] != json!(false) {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/export-ignores-the-filter"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_filtered_export_verifies_and_holds_only_what_matched)"
+ref = "ADR-120 D8: a principal filter returns only that principal"
+[[mutant.edit]]
+file = "daemon/src/activity/export.rs"
+find = '''        if filter.matches(&body) {'''
+replace = '''        if true {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/long-retention-floor-removed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(settings_floors_stop_startup)"
+ref = "ADR-120 D9: the floors"
+[[mutant.edit]]
+file = "daemon/src/activity/mod.rs"
+find = '''        if self.retention_long_days < RETENTION_LONG_FLOOR_DAYS {'''
+replace = '''        if false {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/session-key-not-private"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_session_key_is_created_private_and_kept)"
+ref = "ADR-120 D4/D3: mode 0600"
+[[mutant.edit]]
+file = "daemon/src/activity/session.rs"
+find = '''        opts.mode(0o600);'''
+replace = '''        opts.mode(0o644);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/review-methods-unclassed"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(every_route_and_method_yields_exactly_one_classified_event)"
+ref = "ADR-120 P1a: a method without a class fails completeness"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''        || mae_daemon::review::METHODS.contains(&method);'''
+replace = ''';'''
+
+[[mutant]]
+id = "daemon-activity-p1a/status-exit-code-always-zero"
+runner = "daemon"
+targets = ["--test", "activity_e2e"]
+filter = "test(the_operator_contract_from_a_blocked_start_to_recovery)"
+ref = "ADR-120 D13: exit 1 unhealthy"
+[[mutant.edit]]
+file = "daemon/src/activity_cli.rs"
+find = '''    i32::from(!healthy)'''
+replace = '''    0'''
+
+[[mutant]]
+id = "daemon-activity-p1a/unavailable-log-line-renamed"
+runner = "daemon"
+targets = ["--test", "activity_e2e"]
+filter = "test(the_operator_contract_from_a_blocked_start_to_recovery)"
+ref = "ADR-120 D13: the stable ERROR line"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''                tracing::error!(reason = %e, "{LOG_UNAVAILABLE}");
+                None'''
+replace = '''                tracing::error!(reason = %e, "activity record unavailable");
+                None'''
+
+[[mutant]]
+id = "daemon-activity-p1a/recovered-log-line-renamed"
+runner = "daemon"
+targets = ["--test", "activity_e2e"]
+filter = "test(the_operator_contract_from_a_blocked_start_to_recovery)"
+ref = "ADR-120 D13: the stable INFO line"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''            tracing::info!("{LOG_RECOVERED}");'''
+replace = '''            tracing::info!("activity record recovered");'''
+
+[[mutant]]
+id = "daemon-activity-p1a/recorded-request-not-detached"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_client_hanging_up_mid_upload_leaves_the_effect_and_its_event)"
+ref = "ADR-120 D5/D6: a client hanging up does not drop an effect's event"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    let task = tokio::spawn(work);'''
+replace = '''    let task = async { Ok::<_, tokio::task::JoinError>(work.await) };'''
+
+[[mutant]]
+id = "daemon-activity-p1a/node-ids-uncapped-in-the-draft"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_result_of_ten_thousand_ids_records_a_bounded_body_and_the_true_count)"
+ref = "ADR-120 D2: node_ids holds at most NODE_IDS_MAX ids"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''        if kept.len() < NODE_IDS_MAX {'''
+replace = '''        if true {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/node-ids-uncapped-in-the-encoder"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_encoder_caps_node_ids_and_keeps_the_true_count)"
+ref = "ADR-120 D2: the cap is the encoder's"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''            .map(|ids| &ids[..ids.len().min(NODE_IDS_MAX)]);'''
+replace = '''            .map(|ids| &ids[..]);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/per-connection-limit-ignored"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(resetting_streams_never_holds_more_than_the_connection_limit)"
+ref = "ADR-120 D5: a connection holds at most MAX_REQUESTS_PER_CONNECTION detached requests"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    let slot = match req.extensions().get::<ConnRequests>() {'''
+replace = '''    let slot = match None::<&ConnRequests> {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/over-the-connection-limit-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(resetting_streams_never_holds_more_than_the_connection_limit)"
+ref = "ADR-120 D6: a refusal at the connection limit is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''                over_connection_limit(&req, &record, &class);
+'''
+replace = '''
+'''
+
+[[mutant]]
+id = "daemon-activity-p1a/connection-admission-check-then-act"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(concurrent_acquirers_never_pass_the_cap)"
+ref = "ADR-120 D5: concurrent streams of one connection never together pass its limit"
+[[mutant.edit]]
+file = "daemon/src/conn_limit.rs"
+find = '''        let max = self.max;
+        // An explicit compare-and-swap loop: `fetch_update` is deprecated on
+        // current Rust and its replacement is newer than the MSRV.
+        let mut n = self.active.load(Ordering::Relaxed);
+        loop {
+            if max != 0 && n >= max {
+                return None;
+            }
+            match self
+                .active
+                .compare_exchange_weak(n, n + 1, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(seen) => n = seen,
+            }
+        }'''
+replace = '''        if self.max > 0 && self.active.load(Ordering::Relaxed) >= self.max {
+            return None;
+        }
+        std::thread::yield_now();
+        self.active.fetch_add(1, Ordering::Relaxed);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/stop-does-not-wait-for-requests-in-flight"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D5/D10: a clean stop waits for requests in flight before daemon_stop"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        if tokio::time::timeout(STOP_DRAIN_TIMEOUT, self.until_idle())'''
+replace = '''        if tokio::time::timeout(Duration::ZERO, self.until_idle())'''
+
+[[mutant]]
+id = "daemon-activity-p1a/stop-keeps-taking-requests"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D5/D10: nothing new is taken once a clean stop has begun"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        if self.shared.closing.load(Ordering::SeqCst) {
+            return None;
+        }'''
+replace = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+id = "daemon-activity-p1a/refusal-during-a-stop-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D6: a refusal made while a stop waits is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''        record.shed_refusal(&refused_on_arrival(&req, &record, &class, now), now);
+'''
+replace = '''        let _ = (&req, &class, now);
+'''
+
+[[mutant]]
+id = "daemon-activity-p1a/refusals-queued-during-an-outage"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_bad_token_flood_during_an_outage_queues_a_bounded_number)"
+ref = "ADR-120 D6: during an outage a refusal is counted into its aggregate, not queued"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    if !record.healthy() {
+        record.shed_refusal(ev, now);'''
+replace = '''    if false {
+        record.shed_refusal(ev, now);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/outage-refusal-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_bad_token_flood_during_an_outage_queues_a_bounded_number)"
+ref = "ADR-120 D6: an outage refusal is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        self.coalescer.aggregate(&ev, now_us);
+        self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);'''
+replace = '''        let _ = (&ev, now_us);
+        self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);'''

@@ -36,17 +36,33 @@ impl ConnLimiter {
     /// (the caller should reject/drop the connection without spawning
     /// anything for it); `Some(guard)` otherwise — the count is already
     /// incremented, and stays incremented until the guard is dropped.
+    ///
+    /// The check and the increment are one compare-and-swap, so concurrent
+    /// callers (HTTP/2 streams of one connection run in parallel) can never
+    /// together pass the cap.
     pub fn try_acquire(&self) -> Option<ConnGuard> {
-        if self.max > 0 && self.active.load(Ordering::Relaxed) >= self.max {
-            return None;
+        let max = self.max;
+        // An explicit compare-and-swap loop: `fetch_update` is deprecated on
+        // current Rust and its replacement is newer than the MSRV.
+        let mut n = self.active.load(Ordering::Relaxed);
+        loop {
+            if max != 0 && n >= max {
+                return None;
+            }
+            match self
+                .active
+                .compare_exchange_weak(n, n + 1, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(seen) => n = seen,
+            }
         }
-        self.active.fetch_add(1, Ordering::Relaxed);
         Some(ConnGuard(Arc::clone(&self.active)))
     }
 
     /// Current in-flight connection count. Diagnostic/logging use only — the
-    /// admission decision itself lives in `try_acquire`, not a separate
-    /// check-then-act pair, so there's no TOCTOU window in normal use.
+    /// admission decision itself lives in `try_acquire`, a single
+    /// compare-and-swap, so there is no check-then-act window.
     pub fn current(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
@@ -117,6 +133,27 @@ mod tests {
             limiter.try_acquire().is_some(),
             "capacity must be available again after the panicking holder unwound"
         );
+    }
+
+    /// Many threads racing for the last slots never admit more than the cap.
+    #[test]
+    fn concurrent_acquirers_never_pass_the_cap() {
+        let limiter = ConnLimiter::new(8);
+        let barrier = Arc::new(std::sync::Barrier::new(32));
+        let held: Vec<_> = (0..32)
+            .map(|_| {
+                let (l, b) = (limiter.clone(), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    b.wait();
+                    l.try_acquire()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        assert_eq!(held.iter().filter(|g| g.is_some()).count(), 8);
+        assert_eq!(limiter.current(), 8);
     }
 
     #[test]

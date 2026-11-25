@@ -13,6 +13,7 @@
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
 //! collaboration, and services that outlive the editor session.
 
+mod activity_cli;
 mod anchor_cli;
 mod backup;
 mod binding_cli;
@@ -33,6 +34,7 @@ mod lazy_fetch_client;
 pub mod maintenance;
 mod member_cli;
 mod oauth;
+mod oauth_activity;
 mod oauth_binding;
 mod oauth_blobs;
 mod oauth_config;
@@ -120,6 +122,10 @@ async fn main() {
     if review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {
         std::process::exit(review_cli::run(None, &cli.rest[1..]).await);
     }
+    // ADR-120 D8: so does the activity record's.
+    if activity_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {
+        std::process::exit(activity_cli::run(None, &cli.rest));
+    }
 
     let config = match cli.resolve_config() {
         Ok(c) => c,
@@ -178,6 +184,8 @@ async fn main() {
         }
         // Native-KB seed (plan / apply) and export: `seed_cli`, `seed_apply_cli`.
         Some("kb") => std::process::exit(seed_cli::run_kb(&config, &cli.rest).await),
+        // ADR-120: the activity record's status, export and verify.
+        Some("activity") => std::process::exit(activity_cli::run(Some(&config), &cli.rest)),
         _ => {}
     }
 
@@ -423,12 +431,16 @@ async fn main() {
         info!("collab service disabled in config");
     }
 
+    // --- The activity record (ADR-120), before the listener it records ---
+    let activity = activity_cli::start(&config).await;
+    state.lock().await.activity = activity.clone();
+
     // --- OAuth 2.1 resource-server listener (ADR-052); kb/query.* (ADR-053/Phase G) ---
     spawn_oauth_listener(
         &config,
         &state,
         (doc_store_for_query.clone(), site_components),
-        daemon_identity_for_oauth.clone(),
+        (daemon_identity_for_oauth.clone(), activity.clone()),
     )
     .await;
 
@@ -504,6 +516,11 @@ async fn main() {
         );
     }
 
+    // ADR-120 D10: the record's last event of this run.
+    if let Some(record) = &activity {
+        activity_cli::stop(record).await;
+    }
+
     // Broadcast shutdown
     let _ = shutdown_tx.send(());
 
@@ -559,7 +576,10 @@ async fn spawn_oauth_listener(
         Option<Arc<doc_store::DocStore>>,
         Arc<mae_daemon::site_components::SiteComponents>,
     ),
-    daemon_identity: Option<Arc<mae_mcp::identity::Identity>>,
+    (daemon_identity, activity): (
+        Option<Arc<mae_mcp::identity::Identity>>,
+        Option<Arc<mae_daemon::activity::writer::ActivityRecord>>,
+    ),
 ) {
     if !config.oauth.enabled {
         info!("OAuth resource-server listener disabled in config (default)");
@@ -666,7 +686,8 @@ async fn spawn_oauth_listener(
     {
         Ok(l) => l
             .with_identity_binding(bindings, binding_routes)
-            .with_blobs(blobs),
+            .with_blobs(blobs)
+            .with_activity(activity),
         Err(e) => {
             error!(error = %e, "OAuth listener disabled");
             return;
@@ -1595,6 +1616,19 @@ fn run_check_config(config: &DaemonConfig) {
     if !tenant_issues.is_empty() {
         eprintln!("Tenant configuration issues:");
         for issue in &tenant_issues {
+            eprintln!("  - {issue}");
+        }
+        std::process::exit(1);
+    }
+    // ADR-120 D9/D11: a retention under its floor stops the daemon.
+    let (activity_problems, activity_warnings) = activity_cli::check(config);
+    println!("Activity record enabled: {}", config.activity.enabled);
+    for w in &activity_warnings {
+        println!("  ! {w}");
+    }
+    if !activity_problems.is_empty() {
+        eprintln!("Activity configuration issues:");
+        for issue in &activity_problems {
             eprintln!("  - {issue}");
         }
         std::process::exit(1);
