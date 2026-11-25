@@ -143,7 +143,7 @@ proptest! {
     #[test]
     fn candidates_are_never_exempt_and_the_excess_goes(
         n in 1u64..260,
-        kinds in prop::collection::vec(0usize..8, 260),
+        kinds in prop::collection::vec(0usize..VersionKind::ALL.len(), 260),
         max_versions in 100u32..200,
         max_days in prop::option::of(30u32..400),
         min_days in 30u32..120,
@@ -161,13 +161,13 @@ proptest! {
         let vs: Vec<&HistoryEntry> = h.iter().filter(|e| e.kind != VersionKind::Pruned).collect();
         let age_ok = |e: &HistoryEntry| NOW - e.created_at > i64::from(min_days) * DAY;
         for e in h.iter().filter(|e| got.contains(&e.seq)) {
-            prop_assert!(e.kind != VersionKind::Named && e.kind != VersionKind::Pruned, "{:?}", e.kind);
+            prop_assert!(!matches!(e.kind, VersionKind::Named | VersionKind::ReviewFreeze | VersionKind::Pruned), "{:?}", e.kind);
             prop_assert!(!refs.contains(&e.seq) && !e.is_pruned() && age_ok(e));
             prop_assert!(Some(e.seq) != vs.last().map(|l| l.seq), "the latest version");
         }
         let excess = vs.len().saturating_sub(max_versions as usize);
         for (i, e) in vs.iter().enumerate().take(excess) {
-            let exempt = e.kind == VersionKind::Named || refs.contains(&e.seq) || e.is_pruned()
+            let exempt = matches!(e.kind, VersionKind::Named | VersionKind::ReviewFreeze) || refs.contains(&e.seq) || e.is_pruned()
                 || !age_ok(e) || i + 1 == vs.len();
             prop_assert_eq!(got.contains(&e.seq), !exempt, "seq {}", e.seq);
         }
@@ -194,4 +194,29 @@ fn the_latest_and_the_young_are_kept_whatever_the_count() {
     }
     let none = prune_candidates(&versions(100, None), &young, &Exemptions::default(), NOW);
     assert_eq!(none.unwrap(), Vec::<u64>::new());
+}
+
+/// ADR-113 O8 / ADR-116 D5: the version a review request froze is never a
+/// pruning candidate, under the strictest policy the floors allow, even when
+/// it is old, over the count and referenced by nothing the evaluation is
+/// told about (its revision row lives in the daemon). Its neighbours of
+/// ordinary kinds are, so the policy does prune. Kills an exemption that
+/// covers only named versions.
+#[test]
+fn a_review_freeze_version_is_never_a_pruning_candidate() {
+    let freeze_at = [3u64, 77, 120];
+    let mut old = history(150, |s| {
+        if freeze_at.contains(&s) {
+            VersionKind::ReviewFreeze
+        } else {
+            VersionKind::Edit
+        }
+    });
+    for e in &mut old {
+        e.created_at -= 4000 * DAY;
+    }
+    let got =
+        prune_candidates(&versions(100, Some(30)), &old, &Exemptions::default(), NOW).unwrap();
+    let expected: Vec<u64> = (1..150).filter(|s| !freeze_at.contains(s)).collect();
+    assert_eq!(got, expected);
 }

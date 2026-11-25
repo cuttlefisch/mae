@@ -153,7 +153,7 @@ fn arb_node() -> impl Strategy<Value = MaterializedNode> {
 }
 
 fn arb_chain() -> impl Strategy<Value = Vec<HistoryEntry>> {
-    let kinds = prop::sample::select(&VersionKind::ALL[..7]);
+    let kinds = prop::sample::select(&VersionKind::ALL[..VersionKind::ALL.len() - 1]);
     prop::collection::vec((kinds, arb_node()), 1..6).prop_map(chain_of)
 }
 
@@ -211,8 +211,10 @@ fn mutate(e: &mut HistoryEntry, field: usize, salt: usize) {
         1 => flip(&mut e.node_id, salt),
         2 => e.seq += 1 + salt as u64 % 3,
         3 => {
-            e.kind = VersionKind::ALL
-                [(VersionKind::ALL.iter().position(|k| *k == e.kind).unwrap() + 1 + salt % 7) % 8]
+            e.kind = VersionKind::ALL[(VersionKind::ALL.iter().position(|k| *k == e.kind).unwrap()
+                + 1
+                + salt % (VersionKind::ALL.len() - 1))
+                % VersionKind::ALL.len()]
         }
         4 => e.created_at ^= 1 << (salt % 63),
         5 => flip(&mut e.editors[0].principal, salt),
