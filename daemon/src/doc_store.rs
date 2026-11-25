@@ -101,6 +101,10 @@ pub struct DocStore {
     /// daemon signs membership ops for KBs it owns (`signer.fingerprint() == owner`)
     /// into the op-log; absent (psk/none) ⇒ legacy unsigned membership only.
     signer: std::sync::OnceLock<Arc<mae_mcp::identity::Identity>>,
+    /// The identity bindings (ADR-098 Amendment 1), when the OAuth listener
+    /// binds IdP subjects: publication review asks it whether a named
+    /// performer is a person (ADR-113 E11, `performer_not_person`).
+    bindings: std::sync::OnceLock<Arc<crate::identity_binding::BindingStore>>,
     /// Per-KB content trust anchor (ADR-026): the owner pubkey a peer verifies the
     /// op-log genesis against. Registered for a KB JOINED from a relay we don't
     /// trust (the join-ticket node-id, by the dialer), and — ADR-036 Amendment 1
@@ -344,6 +348,7 @@ impl DocStore {
             max_update_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
+            bindings: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
@@ -857,6 +862,16 @@ impl DocStore {
     /// The daemon's signing identity, if running in key-auth mode.
     pub fn signer(&self) -> Option<&Arc<mae_mcp::identity::Identity>> {
         self.signer.get()
+    }
+
+    /// Install the identity bindings. Called once at startup; idempotent.
+    pub fn set_bindings(&self, bindings: Arc<crate::identity_binding::BindingStore>) {
+        let _ = self.bindings.set(bindings);
+    }
+
+    /// The identity bindings, when the listener binds IdP subjects.
+    pub fn bindings(&self) -> Option<&Arc<crate::identity_binding::BindingStore>> {
+        self.bindings.get()
     }
 
     /// Install the daemon's `authorized_keys` path (ADR-018, #73). Called once at

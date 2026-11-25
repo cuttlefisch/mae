@@ -176,3 +176,24 @@ async fn the_event_log_and_frozen_sources_refuse_update_and_delete() {
     }
     assert_eq!(verified_events(&env).await, 5);
 }
+
+/// A database created by PR-4 has no performer columns: opening it adds them,
+/// empty, so an existing KB's lists start fail-closed. Kills a schema that
+/// only creates the columns on a fresh database.
+#[test]
+fn a_pr4_policy_table_gains_empty_performer_lists() {
+    let c = sqlite::Connection::open(":memory:").unwrap();
+    c.execute(
+        "CREATE TABLE kb_review_policy (kb_id TEXT PRIMARY KEY, review_enabled INTEGER NOT NULL,
+         in_force_on_approval INTEGER NOT NULL, required_acts TEXT NOT NULL,
+         approval_record TEXT NOT NULL, code_prefixes TEXT NOT NULL);
+         INSERT INTO kb_review_policy VALUES ('kb', 1, 0, '[\"approved\"]', 'act', '[]');",
+    )
+    .unwrap();
+    crate::review::store::ensure_schema(&c).unwrap();
+    let p = crate::review::store::policy(&c, "kb").unwrap();
+    assert!(p.review_enabled);
+    assert!(p.reviewers.is_empty() && p.approvers.is_empty());
+    // And it is idempotent.
+    crate::review::store::ensure_schema(&c).unwrap();
+}

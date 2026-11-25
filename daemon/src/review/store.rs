@@ -25,7 +25,9 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      in_force_on_approval INTEGER NOT NULL,
      required_acts TEXT NOT NULL,
      approval_record TEXT NOT NULL,
-     code_prefixes TEXT NOT NULL
+     code_prefixes TEXT NOT NULL,
+     reviewers TEXT NOT NULL DEFAULT '[]',
+     approvers TEXT NOT NULL DEFAULT '[]'
  );
  CREATE TABLE IF NOT EXISTS kb_review_requests (
      ord INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +108,27 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
  BEGIN SELECT RAISE(ABORT, 'a frozen source is immutable'); END;";
 
 pub(crate) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
-    conn.execute(SCHEMA)
+    conn.execute(SCHEMA)?;
+    // PR-5 adds the performer lists to a table PR-4 shipped: an existing
+    // database gains the columns, empty (no performer: fail-closed, D3).
+    for col in ["reviewers", "approvers"] {
+        if !has_column(conn, "kb_review_policy", col)? {
+            conn.execute(format!(
+                "ALTER TABLE kb_review_policy ADD COLUMN {col} TEXT NOT NULL DEFAULT '[]'"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn has_column(conn: &sqlite::Connection, table: &str, col: &str) -> Result<bool, sqlite::Error> {
+    let mut st = conn.prepare(format!("PRAGMA table_info({table})"))?;
+    while st.next()? == sqlite::State::Row {
+        if st.read::<String, _>("name")? == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn bad(what: &str) -> StorageError {
@@ -123,8 +145,49 @@ fn opt_int(v: Option<i64>) -> sqlite::Value {
 
 // ---------------------------------------------------------------- policy
 
-/// A KB's review policy (D3, E3, E9). The fields later PRs add (lists,
-/// second factor, retention) are not stored until they are built.
+/// Who may perform an act (D3, Amendment 3): an IdP group, matched against
+/// the caller's sign-in groups, or a named member by fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Performer {
+    Group(String),
+    Member(String),
+}
+
+impl Performer {
+    /// `{"group": name}` or `{"member": fingerprint}`, as the wire carries it.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Performer::Group(g) => serde_json::json!({ "group": g }),
+            Performer::Member(m) => serde_json::json!({ "member": m }),
+        }
+    }
+
+    /// The inverse of [`Performer::to_json`]: an object with exactly one of
+    /// the two keys, a non-empty string. `None` for anything else.
+    pub fn from_json(v: &serde_json::Value) -> Option<Performer> {
+        let o = v.as_object().filter(|o| o.len() == 1)?;
+        let (k, v) = o.iter().next()?;
+        let s = v.as_str().filter(|s| !s.trim().is_empty())?.to_string();
+        match k.as_str() {
+            "group" => Some(Performer::Group(s)),
+            "member" => Some(Performer::Member(s)),
+            _ => None,
+        }
+    }
+}
+
+fn performers_json(list: &[Performer]) -> String {
+    serde_json::to_string(&list.iter().map(Performer::to_json).collect::<Vec<_>>())
+        .expect("json values")
+}
+
+fn performers_from(text: &str) -> Option<Vec<Performer>> {
+    let v: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
+    v.iter().map(Performer::from_json).collect()
+}
+
+/// A KB's review policy (D3, E3, E9). The fields later PRs add (second
+/// factor, retention) are not stored until they are built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub review_enabled: bool,
@@ -132,6 +195,11 @@ pub struct Policy {
     pub required_acts: Vec<String>,
     pub approval_record: String,
     pub code_prefixes: Vec<String>,
+    /// Who may perform `reviewed` (D3). Empty: nobody (fail-closed).
+    pub reviewers: Vec<Performer>,
+    /// Who may approve, put into force, derogate and withdraw an approval
+    /// (D3, C2). Empty: nobody (fail-closed).
+    pub approvers: Vec<Performer>,
 }
 
 impl Default for Policy {
@@ -144,6 +212,8 @@ impl Default for Policy {
             required_acts: vec!["approved".into()],
             approval_record: "act".into(),
             code_prefixes: Vec::new(),
+            reviewers: Vec::new(),
+            approvers: Vec::new(),
         }
     }
 }
@@ -151,7 +221,7 @@ impl Default for Policy {
 pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT review_enabled, in_force_on_approval, required_acts, approval_record,
-                code_prefixes FROM kb_review_policy WHERE kb_id = ?1",
+                code_prefixes, reviewers, approvers FROM kb_review_policy WHERE kb_id = ?1",
     )?;
     stmt.bind((1, kb_id))?;
     if stmt.next()? != sqlite::State::Row {
@@ -166,6 +236,10 @@ pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, S
         required_acts: list("required_acts")?,
         approval_record: stmt.read::<String, _>("approval_record")?,
         code_prefixes: list("code_prefixes")?,
+        reviewers: performers_from(&stmt.read::<String, _>("reviewers")?)
+            .ok_or_else(|| bad("reviewers"))?,
+        approvers: performers_from(&stmt.read::<String, _>("approvers")?)
+            .ok_or_else(|| bad("approvers"))?,
     })
 }
 
@@ -176,8 +250,9 @@ pub(crate) fn put_policy(
 ) -> Result<(), StorageError> {
     let mut stmt = conn.prepare(
         "INSERT OR REPLACE INTO kb_review_policy
-         (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes,
+          reviewers, approvers)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     stmt.bind((1, kb_id))?;
     stmt.bind((2, i64::from(p.review_enabled)))?;
@@ -195,6 +270,8 @@ pub(crate) fn put_policy(
             .expect("strings")
             .as_str(),
     ))?;
+    stmt.bind((7, performers_json(&p.reviewers).as_str()))?;
+    stmt.bind((8, performers_json(&p.approvers).as_str()))?;
     stmt.next()?;
     Ok(())
 }

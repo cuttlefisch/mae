@@ -289,7 +289,10 @@ async fn changing_the_record_of_approval_needs_a_reason_and_records_it() {
         json!({"approval_record": "pdf"}),
         json!({"required_acts": ["reviewed"]}),
         json!({"required_acts": ["approved", "approved"]}),
-        json!({"approvers": []}),
+        json!({"approvers": [{"role": "quality"}]}),
+        json!({"approvers": [{"group": "q", "member": "SHA256:x"}]}),
+        json!({"reviewers": [{"member": "not-a-fingerprint"}]}),
+        json!({"approvers": [{"group": "q"}, {"group": "q"}]}),
         json!({"code_prefixes": ["pro"]}),
     ] {
         let r = call(&env, &env.owner, "kb/review.set_policy", p(bad.clone())).await;
@@ -614,5 +617,50 @@ async fn a_storage_fault_tells_the_client_nothing_of_the_database() {
     assert_eq!(
         e.message,
         "publication review could not read or write its record"
+    );
+}
+
+/// The performer lists (D3): stored, returned, and their changes recorded; a
+/// named member must be bound as a person (ADR-117 D8). Kills dropping the
+/// lists on write and the person check.
+#[tokio::test]
+async fn the_performer_lists_are_stored_and_a_named_member_must_be_a_person() {
+    let env = env().await;
+    let groups = json!({"kb_id": KB,
+        "reviewers": [{"group": "quality-reviewers"}],
+        "approvers": [{"group": "quality-approvers"}]});
+    let ok = call(&env, &env.owner, "kb/review.set_policy", groups)
+        .await
+        .unwrap();
+    assert_eq!(
+        ok["policy"]["approvers"],
+        json!([{"group": "quality-approvers"}])
+    );
+    assert_eq!(
+        ok["policy"]["reviewers"],
+        json!([{"group": "quality-reviewers"}])
+    );
+    let ev = event_objects(&env).await;
+    assert_eq!(
+        ev[0]["payload"]["approvers"],
+        json!([{"group": "quality-approvers"}])
+    );
+    // No binding table on this daemon: nobody is a person, so a named member
+    // is refused, and the refusal names them.
+    let fp = mae_mcp::identity::Identity::generate("someone").fingerprint();
+    let e = call(
+        &env,
+        &env.owner,
+        "kb/review.set_policy",
+        json!({"kb_id": KB, "approvers": [{"member": fp}]}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(kind(&e), "performer_not_person");
+    assert_eq!(e.data.as_deref().unwrap()["member"], json!(fp));
+    assert_eq!(
+        event_objects(&env).await.len(),
+        1,
+        "a refused change records nothing"
     );
 }
