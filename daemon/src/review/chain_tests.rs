@@ -87,28 +87,92 @@ fn canonical_bytes_follow_rfc_8785_on_the_restricted_set() {
 
 /// E13: the fixture chain fails after any byte of any line is changed.
 #[test]
+#[ignore = "exhaustive, about two minutes in debug: run with --ignored"]
 fn every_one_byte_change_to_the_fixture_fails() {
-    let key = key_of(&fixture_identity());
-    let lines: Vec<String> = fixture_lines()
-        .iter()
-        .map(|l| serde_json::to_string(l).unwrap())
-        .collect();
+    // Exhaustive: every byte of every line. About 5,400 full verifications,
+    // two minutes in a debug build, so it runs on demand (`--ignored`), not
+    // in the merge gate; the two tests below cover every field of every line
+    // and a seeded sample of bytes there.
+    let lines = fixture_text_lines();
     for (li, line) in lines.iter().enumerate() {
         for bi in 0..line.len() {
-            let mut bytes = line.as_bytes().to_vec();
-            bytes[bi] ^= 0x01;
-            let Ok(changed) = String::from_utf8(bytes) else {
-                continue;
-            };
-            let mut all = lines.clone();
-            all[li] = changed;
-            let text = all.join("\n");
-            assert!(
-                verify_export(&text, &key, None).is_err(),
-                "line {li} byte {bi} changed and it still verified"
-            );
+            assert_flip_fails(&lines, li, bi);
         }
     }
+}
+
+/// One byte changed inside each field's value, of each line, fails: the
+/// header's key and KB, and each event's seq, prev_hash, canonical bytes,
+/// entry_hash and signature.
+#[test]
+fn a_change_in_any_field_of_any_line_fails() {
+    let lines = fixture_text_lines();
+    let mut checked = 0;
+    for (li, line) in lines.iter().enumerate() {
+        let v: Value = serde_json::from_str(line).unwrap();
+        for (key, value) in v.as_object().unwrap() {
+            let needle = format!("\"{key}\":{}", serde_json::to_string(value).unwrap());
+            let at = line.find(&needle).expect("the field as serialized");
+            // A byte inside the value, past its opening quote when it has one.
+            let bi = at + needle.len() - 2;
+            assert_flip_fails(&lines, li, bi);
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 6 * 4,
+        "every field of every line was checked: {checked}"
+    );
+}
+
+/// A seeded sample of 300 byte positions across the whole fixture fails.
+#[test]
+fn a_sample_of_one_byte_changes_fails() {
+    let lines = fixture_text_lines();
+    let total: usize = lines.iter().map(String::len).sum();
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    for _ in 0..300 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let mut pos = (x % total as u64) as usize;
+        let li = lines
+            .iter()
+            .position(|l| {
+                if pos < l.len() {
+                    true
+                } else {
+                    pos -= l.len();
+                    false
+                }
+            })
+            .unwrap();
+        assert_flip_fails(&lines, li, pos);
+    }
+}
+
+fn fixture_text_lines() -> Vec<String> {
+    fixture_lines()
+        .iter()
+        .map(|l| serde_json::to_string(l).unwrap())
+        .collect()
+}
+
+/// Flips the low bit of byte `bi` of line `li` and asserts the export no
+/// longer verifies (a flip that is not UTF-8 is skipped: it is not text).
+fn assert_flip_fails(lines: &[String], li: usize, bi: usize) {
+    let mut bytes = lines[li].as_bytes().to_vec();
+    bytes[bi] ^= 0x01;
+    let Ok(changed) = String::from_utf8(bytes) else {
+        return;
+    };
+    let mut all = lines.to_vec();
+    all[li] = changed;
+    let key = key_of(&fixture_identity());
+    assert!(
+        verify_export(&all.join("\n"), &key, None).is_err(),
+        "line {li} byte {bi} changed and it still verified"
+    );
 }
 
 fn sealed_chain(id: &Identity, kb: &str, n: u64) -> Vec<Value> {
