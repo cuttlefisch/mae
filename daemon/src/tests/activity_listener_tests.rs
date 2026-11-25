@@ -269,9 +269,10 @@ fn bodies_at(db: &Path) -> Vec<Value> {
     out
 }
 
-/// The listener's service over plain HTTP/1.1, with each request's peer
-/// address put on it, through the same connection builder as the real accept
-/// loop (`oauth::run_oauth_listener`), so a client hanging up is handled as it is live.
+/// The listener's service over plain TCP (HTTP/1.1, or HTTP/2 with prior
+/// knowledge), through the real accept loop's own per-connection function
+/// (`oauth::serve_connection`), so a client hanging up or resetting a stream
+/// is handled as it is live.
 async fn serve(listener: Arc<Listener>) -> SocketAddr {
     let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp.local_addr().unwrap();
@@ -283,18 +284,9 @@ async fn serve(listener: Arc<Listener>) -> SocketAddr {
             };
             let guard = Arc::new(limiter.try_acquire().unwrap());
             let listener = Arc::clone(&listener);
-            tokio::spawn(async move {
-                let service = hyper::service::service_fn(move |mut req| {
-                    req.extensions_mut()
-                        .insert(crate::oauth_activity::PeerAddr(peer));
-                    crate::oauth::serve(req, Arc::clone(&listener), Arc::clone(&guard))
-                });
-                let _ = hyper_util::server::conn::auto::Builder::new(
-                    hyper_util::rt::TokioExecutor::new(),
-                )
-                .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
-                .await;
-            });
+            tokio::spawn(crate::oauth::serve_connection(
+                stream, peer, listener, guard,
+            ));
         }
     });
     addr
@@ -1130,4 +1122,234 @@ async fn the_records_503_carries_the_routes_cors_header() {
         .await;
     assert_eq!(r.status, 200);
     assert_eq!(r.header("access-control-allow-origin"), Some(APP_ORIGIN));
+}
+
+// --- detached requests stay bounded (D5) ---------------------------------------
+
+/// A `kb/query.my_kbs` call over HTTP/2 on `sender`.
+async fn h2_call(
+    sender: &mut hyper::client::conn::http2::SendRequest<http_body_util::Full<bytes::Bytes>>,
+    token: &str,
+) -> hyper::Result<hyper::Response<hyper::body::Incoming>> {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "kb/query.my_kbs", "params": {}});
+    let req = hyper::Request::post("http://test/")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(http_body_util::Full::new(bytes::Bytes::from(
+            body.to_string(),
+        )))
+        .unwrap();
+    sender.send_request(req).await
+}
+
+/// Wait until `f` holds, within five seconds.
+async fn until(what: &str, f: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f() {
+        assert!(Instant::now() < deadline, "never: {what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// One HTTP/2 connection, a held writer: as many requests as the connection's
+/// limit wait on their commits, then their streams are reset, which frees the
+/// client's streams but not the requests, which run on to their commits. The
+/// next requests on that connection are refused `429` at once instead of
+/// piling up, the requests in flight never pass the limit, and every request
+/// is recorded: the first as their own events, the refused in one aggregate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resetting_streams_never_holds_more_than_the_connection_limit() {
+    let limit = crate::oauth::MAX_REQUESTS_PER_CONNECTION as usize;
+    let h = Harness::new(Some(record_settings(|s| s.commit_timeout_ms = 10_000))).await;
+    let record = h.record.clone().unwrap();
+    let token = h.token(3600);
+    let held = Held::new(&h.db);
+    let tcp = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+    let (sender, conn) = hyper::client::conn::http2::handshake(
+        hyper_util::rt::TokioExecutor::new(),
+        hyper_util::rt::TokioIo::new(tcp),
+    )
+    .await
+    .expect("the listener speaks HTTP/2 with prior knowledge");
+    tokio::spawn(conn);
+
+    let waiting: Vec<_> = (0..limit)
+        .map(|_| {
+            let (mut sender, token) = (sender.clone(), token.clone());
+            tokio::spawn(async move { h2_call(&mut sender, &token).await })
+        })
+        .collect();
+    until("the first requests are all in flight", || {
+        record.requests_in_flight() == limit
+    })
+    .await;
+    // Reset every stream: the client may open as many again.
+    for w in &waiting {
+        w.abort();
+    }
+    for w in waiting {
+        let _ = w.await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(record.requests_in_flight(), limit, "they run on, detached");
+
+    for i in 0..limit {
+        let mut sender = sender.clone();
+        let r = tokio::time::timeout(Duration::from_secs(5), h2_call(&mut sender, &token))
+            .await
+            .unwrap_or_else(|_| panic!("request {i} was taken on, not refused"))
+            .unwrap();
+        assert_eq!(r.status(), 429, "request {i}");
+        assert!(record.requests_in_flight() <= limit);
+    }
+
+    drop(held);
+    until("the detached requests have committed", || {
+        record.requests_in_flight() == 0
+    })
+    .await;
+    record
+        .shutdown(Event::daemon(
+            EventKind::DaemonStop,
+            mae_daemon::activity::now_us(),
+        ))
+        .await;
+    let all = h.bodies();
+    let answered = all
+        .iter()
+        .filter(|e| e["route"] == "kb/query.my_kbs" && e["outcome"]["result"] == "ok")
+        .count();
+    assert_eq!(answered, limit, "each reset request's own event");
+    let refused: u64 = all
+        .iter()
+        .filter(|e| e["outcome"]["kind"] == crate::oauth_activity::TOO_MANY_ON_CONNECTION)
+        .map(|e| e["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(refused, limit as u64, "every refusal counted");
+}
+
+/// A clean stop with an upload paused after its effect (the blob's row is in):
+/// a request arriving meanwhile is refused `503` with nothing recorded, the
+/// stop waits, and once the upload goes on its event is committed before
+/// `daemon_stop`, as the success it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_waits_for_a_request_in_flight_to_record_its_event() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let seam = std::sync::Mutex::new((entered_tx, go_rx));
+    let hook: mae_daemon::blob_store::FaultHook = Arc::new(move |step| {
+        if step == mae_daemon::blob_store::CommitStep::AfterRow {
+            let seam = seam.lock().unwrap();
+            let _ = seam.0.send(());
+            let _ = seam.1.recv_timeout(Duration::from_secs(20));
+        }
+        false
+    });
+    let h = Arc::new(Harness::build(Some(record_settings(|_| {})), None, Some(hook)).await);
+    let record = h.record.clone().unwrap();
+    let token = h.token(3600);
+    let png = super::blob_route_tests::png(4, 4, 11);
+    let upload = {
+        let (h, token) = (Arc::clone(&h), token.clone());
+        tokio::spawn(async move {
+            let mut s = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+            let head = format!(
+                "POST /kb/kb-a/blobs HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer {token}\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                png.len()
+            );
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(&png).await.unwrap();
+            let mut out = Vec::new();
+            let _ = s.read_to_end(&mut out).await;
+            Reply::parse(&out)
+        })
+    };
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(20)))
+        .await
+        .unwrap()
+        .expect("the upload reached its effect");
+    let stop = {
+        let record = Arc::clone(&record);
+        tokio::spawn(async move {
+            record
+                .shutdown(Event::daemon(
+                    EventKind::DaemonStop,
+                    mae_daemon::activity::now_us(),
+                ))
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!stop.is_finished(), "the stop waits for the upload");
+    let late = h.rpc(Some(&token), "kb/query.my_kbs", json!({})).await;
+    assert_eq!(late.status, 503, "nothing new is taken once the stop began");
+    assert_eq!(late.kind(), "activity_record_unavailable");
+    go_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), stop)
+        .await
+        .expect("the stop ends once the upload has committed")
+        .unwrap();
+    assert_eq!(upload.await.unwrap().status, 200);
+
+    let all = h.bodies();
+    let at = |kind: &str| all.iter().position(|e| e["kind"] == kind);
+    let upload_at = at("upload").expect("the upload's event");
+    let stop_at = at("daemon_stop").expect("daemon_stop");
+    assert!(upload_at < stop_at, "the upload's event comes first");
+    assert_eq!(all[upload_at]["outcome"]["result"], "ok");
+    assert!(
+        !all.iter().any(|e| e["route"] == "kb/query.my_kbs"),
+        "the refused late request is not recorded"
+    );
+}
+
+/// An outage (the writer held past the commit timeout) and a flood of bad
+/// tokens from one address in waves: once the record is unhealthy, each is
+/// answered `503` at once and nothing more is queued; after recovery the
+/// refusals are a bounded number of rows whose counts sum to the flood.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bad_token_flood_during_an_outage_queues_a_bounded_number() {
+    let (waves, per_wave) = (5, 10);
+    let h = Harness::new(Some(record_settings(|s| s.commit_timeout_ms = 300))).await;
+    let record = h.record.clone().unwrap();
+    let held = Held::new(&h.db);
+    let first = h.send("POST", "/", Some("not.a.token"), "", "").await;
+    assert_eq!(first.status, 503);
+    assert_eq!(health(&h).await.0, 503, "the record is unhealthy");
+    for _ in 0..waves {
+        let mut replies = Vec::new();
+        for _ in 0..per_wave {
+            replies.push(h.send("POST", "/", Some("not.a.token"), "", "").await);
+        }
+        for r in replies {
+            assert_eq!(r.status, 503);
+            assert_eq!(r.kind(), "activity_record_unavailable");
+        }
+    }
+    let depth = record.status().queue_depth;
+    assert!(depth <= 1, "only the first is queued, {depth} events");
+    drop(held);
+    until_healthy(&h).await;
+    record
+        .shutdown(Event::daemon(
+            EventKind::DaemonStop,
+            mae_daemon::activity::now_us(),
+        ))
+        .await;
+    let refusals: Vec<Value> = h
+        .bodies()
+        .into_iter()
+        .filter(|e| e["outcome"]["result"] == "refused")
+        .collect();
+    assert!(
+        refusals.len() <= 2,
+        "{} rows: {refusals:#?}",
+        refusals.len()
+    );
+    let total: u64 = refusals.iter().map(|e| e["count"].as_u64().unwrap()).sum();
+    assert_eq!(total, 1 + waves * per_wave);
+    assert!(refusals
+        .iter()
+        .all(|e| e["outcome"]["kind"] == "activity_record_unavailable"));
 }

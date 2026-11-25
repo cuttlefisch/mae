@@ -37,6 +37,16 @@ pub const UNAVAILABLE_KIND: &str = "activity_record_unavailable";
 /// D13's stable log messages.
 pub const LOG_UNAVAILABLE: &str = "activity_record_unavailable";
 pub const LOG_RECOVERED: &str = "activity_record_recovered";
+/// How long a clean stop waits for requests already in flight to commit their
+/// events before it writes `daemon_stop`. Each is bounded by its own commit
+/// timeout once its dispatch ends; this bounds a dispatch that does not end
+/// (a stalled upload). Ten seconds, plus the writer's own five-second stop,
+/// stays well inside systemd's default 90-second stop timeout, so a stuck
+/// request cannot turn a clean stop into a kill that loses `daemon_stop`.
+pub const STOP_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// D13's log message when [`STOP_DRAIN_TIMEOUT`] passed with requests still
+/// in flight: their events may land after `daemon_stop`, or not at all.
+pub const LOG_STOP_DRAIN_TIMEOUT: &str = "activity_record_stop_drain_timeout";
 
 /// The record could not take an event in time: refuse the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +86,13 @@ struct Shared {
     unavailable_total: AtomicU64,
     queue_depth: AtomicUsize,
     pre_auth_in_flight: AtomicUsize,
+    /// Recorded requests between [`ActivityRecord::begin`] and the end of
+    /// their commit (D5): what a clean stop waits for.
+    requests_in_flight: AtomicUsize,
+    /// Set by a clean stop: no request begins after it.
+    closing: AtomicBool,
+    /// Woken when `requests_in_flight` reaches zero.
+    idle: tokio::sync::Notify,
     last_commit_us: AtomicI64,
     batches: AtomicU64,
     events: AtomicU64,
@@ -168,6 +185,44 @@ impl ActivityRecord {
     /// D13: `true` while the record takes events.
     pub fn healthy(&self) -> bool {
         self.shared.healthy.load(Ordering::SeqCst)
+    }
+
+    /// Begin a recorded request: a ticket held until its event's commit is
+    /// done, which a clean stop waits for. `None` once the stop has begun: the
+    /// request is refused `503` and nothing of it is recorded (counted in
+    /// `unavailable_total`).
+    ///
+    /// The count is raised before `closing` is read, and the stop sets
+    /// `closing` before it reads the count (both `SeqCst`), so a request
+    /// either is seen by the stop's wait or sees the stop.
+    pub fn begin(&self) -> Option<InFlight> {
+        self.shared
+            .requests_in_flight
+            .fetch_add(1, Ordering::SeqCst);
+        let ticket = InFlight(Arc::clone(&self.shared));
+        if self.shared.closing.load(Ordering::SeqCst) {
+            self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(ticket)
+    }
+
+    /// Recorded requests begun and not yet done with their commit.
+    pub fn requests_in_flight(&self) -> usize {
+        self.shared.requests_in_flight.load(Ordering::SeqCst)
+    }
+
+    /// D6 during an outage: a refusal made while the record is unhealthy is
+    /// not queued (each would wait out the commit timeout and land later as a
+    /// duplicate). It is answered `503 activity_record_unavailable` and
+    /// counted, as that answer, into its kind's aggregate: coalesced, never
+    /// dropped. Counted in `unavailable_total` like any `503` of the record.
+    pub fn shed_refusal(&self, ev: &Event, now_us: i64) {
+        let mut ev = ev.clone();
+        ev.result = OutcomeResult::Refused;
+        ev.outcome_kind = Some(UNAVAILABLE_KIND.to_string());
+        self.coalescer.aggregate(&ev, now_us);
+        self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);
     }
 
     /// How many refusals made before authentication are waiting on the queue
@@ -295,9 +350,21 @@ impl ActivityRecord {
         }
     }
 
-    /// Flush every coalesced window, commit `daemon_stop` (D10), and stop the
-    /// writer. Called once, at clean shutdown.
+    /// Stop taking requests, wait for those in flight to commit their events
+    /// (within [`STOP_DRAIN_TIMEOUT`], logged if it passes), flush every
+    /// coalesced window, commit `daemon_stop` (D10), and stop the writer.
+    /// Called once, at clean shutdown.
     pub async fn shutdown(&self, stop: Event) {
+        self.shared.closing.store(true, Ordering::SeqCst);
+        if tokio::time::timeout(STOP_DRAIN_TIMEOUT, self.until_idle())
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                in_flight = self.requests_in_flight(),
+                "{LOG_STOP_DRAIN_TIMEOUT}"
+            );
+        }
         for entry in self.coalescer.drain_all(super::now_us()) {
             let _ = self.submit(entry).await;
         }
@@ -318,6 +385,41 @@ impl ActivityRecord {
         if let Some(h) = handle {
             let _ = tokio::task::spawn_blocking(move || h.join()).await;
         }
+    }
+}
+
+impl ActivityRecord {
+    /// Resolves once no recorded request is in flight.
+    async fn until_idle(&self) {
+        loop {
+            let notified = self.shared.idle.notified();
+            tokio::pin!(notified);
+            // Registered before the count is read, so a request finishing in
+            // between still wakes this wait.
+            notified.as_mut().enable();
+            if self.requests_in_flight() == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+/// A recorded request in flight ([`ActivityRecord::begin`]): dropped when its
+/// commit is done, however the request ends.
+pub struct InFlight(Arc<Shared>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        if self.0.requests_in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.idle.notify_waiters();
+        }
+    }
+}
+
+impl std::fmt::Debug for InFlight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InFlight").finish_non_exhaustive()
     }
 }
 

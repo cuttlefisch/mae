@@ -29,7 +29,7 @@ use mae_daemon::activity::event::{
     Transport, Unverified, CLAIM_MAX_BYTES,
 };
 use mae_daemon::activity::store::Entry;
-use mae_daemon::activity::writer::ActivityRecord;
+use mae_daemon::activity::writer::{ActivityRecord, InFlight};
 use mae_daemon::activity::{now_us, session};
 use mae_daemon::oauth_self_issue::{Credential, PrincipalKind, ValidatedPrincipal};
 use serde_json::{json, Value};
@@ -40,6 +40,13 @@ use crate::oauth::{self, Listener, ResponseBody, Route};
 /// The peer's address, put on each request by the accept loop.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PeerAddr(pub SocketAddr);
+
+/// The connection's limit on recorded requests in flight
+/// ([`crate::oauth::MAX_REQUESTS_PER_CONNECTION`]), put on each request by
+/// [`crate::oauth::serve_connection`]. A request without it (served outside a
+/// listener connection) has no per-connection limit.
+#[derive(Clone)]
+pub(crate) struct ConnRequests(pub crate::conn_limit::ConnLimiter);
 
 /// The refusal kind a response builder chose, carried to the record on the
 /// response's extensions (never on the wire).
@@ -412,9 +419,16 @@ fn method_name(m: &hyper::Method) -> &'static str {
 /// client hangs up, and an effect already handed to another thread (a blob
 /// commit on a blocking thread) then lands with no event at all
 /// (`a_client_hanging_up_mid_upload_leaves_the_effect_and_its_event`). The
-/// task owns everything it uses and holds the connection's slot until its
-/// commit is done, so orphaned requests stay bounded by the connection cap,
-/// and its commit is bounded by `commit_timeout_ms` like any other.
+/// task owns everything it uses and holds, until its commit is done:
+/// - the connection's slot, so orphaned requests stay bounded by the
+///   connection cap;
+/// - one of the connection's [`ConnRequests`], so a client resetting HTTP/2
+///   streams cannot pile them up on one connection
+///   (`resetting_streams_never_holds_more_than_the_connection_limit`);
+/// - an [`InFlight`] ticket, which a clean stop waits for before it writes
+///   `daemon_stop` (`a_stop_waits_for_a_request_in_flight_to_record_its_event`).
+///
+/// Its commit is bounded by `commit_timeout_ms` like any other.
 pub(crate) async fn recorded(
     req: Request<Incoming>,
     listener: Arc<Listener>,
@@ -425,7 +439,31 @@ pub(crate) async fn recorded(
 ) -> Response<ResponseBody> {
     let timeout_ms = record.settings().commit_timeout_ms;
     let cors = crate::ws::cors_origin(&req, &listener);
-    let work = recorded_detached(req, listener, conn, record, route, class, cors.clone());
+    // A clean stop has begun: nothing new is taken.
+    let Some(in_flight) = record.begin() else {
+        return oauth::boxed(unavailable(timeout_ms, cors));
+    };
+    let slot = match req.extensions().get::<ConnRequests>() {
+        Some(limiter) => match limiter.0.try_acquire() {
+            Some(slot) => Some(slot),
+            None => {
+                over_connection_limit(&req, &record, &class);
+                return oauth::boxed(too_many_on_connection(cors));
+            }
+        },
+        None => None,
+    };
+    let held = (in_flight, slot);
+    let work = recorded_detached(
+        req,
+        listener,
+        conn,
+        record,
+        route,
+        class,
+        cors.clone(),
+        held,
+    );
     let task = tokio::spawn(work);
     match task.await {
         Ok(resp) => resp,
@@ -436,7 +474,51 @@ pub(crate) async fn recorded(
     }
 }
 
-/// [`recorded`]'s work, in a task of its own.
+/// A request refused at its connection's limit (D6): counted into its kind's
+/// aggregate, never dropped, and answered at once.
+fn over_connection_limit(
+    req: &Request<Incoming>,
+    record: &ActivityRecord,
+    (template, kind): &(String, EventKind),
+) {
+    let now = now_us();
+    let mut ev = Event::new(*kind, now, Transport::Https);
+    ev.route = Some(template.clone());
+    ev.peer = peer_of(req, record.settings());
+    ev.result = OutcomeResult::Refused;
+    ev.outcome_kind = Some(TOO_MANY_ON_CONNECTION.to_string());
+    record.coalescer().aggregate(&ev, now);
+}
+
+/// The refusal kind of a request past its connection's limit.
+pub(crate) const TOO_MANY_ON_CONNECTION: &str = "too_many_requests_on_connection";
+
+/// `429` for a request past its connection's limit, with the route's CORS
+/// header (as [`unavailable`] carries it).
+fn too_many_on_connection(cors: Option<hyper::header::HeaderValue>) -> Response<Full<Bytes>> {
+    let limit = crate::oauth::MAX_REQUESTS_PER_CONNECTION;
+    let mut resp = oauth::json_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({
+            "error": "too_many_requests",
+            "kind": TOO_MANY_ON_CONNECTION,
+            "limit": limit,
+            "error_description": format!(
+                "this connection already has {limit} requests in flight"
+            ),
+        }),
+    );
+    resp.headers_mut().insert(
+        hyper::header::RETRY_AFTER,
+        hyper::header::HeaderValue::from_static("1"),
+    );
+    crate::ws::with_cors(&mut resp, cors);
+    resp
+}
+
+/// [`recorded`]'s work, in a task of its own. `_held` (the request's
+/// [`InFlight`] ticket and its connection slot) is released when it ends.
+#[allow(clippy::too_many_arguments)]
 async fn recorded_detached(
     req: Request<Incoming>,
     listener: Arc<Listener>,
@@ -445,6 +527,7 @@ async fn recorded_detached(
     route: Route,
     (template, kind): (String, EventKind),
     cors: Option<hyper::header::HeaderValue>,
+    _held: (InFlight, Option<crate::conn_limit::ConnGuard>),
 ) -> Response<ResponseBody> {
     // Held to the end of the commit, past the dispatch that consumes `conn`.
     let _slot = Arc::clone(&conn);
@@ -498,21 +581,26 @@ pub(crate) fn built_in_scope(record: Arc<ActivityRecord>, fill: impl FnOnce()) -
 
 /// A refusal is coalesced (D6): the first of its window commits before its
 /// answer; the rest are counted and answered at once. Past half the queue, a
-/// refusal made before authentication goes into its kind's aggregate.
+/// refusal made before authentication goes into its kind's aggregate. While
+/// the record is unhealthy, a refusal is not queued at all: it is counted into
+/// the aggregate and answered `503` (`ActivityRecord::shed_refusal`).
 async fn commit_refusal(
     record: &Arc<ActivityRecord>,
     entry: Entry,
     ev: &Event,
 ) -> Result<(), mae_daemon::activity::writer::Unavailable> {
+    let now = now_us();
+    if !record.healthy() {
+        record.shed_refusal(ev, now);
+        return Err(mae_daemon::activity::writer::Unavailable);
+    }
     let pre_auth = ev.principal.id.is_none();
     let half = record.settings().queue_capacity / 2;
     let aggregate = pre_auth && record.pre_auth_in_flight() >= half.max(1);
-    let now = now_us();
     let admit = record.coalescer().admit(ev, now, aggregate);
-    for flushed in admit.flushed {
-        let record = Arc::clone(record);
-        tokio::spawn(async move { record.submit(flushed).await });
-    }
+    // Kept for the sweep (and a clean stop's drain), not queued from a task of
+    // its own that a stop would not wait for.
+    record.coalescer().requeue(admit.flushed);
     if !admit.commit {
         return Ok(());
     }

@@ -1412,20 +1412,53 @@ pub async fn run_oauth_listener(
                     return;
                 }
             };
-            let io = hyper_util::rt::TokioIo::new(tls_stream);
-            let service = hyper::service::service_fn(move |mut req: Request<Incoming>| {
-                req.extensions_mut()
-                    .insert(crate::oauth_activity::PeerAddr(peer_addr));
-                serve(req, Arc::clone(&state), Arc::clone(&guard))
-            });
-            if let Err(e) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection_with_upgrades(io, service)
-                    .await
-            {
-                tracing::debug!(error = %e, %peer_addr, "connection error");
-            }
+            serve_connection(tls_stream, peer_addr, state, guard).await;
         });
+    }
+}
+
+/// How many requests one connection may have in flight: HTTP/2's
+/// `SETTINGS_MAX_CONCURRENT_STREAMS`, and the limit on a connection's recorded
+/// requests still running (ADR-120 D5).
+///
+/// A recorded request runs to its commit even after its stream is reset, so
+/// without a limit of its own a client could open a stream, reset it, and
+/// repeat, each time leaving a request holding a commit wait. A client that
+/// keeps to the advertised stream limit never meets this one, because its
+/// requests end before their streams close; only a client resetting streams
+/// is refused, `429`. 100 is the smallest value RFC 9113 §6.5.2 recommends
+/// advertising, so no conforming client is held back further than that.
+pub(crate) const MAX_REQUESTS_PER_CONNECTION: u32 = 100;
+
+/// Serve one accepted connection (HTTP/1.1, or HTTP/2 with prior knowledge),
+/// with each request's peer address and the connection's request limiter put
+/// on it. `guard` is the connection's slot under the listener's cap.
+pub(crate) async fn serve_connection<I>(
+    io: I,
+    peer_addr: std::net::SocketAddr,
+    state: Arc<Listener>,
+    guard: Arc<ConnGuard>,
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let requests =
+        crate::oauth_activity::ConnRequests(ConnLimiter::new(MAX_REQUESTS_PER_CONNECTION as usize));
+    let service = hyper::service::service_fn(move |mut req: Request<Incoming>| {
+        req.extensions_mut()
+            .insert(crate::oauth_activity::PeerAddr(peer_addr));
+        req.extensions_mut().insert(requests.clone());
+        serve(req, Arc::clone(&state), Arc::clone(&guard))
+    });
+    let mut builder =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    builder
+        .http2()
+        .max_concurrent_streams(MAX_REQUESTS_PER_CONNECTION);
+    if let Err(e) = builder
+        .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(io), service)
+        .await
+    {
+        tracing::debug!(error = %e, %peer_addr, "connection error");
     }
 }
 

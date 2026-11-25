@@ -171,6 +171,17 @@ impl Coalescer {
         }
     }
 
+    /// Count the refused `ev` straight into its kind's aggregate, with no
+    /// window of its own: a refusal answered without its own commit (the
+    /// record is unhealthy, or a connection is past its in-flight limit). An
+    /// aggregate this closes is kept for the next drain.
+    pub fn aggregate(&self, ev: &Event, now_us: i64) {
+        let mut inner = self.lock();
+        let mut flushed = Vec::new();
+        self.count_aggregate(&mut inner, ev, now_us, &mut flushed);
+        inner.unsent.extend(flushed);
+    }
+
     fn count_aggregate(
         &self,
         inner: &mut Inner,
