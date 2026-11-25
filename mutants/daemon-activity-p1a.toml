@@ -11,9 +11,13 @@ filter = "test(a_held_writer_refuses_at_the_timeout_and_recovers)"
 ref = "ADR-120 D5: no answer before its event commits"
 [[mutant.edit]]
 file = "daemon/src/activity/writer.rs"
-find = '''                Ok(true) => Ok(()),
-                _ => Err(Unavailable),'''
-replace = '''                _ => Ok::<(), Unavailable>(()),'''
+find = '''            match done.await {
+                Ok(true) => Ok(()),
+                _ => Err(Unavailable),
+            }'''
+replace = '''            // The answer goes without waiting for the commit.
+            drop(done);
+            Ok::<(), Unavailable>(())'''
 
 [[mutant]]
 id = "daemon-activity-p1a/ack-await-removed-on-the-listener"
@@ -23,9 +27,13 @@ filter = "test(a_held_writer_refuses_a_read_and_sends_none_of_it)"
 ref = "ADR-120 D5: no answer before its event commits"
 [[mutant.edit]]
 file = "daemon/src/activity/writer.rs"
-find = '''                Ok(true) => Ok(()),
-                _ => Err(Unavailable),'''
-replace = '''                _ => Ok::<(), Unavailable>(()),'''
+find = '''            match done.await {
+                Ok(true) => Ok(()),
+                _ => Err(Unavailable),
+            }'''
+replace = '''            // The answer goes without waiting for the commit.
+            drop(done);
+            Ok::<(), Unavailable>(())'''
 
 [[mutant]]
 id = "daemon-activity-p1a/address-rule-skipped-for-reads"
