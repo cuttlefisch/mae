@@ -28,6 +28,7 @@
           "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
           "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
           "doc_code": "PRO-1",
+          "approval_record": "signed_pdf",
           "draft": false,
           "working_version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c",
           "in_review": {
@@ -71,7 +72,8 @@
                 "import_event_id": "ev-0000000001",
                 "approved_by_name": "Example Approver"
               },
-              "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+              "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486",
+              "approval_record": "signed_pdf"
             },
             {
               "revision_id": "rv-01a7c2-1",
@@ -90,7 +92,8 @@
               "replaces": "rv-00a001-1",
               "superseded_by": null,
               "imported": null,
-              "signed_pdf_sha256": null
+              "signed_pdf_sha256": null,
+              "approval_record": "signed_pdf"
             }
           ]
         }

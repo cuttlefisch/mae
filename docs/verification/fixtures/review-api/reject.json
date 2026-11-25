@@ -70,7 +70,8 @@
                 "replaces": null,
                 "superseded_by": null,
                 "imported": null,
-                "signed_pdf_sha256": null
+                "signed_pdf_sha256": null,
+                "approval_record": "signed_pdf"
               }
             ]
           }

@@ -39,7 +39,9 @@
               "marking": "internal",
               "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
               "revision_id": "rv-01a7c2-3",
-              "imported": false
+              "imported": false,
+              "approval_record": "signed_pdf",
+              "signed_pdf_sha256": null
             },
             {
               "code": "PRO-1",
@@ -53,7 +55,9 @@
               "marking": "internal",
               "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
               "revision_id": "rv-00a001-1",
-              "imported": true
+              "imported": true,
+              "approval_record": "signed_pdf",
+              "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
             }
           ],
           "next_cursor": "c2"

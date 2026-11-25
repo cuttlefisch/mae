@@ -1,7 +1,7 @@
 {
   "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
   "method": "kb/review.set_policy",
-  "description": "Owner only, a person with a fresh second factor (C4, ADR-117 D6). Every field optional; the answer is the whole policy after the change. Each change is an event.",
+  "description": "Owner only, a person with a fresh second factor (C4, ADR-117 D6). Every field optional; the answer is the whole policy after the change. Each change is an event. `approval_record` is \"act\" (the default, B7) or \"signed_pdf\" (Amendment 4, E3); a change to it requires `reason`, recorded in its event.",
   "transport": {
     "http": "POST /",
     "headers": {
@@ -36,13 +36,15 @@
           ],
           "approval_requires_mfa": true,
           "approval_requires_rendered_pdf": false,
+          "approval_record": "signed_pdf",
           "reauth_max_age_secs": 300,
           "attachment_retention_days": 3650,
           "code_prefixes": [
             "PRO",
             "IT",
             "REG"
-          ]
+          ],
+          "reason": "In-system approval is not yet accepted as equivalent to a signature; the signed PDF is the interim record of approval (Amendment 4, E3)."
         }
       },
       "response": {
@@ -69,6 +71,7 @@
             ],
             "approval_requires_mfa": true,
             "approval_requires_rendered_pdf": false,
+            "approval_record": "signed_pdf",
             "reauth_max_age_secs": 300,
             "attachment_retention_days": 3650,
             "code_prefixes": [

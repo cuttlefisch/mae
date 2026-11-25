@@ -5,7 +5,7 @@ write-once and retained; deletion only under a retention policy; an approval can
 rendered PDF's hash and a second factor. Amendment 3 (2026-11-15): approval policy per document
 type, separate approve and publish acts, and what the record shows. Amendment 4 (2026-11-25): seven
 states with `superseded` and `derogated` in place of `historical`; a rejection or withdrawal ends the
-whole request; the signed PDF is the record of approval; signed originals enter through
+whole request; a per-KB policy makes the signed PDF the interim record of approval; signed originals enter through
 `mae-daemon kb import` under a required manifest; browser and native sign-in from the start; review
 acts before #727; revisions never deleted; the second-factor check, the method shapes, the event-log
 export and every refusal kind pinned, with fixtures. Still proposed: nothing here is built.
@@ -165,7 +165,9 @@ After entry into force only a new revision supersedes (`invalid_transition`).
 
 A revision holds content-addressed attachments: `rendered_pdf` and `signed_pdf`. They are uploaded
 and downloaded over HTTPS on the OAuth listener (`PUT`/`GET
-/kb/<kb>/revisions/<rev_id>/attachments/<kind>`), not as base64 in JSON-RPC, under their own cap,
+/kb/<kb>/revisions/<rev_id>/attachments/<kind>` *(superseded by O3's decision of 2026-11-16 and
+Amendment 4, E9: the bytes are uploaded through ADR-115's `POST /kb/<kb>/blobs` and bound to the
+revision by hash)*), not as base64 in JSON-RPC, under their own cap,
 `max_attachment_bytes`, separate from ADR-109 D6's node cap (`quota_exceeded`). The client renders
 the PDF from the frozen source and uploads it with the `source_sha256` it declares it rendered; the
 daemon refuses a declared source that is not the revision's, records the declaration for audit, and
@@ -331,7 +333,9 @@ correction; nothing is ever overwritten. An annulled attachment counts as refere
 (B5), exactly as a current one.
 
 Every `PUT` carries the sha256 the client computed (`expected_sha256`). The daemon hashes what it
-received and refuses a mismatch with `upload_digest_mismatch`, storing nothing. That is an integrity
+received and refuses a mismatch with `upload_digest_mismatch`, storing nothing. *(Superseded by O3's
+decision and Amendment 4, E9 and E11: the upload is ADR-115's, with `Content-Digest` and
+`blob_hash_mismatch`; the attach call binds the hash. B1's write-once rule applies to the binding.)* That is an integrity
 check on the transfer, separate from `attachment_exists`.
 
 ### B2. Two kinds, and the daemon stores bytes
@@ -413,7 +417,8 @@ operator act through `mae-daemon kb import`, under a required manifest.)*
 
 ### B7. The approval is the signature
 
-*(Amendment 4, E3 reverses this paragraph: the signed PDF is the record of approval. The two
+*(Amendment 4, E3 keeps this paragraph as the default and adds a per-KB policy,
+`approval_record: signed_pdf`, under which the signed PDF is the interim record of approval. The two
 switches below stay; E8 pins the second-factor check and drops the `acr` alternative.)*
 
 For a controlled document, the evidence that it was approved is the approval record itself, not an
@@ -718,23 +723,37 @@ A request is the approval unit (D4), so its ending is recorded on each member re
   (only a successor or a derogation ends a revision in force, V6).
 - A new attempt is a new request, which freezes the working copy again (D2). Nothing is reopened.
 
-This point was proposed by the build lead and confirmed by the owner on review of this amendment.
+This point was proposed by the build lead and confirmed by the owner on 2026-11-25.
 
-### E3. The signed PDF is the record of approval
+### E3. The signed PDF as the interim record of approval
 
-This **reverses B7's first paragraph** ("the evidence that it was approved is the approval record
-itself, not an image on the PDF").
+B7 stands: the evidence that a revision was approved is the approval record itself. This amendment
+adds a per-KB policy that, until an in-system approval is accepted as equivalent to a signature,
+makes the signed PDF the record of approval instead.
 
-- **The controlled record is the signed PDF.** It is the revision's `signed_pdf` attachment, stored
-  byte for byte. ADR-115 stores a PDF exactly as it arrives: the image processing of its D3a does not
-  apply to it, as built on the ADR-115 P1 branch (`feat/kb-attachment-store`, not yet on `main`:
-  `daemon/src/blob_store/process.rs`, "a PDF (`%PDF-` at offset 0) is stored exactly as it
-  arrived"). So the blob's address is the sha256 of the signed
-  file itself, and the `attach` event (B4) puts that sha256 into the signed, hash-chained log (D7).
-- **The in-system approve act stays, and stays gated.** It is still recorded (who, when, which
-  revision, the sign-in details of E8) and still refused to an author (D3, A3) and to anyone who is
-  not a person (B3). B7's two switches stay as they are. `approval_requires_rendered_pdf` binds the
-  act to the bytes that were rendered. `approval_requires_mfa` is pinned by E8.
+- **The policy.** `approval_record`, set through `kb/review.set_policy`, is `act` (B7; the default)
+  or `signed_pdf`.
+  - Under `act`, the in-system approve act is the record, and a signed PDF, when attached, is
+    supporting evidence (B3).
+  - Under `signed_pdf`, the record of approval is the revision's `signed_pdf` attachment, stored byte
+    for byte, and the in-system act is the gated step that leads to it.
+- **Why the interim policy exists.** A deployment may answer to an assessor who has not yet accepted
+  an in-system approval as equivalent to a signature. The owner has asked for a written criterion.
+  Until it exists, the signed PDF is the approval of record, held with its revision. If the criterion
+  accepts in-system approval, the KB switches to `act`.
+- **A switch is an owner act.** It is recorded as an event (D7) with its reason. It never rewrites a
+  revision approved before it: each revision's record states the policy in force when it was
+  approved.
+- **The bytes.** ADR-115 stores a PDF exactly as it arrives: the image processing of its D3a does not
+  apply to it, as built on the ADR-115 P1 branch (`daemon/src/blob_store/process.rs`, "a PDF
+  (`%PDF-` at offset 0) is stored exactly as it arrived"). So the blob's address is the sha256 of the
+  signed file itself, and the `attach` event (B4) puts that sha256 into the signed, hash-chained log
+  (D7).
+- **The in-system approve act stays, and stays gated, under either policy.** It is still recorded
+  (who, when, which revision, the sign-in details of E8) and still refused to an author (D3, A3) and
+  to anyone who is not a person (B3). B7's two switches stay as they are.
+  `approval_requires_rendered_pdf` binds the act to the bytes that were rendered.
+  `approval_requires_mfa` is pinned by E8.
 - **What the daemon does not verify, and why that is acceptable.** The daemon does not validate the
   PDF's signatures: not their cryptography, certificate chains, revocation or timestamps, not who
   signed, and not whether the signed content matches the revision's source. A scanned handwritten
@@ -750,10 +769,10 @@ itself, not an image on the PDF").
   signature is valid is a question for a validator built for it. Such a validator can answer it at
   any later time, against the same bytes, because the daemon kept them unchanged. A daemon that
   half-validated would only give false assurance.
-- **Until a signed PDF is attached**, the revision's record has no controlled copy of its approval.
-  `kb/review.status` and `kb/review.in_force` return `signed_pdf_sha256: null`, so the gap is visible.
-  Whether entry into force must wait for the signed PDF is not decided here (O19). B3 already allows
-  the signature to come after entry into force.
+- **Until a signed PDF is attached** under `signed_pdf`, the revision has no record of approval yet.
+  `kb/review.status` and `kb/review.in_force` return `approval_record: "signed_pdf"` and
+  `signed_pdf_sha256: null`, so the gap is visible. Whether entry into force must wait for the signed
+  PDF is not decided here (O19). B3 already allows the signature to come after entry into force.
 
 ### E4. Importing documents already approved and signed
 
@@ -838,7 +857,9 @@ This re-decides O9. A person may perform review acts from the browser client or 
 native editor obtains a person token by signing in through the IdP (ADR-111 P4). `kb/review.*` is
 served on the OAuth listener to any bound, person-flagged IdP token, whichever client obtained it.
 
-- PR-4 no longer waits on a decision about one surface. The two are built side by side.
+- PR-4 no longer waits on a decision about one surface. Both are supported by design. The owner
+  has scheduled the browser first (2026-11-25): native sign-in is built after the first production
+  signing, and nothing in PR-4 may assume a browser-only session.
 - B3's "until native clients sign in through the IdP, this means a browser session" no longer
   applies.
 - A native session over mutual TLS, or with a self-issued token, is still an agent (C3).
@@ -1013,7 +1034,7 @@ wire (storage column names are the build's to choose):
 | `kb/review.pending` (read) | `kb_id, cursor?, limit?` | `{kb_id, requests, next_cursor}` | a reader of the KB |
 | `kb/review.in_force` (read) | `kb_id, cursor?, limit?` | `{kb_id, rows:[{code, title, rev, state, since, approver, publisher, type, marking, node_id, revision_id, imported}], next_cursor}` | a reader of the KB |
 | `kb/review.events` (read) | `kb_id, cursor?, limit?` | `{kb_id, header, events, head, next_cursor}` (E10) | the owner and ADR-117 D9's auditor |
-| `kb/review.set_policy` | `kb_id` and any of `review_enabled, in_force_on_approval, required_acts, reviewers, approvers, approval_requires_mfa, approval_requires_rendered_pdf, reauth_max_age_secs, attachment_retention_days, code_prefixes` (types: C1, PR-9) | `{event_id, policy}` (the whole policy after the change) | the owner |
+| `kb/review.set_policy` | `kb_id` and any of `review_enabled, in_force_on_approval, required_acts, reviewers, approvers, approval_requires_mfa, approval_requires_rendered_pdf, approval_record, reauth_max_age_secs, attachment_retention_days, code_prefixes`, and `reason`, required when `approval_record` changes (`invalid_params` without it; E3) (types: C1, PR-9) | `{event_id, policy}` (the whole policy after the change) | the owner |
 | `kb/review.set_code` | `kb_id, node_id, doc_code` | `{event_id, doc_code}` | the owner |
 
 Field notes:
@@ -1752,8 +1773,8 @@ named.
   and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
   refused while revisions exist, as it is while history holds plaintext. No PR here builds the
   switch, but the first revision makes the question live, so it blocks PR-4.
-- **O19. Does entry into force wait for the signed PDF? (Amendment 4, E3)** The signed PDF is the
-  record of approval, and B3 lets it arrive after entry into force. Decide whether a KB or type may
+- **O19. Does entry into force wait for the signed PDF? (Amendment 4, E3)** Under
+  `approval_record: signed_pdf` the signed PDF is the record of approval, and B3 lets it arrive after entry into force. Decide whether a KB or type may
   require it before `enter_into_force`.
 - **O20. Scheduled entry into force (Amendment 4, E9).** `effective_at` may not be in the future.
   Decide whether a future date is accepted, and what moves the published pointer at that time.
@@ -1762,7 +1783,19 @@ named.
   `amr` array, which values a password-plus-second-factor sign-in and a password-only sign-in each
   produce, and that a `max_age` or `prompt=login` authorization moves `auth_time`. E8's rule is not
   relied on before this check.
+  - Measured so far, in a rehearsal of the deployment's IdP: a refresh does not re-evaluate the
+    application's policies or the second factor; refreshed tokens are re-issued with recomputed
+    group claims, so removing a person from a group takes effect within one refresh; and a refreshed
+    ID token comes back without `amr`. So the step-up proof can come only from a fresh
+    authorization, as E8 requires, and a refreshed token fails check 3 (`mfa_required`), which is
+    the intended outcome. Whether that IdP's *access* tokens carry `amr` and `auth_time` at all is
+    still to be measured.
 - **O22. Deleting drafts and mistakes (Amendment 4, E7).** Its own ADR, not this one.
+- **O23. A session with no absolute lifetime (Amendment 4, E8).** The same rehearsal measured that
+  each refresh resets the IdP session's idle lifetime, with no absolute cap, so a session refreshed
+  often enough never ends. E8 is unaffected, since controlled acts need a fresh authorization. The
+  general question, whether the daemon or the browser client's server enforces an absolute session
+  lifetime, belongs to ADR-111's session rules.
 - **O18. Incremental backup.** ADR-115 D1 says an incremental copy of the immutable blob files is
   exact; `mae-daemon backup` writes one archive each run. Either extend the format or narrow the
   claim (PR-1).

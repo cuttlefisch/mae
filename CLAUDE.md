@@ -816,8 +816,8 @@ author (authors counted since the last approved revision, which needs `apply_upd
 principal) and refuses agent principals; named sets publish atomically; entry into force and
 derogation are recorded acts; revisions survive purge as the document-control record. Folds in
 ADR-101/103's agent-edits-pending-review. Amendment 4 settles its open decisions: seven revision states
-(`superseded` and `derogated` replace `historical`), a rejection or withdrawal ends the whole request, the
-signed PDF is the record of approval, signed originals enter by `mae-daemon kb import` under a required
+(`superseded` and `derogated` replace `historical`), a rejection or withdrawal ends the whole request, a
+per-KB policy can make the signed PDF the interim record of approval, signed originals enter by `mae-daemon kb import` under a required
 SHA256SUMS manifest, and revisions are never deleted; it pins the second-factor check, every method's
 shape, the event-log export and all refusal kinds, with fixtures in `docs/verification/fixtures/review-api/`.
 
