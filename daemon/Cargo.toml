@@ -127,6 +127,12 @@ roxmltree = "0.21"
 # Streams a stored blob to the client in constant memory. Already in this
 # binary's graph (hyper-util, iroh), so no new crate.
 tokio-util = { version = "0.7", features = ["io"] }
+# ADR-120 D4: session ids are HMAC-SHA256 of the token's hash. Already in this
+# binary through mae-mcp's PSK authentication (same version), so no new crate.
+hmac = "0.13"
+# ADR-120 D1: an operator command's principal is its OS user (`geteuid`,
+# `getpwuid_r`). Already in the graph through tokio and rustix; no new crate.
+libc = "0.2"
 
 [dev-dependencies]
 hex = "0.4"

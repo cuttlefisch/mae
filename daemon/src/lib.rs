@@ -5,6 +5,7 @@
 //!
 //! @stability: stable
 
+pub mod activity;
 pub mod artifact_store;
 pub mod blob_store;
 pub mod checkpoint;
