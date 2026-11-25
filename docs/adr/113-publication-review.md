@@ -773,7 +773,20 @@ makes the signed PDF the record of approval instead.
 - **Until a signed PDF is attached** under `signed_pdf`, the revision has no record of approval yet.
   `kb/review.status` and `kb/review.in_force` return `approval_record: "signed_pdf"` and
   `signed_pdf_sha256: null`, so the gap is visible. Whether entry into force must wait for the signed
-  PDF is not decided here (O19). B3 already allows the signature to come after entry into force.
+  PDF was O19, decided by the owner on 2026-11-25: **under `signed_pdf`, no revision is in force
+  without its record of approval.**
+  - `kb/review.enter_into_force` is refused `signed_pdf_required` (+`missing`: the members with no
+    `signed_pdf`) unless every member of the request holds one.
+  - Under `in_force_on_approval`, the approval that completes a set is recorded, and its answer's
+    `in_force_since` is null. The set enters into force in the transaction of the
+    `kb/review.attach_signed_pdf` that gives its last member a signed PDF, with that attach's time
+    as `in_force_since`, and that answer carries it. Every member moves at once, as D4 requires.
+  - B3's "the signature may come after entry into force" does not apply under `signed_pdf`; it still
+    applies under `act`.
+  - An import (E4) always carries the signed PDF, so imported revisions are unaffected.
+  - Switching a KB from `act` to `signed_pdf` leaves revisions already in force as they are (each
+    records the policy it was approved under); approved revisions not yet in force then wait for
+    their PDFs.
 
 ### E4. Importing documents already approved and signed
 
@@ -1019,19 +1032,19 @@ wire (storage column names are the build's to choose):
 
 | Method | Params | Result | Who |
 |---|---|---|---|
-| `kb/review.request` | `kb_id, nodes:[{node_id, version}], set_name?, in_force_on_approval?, reason` | `{request_id, state:"in_review", revisions:[{revision_id, node_id, rev, source_sha256}]}` | a member with Edit |
+| `kb/review.request` | `kb_id, nodes:[{node_id, version}], set_name?, in_force_on_approval?, reason` | `{request_id, event_id, state:"in_review", revisions:[{revision_id, node_id, rev, source_sha256}]}` (`event_id`: the `request` event, D7) | a member with Edit |
 | `kb/review.act` | `kb_id, revision_id, act:"reviewed", comment?` | `{event_id, at}` | a listed reviewer |
 | `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?` | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
 | `kb/review.reject` | `kb_id, request_id, revision_id, reason` | `{event_id}` | a listed reviewer or approver |
 | `kb/review.withdraw` | `kb_id, request_id, reason` | `{event_id}` | the requester, or a listed approver |
 | `kb/review.enter_into_force` | `kb_id, request_id, effective_at` | `{event_id}` | C2's publisher |
 | `kb/review.derogate` | `kb_id, node_id, effective_at, reason` | `{event_id}` | a listed approver |
-| `kb/review.attach_signed_pdf` | `kb_id, revision_id, blob_sha256` | `{event_id}` | a listed approver (B3) |
+| `kb/review.attach_signed_pdf` | `kb_id, revision_id, blob_sha256` | `{event_id, in_force_since}` (`in_force_since` set only when, under `signed_pdf` and `in_force_on_approval`, this attach completed the set; E3) | a listed approver (B3) |
 | `kb/review.attach_rendered_pdf` | `kb_id, revision_id, blob_sha256, source_sha256` | `{event_id}` | as O13 decides |
 | `kb/review.attach_controlled_copy` | `kb_id, revision_id, blob_sha256` | `{event_id}` | a listed approver (C6) |
 | `kb/review.annul_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner or the uploader (B1) |
 | `kb/review.delete_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner, after the period (B5) |
-| `kb/review.status` (read) | `kb_id, node_id` | `{kb_id, node_id, doc_code, draft, working_version, in_review, approved, in_force, revisions}` | a reader of the KB |
+| `kb/review.status` (read) | `kb_id, node_id` | `{kb_id, node_id, doc_code, approval_record, draft, working_version, in_review, approved, in_force, revisions}`. `approved` is `null`, or the revision approved and not yet in force: `{request_id, revision_id, rev, approved_at, waiting_for}`, where `waiting_for` is `"set"` (other members of its request are not approved yet), `"signed_pdf"` (E3, O19) or `"enter_into_force"`. `in_force` is `null` or `{revision_id, rev, since, approval_record, signed_pdf_sha256}` | a reader of the KB |
 | `kb/review.pending` (read) | `kb_id, cursor?, limit?` | `{kb_id, requests, next_cursor}` | a reader of the KB |
 | `kb/review.in_force` (read) | `kb_id, cursor?, limit?` | `{kb_id, rows:[{code, title, rev, state, since, approver, publisher, type, marking, node_id, revision_id, imported}], next_cursor}` | a reader of the KB |
 | `kb/review.events` (read) | `kb_id, cursor?, limit?` | `{kb_id, header, events, head, next_cursor}` (E10) | the owner and ADR-117 D9's auditor |
@@ -1150,6 +1163,7 @@ other route kinds (`attachment_unsupported`, `attachment_too_many_pixels`, `atta
 | `reauthentication_required` | `max_age`, `auth_time` | controlled acts | C4, E8 |
 | `second_factor_unconfigured` | — | controlled acts | ADR-117 D6, E8 |
 | `rendered_pdf_required` | — | `approve` | B7 |
+| `signed_pdf_required` | `missing` | `enter_into_force`, under `approval_record: signed_pdf` | E3 (O19) |
 | `rendered_pdf_mismatch` | `current` | `approve` | B7 |
 | `source_mismatch` | `expected` | `attach_rendered_pdf` | D6 (unnamed until now) |
 | `attachment_exists` | `current` | attach methods | B1 |
@@ -1165,7 +1179,9 @@ other route kinds (`attachment_unsupported`, `attachment_too_many_pixels`, `atta
 | `import_overlap` | `node_id`, `latest_existing` | `kb import` | B6, E4 (new, O12) |
 | `manifest_mismatch` | `path`, `reason` (`hash`, `missing_line`, `unused_line`, `malformed_line`, `duplicate`) | `kb import` | E4 (new) |
 
-That is 39 kinds. The import CLI prints its refusals as `{ok: false, error: {kind, …}}` with `--json`.
+That is 40 kinds. **Grammar:** every refusal kind, and every event kind (E10), matches
+`^[a-z][a-z0-9_]{0,63}$`; a client must accept digits (`e2e_unsupported`) and must carry an unknown
+kind through as a refusal it does not specialise. The import CLI prints its refusals as `{ok: false, error: {kind, …}}` with `--json`.
 
 ### E12. Fixtures
 
@@ -1793,9 +1809,8 @@ named.
   and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
   refused while revisions exist, as it is while history holds plaintext. No PR here builds the
   switch, but the first revision makes the question live, so it blocks PR-4.
-- **O19. Does entry into force wait for the signed PDF? (Amendment 4, E3)** Under
-  `approval_record: signed_pdf` the signed PDF is the record of approval, and B3 lets it arrive after entry into force. Decide whether a KB or type may
-  require it before `enter_into_force`.
+- **Decided 2026-11-25 (O19):** under `approval_record: signed_pdf`, entry into force waits for the
+  signed PDF of every member (Amendment 4, E3; refusal `signed_pdf_required`).
 - **O20. Scheduled entry into force (Amendment 4, E9).** `effective_at` may not be in the future.
   Decide whether a future date is accepted, and what moves the published pointer at that time.
 - **O21. The IdP's real `amr` and `auth_time` (Amendment 4, E8).** Check, against a staging instance

@@ -2,7 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.195] - 2026-11-25
+
+
+
+
+### Features
+
+- *(sync)* A node's attachments map (ADR-115 D4) ([e6c9a41](https://github.com/cuttlefisch/mae/commit/e6c9a4149d76835b2ba3532f0f510d1c03ff4c91))
+- *(kb)* Project a node's attachments into node_attachments (ADR-115 D4) ([8d9bb06](https://github.com/cuttlefisch/mae/commit/8d9bb067d343dcea323e79606f384b14e3f9daf7))
+- *(daemon)* Attachments in the projection, the reader and the live set (ADR-115 D4, D5) ([a90c726](https://github.com/cuttlefisch/mae/commit/a90c726b5d361f35a04bea5edfd043cc6893574c))
+- *(daemon)* A per-KB content-addressed blob store with server-side image processing ([ba1a22e](https://github.com/cuttlefisch/mae/commit/ba1a22e379ab5c831e2ed6615c7e21b1817708c5))
+- *(daemon)* Upload, download and HEAD routes for KB attachments ([f6be950](https://github.com/cuttlefisch/mae/commit/f6be9507fd45ea9fab54222763c49f706b4f5a99))
+- *(daemon)* Backups carry the attachment store ([f6ec5ea](https://github.com/cuttlefisch/mae/commit/f6ec5ea26a23acc21b5ecafe9a926cb83b56c7b2))
+- *(daemon)* Store PDFs as application/pdf downloads, byte for byte ([ed0c6be](https://github.com/cuttlefisch/mae/commit/ed0c6bee24fb81c60f30c1989864d34ac7168da3))
+
+### Bug Fixes
+
+- *(sync)* Portable attachment NAMEs, one file per NAME, a fail-safe sweep reader ([03ff1f5](https://github.com/cuttlefisch/mae/commit/03ff1f5e881c232152492b69e7ca82cde74735eb))
+- *(sync)* Sweep reader walks every entry, rebirth copies the root raw, names fold by Unicode case folding ([a8766da](https://github.com/cuttlefisch/mae/commit/a8766dabc545a0d885192c162e88005c9cd6a30f))
+- *(daemon)* Bound attachment uploads in time, queue and SVG expansion ([0aed808](https://github.com/cuttlefisch/mae/commit/0aed80824b4f099190d7e1f5f3247718999613e8))
+- *(sync)* Compare a rejected attachment entry by NAME and value ([818f37f](https://github.com/cuttlefisch/mae/commit/818f37f93c412e817bfc79e6559c03dacfde20d6))
+
+### Documentation
+
+- *(adr)* ADR-115 D4 states the root map, the NAME rule and the two readers ([cb8d9e6](https://github.com/cuttlefisch/mae/commit/cb8d9e6ade0933ac888c7035e41c8d1d0d884571))
+- *(adr)* ADR-115 D4 folds NAMEs by Unicode case folding and counts NFD bytes ([6cc5002](https://github.com/cuttlefisch/mae/commit/6cc5002ad98c411de90bdc40198600357bae2712))
+- *(adr-115)* Record P1's as-built departures and their reasons ([fefaf49](https://github.com/cuttlefisch/mae/commit/fefaf49517887d41f53a5e90b1cf423ba7636cf5))
+- *(adr-115)* The blob store's accepted residuals, from its second review ([120332a](https://github.com/cuttlefisch/mae/commit/120332ad9f7ea3d3b1c320bc949a63d1fcd16071))
+
+### Testing
+
+- *(mutants)* Declare the attachments map's mutants ([56b2140](https://github.com/cuttlefisch/mae/commit/56b214075b278c44072c1951fa944b39b131a752))
+- *(daemon)* Keep the live-set test under the function-length ceiling ([86ea1e9](https://github.com/cuttlefisch/mae/commit/86ea1e981a3b2909974895e0e7bdf2eef4c08bf6))
+- *(mutants)* Declare the sweep, device-name and collision mutants ([d98cfc7](https://github.com/cuttlefisch/mae/commit/d98cfc7df45c9f0f9a2cde5d11b6854138bb3f5a))
+- *(mutants)* Declare the deep-walk, raw-rebirth and case-folding mutants ([7b2f408](https://github.com/cuttlefisch/mae/commit/7b2f4088472fe3bd303eb5244ad173c3c7b59e05))
+- *(mutants)* Declare the blob store's guards ([6071507](https://github.com/cuttlefisch/mae/commit/6071507f42b558c89f3ea2427f4dafd0ca2cecd3))
+- *(daemon)* The blob store's benchmarks, ignored and non-gating ([1ba8bfc](https://github.com/cuttlefisch/mae/commit/1ba8bfc4a246eed0a49fe8255aeaf1f92332a367))
+- *(site)* Withhold a node whose ID is blobs, and re-anchor the reserved-ID mutant ([f092e06](https://github.com/cuttlefisch/mae/commit/f092e0673df40929e65ef42e58951b06629d32d7))
+
 ## [0.14.194] - 2026-11-24
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.194 ([b3dc71c](https://github.com/cuttlefisch/mae/commit/b3dc71c7f9a1aa2e98b8fa2cded3d2fefc87717a))
+
+## [mae-org-v0.11.0] - 2026-11-24
 
 
 

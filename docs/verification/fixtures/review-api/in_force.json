@@ -1,7 +1,7 @@
 {
   "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
   "method": "kb/review.in_force",
-  "description": "C10: the master list of documents in force, one row per document, under the KB's read access. `approver`/`publisher` are labels; for an imported revision `approver` is the attested name and `imported` is true. Paged with an opaque cursor; same limit clamping as kb/query.list.",
+  "description": "C10: the master list of documents in force, one row per document, under the KB's read access. `approver`/`publisher` are labels; for an imported revision `approver` is the attested name and `imported` is true. Paged with an opaque cursor; same limit clamping as kb/query.list. Every row carries approval_record (the policy it was approved under) and signed_pdf_sha256: a row approved under \"act\" may have no signed PDF; one under \"signed_pdf\" never does (O19).",
   "transport": {
     "http": "POST /",
     "headers": {
@@ -40,7 +40,7 @@
               "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
               "revision_id": "rv-01a7c2-3",
               "imported": false,
-              "approval_record": "signed_pdf",
+              "approval_record": "act",
               "signed_pdf_sha256": null
             },
             {
@@ -94,7 +94,9 @@
               "marking": "restricted",
               "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
               "revision_id": "rv-01a7c2-2",
-              "imported": false
+              "imported": false,
+              "approval_record": "act",
+              "signed_pdf_sha256": null
             }
           ],
           "next_cursor": null
