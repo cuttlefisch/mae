@@ -1,0 +1,310 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.request",
+  "description": "Freezes each named node at the version the requester saw and opens one request. `rev` is null until the revision is approved (D2: revision numbers count approved revisions). `in_force_on_approval` may only tighten the KB's or type's setting.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "named set of three",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            },
+            {
+              "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+              "version": "4c2e1a0f9b8d7c6e5f4a3b2c1d0e9f8a"
+            },
+            {
+              "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
+              "version": "e7d6c5b4a3928170f6e5d4c3b2a19087"
+            }
+          ],
+          "set_name": "Purchasing procedures",
+          "in_force_on_approval": false,
+          "reason": "Annual revision of the purchasing procedures."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "request_id": "rq-01a7c2",
+          "state": "in_review",
+          "revisions": [
+            {
+              "revision_id": "rv-01a7c2-1",
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "rev": null,
+              "source_sha256": "63336ef5cf257aa058193f8d3051add9f587bd16da33292e48d66c7e15cb4185"
+            },
+            {
+              "revision_id": "rv-01a7c2-2",
+              "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+              "rev": null,
+              "source_sha256": "83857a79e442416bfe785d39d105cf239cbd453c2d321fdd8f3c1fc942ec881f"
+            },
+            {
+              "revision_id": "rv-01a7c2-3",
+              "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
+              "rev": null,
+              "source_sha256": "42f47205b9d6f498188907a227dbcdc4dc628e40dc05766d6f3bd406d3b2bc8f"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "the working copy moved on",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "00000000000000000000000000000000"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32603,
+          "message": "node has changed since that version",
+          "data": {
+            "kind": "stale_version",
+            "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+            "current": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+          }
+        }
+      }
+    },
+    {
+      "case": "review is off for this KB",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32603,
+          "message": "publication review is not enabled for this KB",
+          "data": {
+            "kind": "review_not_enabled"
+          }
+        }
+      }
+    },
+    {
+      "case": "no reason given",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ]
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": -32602,
+          "message": "reason is required",
+          "data": {
+            "kind": "invalid_params",
+            "param": "reason"
+          }
+        }
+      }
+    },
+    {
+      "case": "node is not in this KB",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "ffffffff-0000-4000-8000-000000000000",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32603,
+          "message": "no such node in this KB",
+          "data": {
+            "kind": "node_not_in_kb"
+          }
+        }
+      }
+    },
+    {
+      "case": "E2E KB",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "error": {
+          "code": -32600,
+          "message": "publication review serves plaintext KBs only",
+          "data": {
+            "kind": "e2e_unsupported"
+          }
+        }
+      }
+    },
+    {
+      "case": "undeclared vocabulary value",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "error": {
+          "code": -32603,
+          "message": "value is not declared in the approved vocabulary",
+          "data": {
+            "kind": "vocabulary_violation",
+            "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+            "field": "tags",
+            "value": "urgnet"
+          }
+        }
+      }
+    },
+    {
+      "case": "requester loosens in_force_on_approval",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "in_force_on_approval": true,
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "error": {
+          "code": -32603,
+          "message": "only the owner may loosen in_force_on_approval",
+          "data": {
+            "kind": "role_forbidden"
+          }
+        }
+      }
+    },
+    {
+      "case": "caller is not a member (identical for an unknown KB)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "error": {
+          "code": -32603,
+          "message": "not a member of this KB",
+          "data": {
+            "kind": "not_member"
+          }
+        }
+      }
+    }
+  ]
+}

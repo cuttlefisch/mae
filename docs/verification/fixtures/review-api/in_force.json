@@ -1,0 +1,129 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.in_force",
+  "description": "C10: the master list of documents in force, one row per document, under the KB's read access. `approver`/`publisher` are labels; for an imported revision `approver` is the attested name and `imported` is true. Paged with an opaque cursor; same limit clamping as kb/query.list.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "page 1",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 53,
+        "method": "kb/review.in_force",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "limit": 2
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 53,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "rows": [
+            {
+              "code": "IT-3",
+              "title": "Receiving goods",
+              "rev": 2,
+              "state": "in_force",
+              "since": "2000-01-05T08:00:00.000Z",
+              "approver": "Approver",
+              "publisher": "Approver",
+              "type": "work_instruction",
+              "marking": "internal",
+              "node_id": "3f2e6c40-8d91-4a3a-9c5e-4b7f8a9cadb3",
+              "revision_id": "rv-01a7c2-3",
+              "imported": false,
+              "approval_record": "signed_pdf",
+              "signed_pdf_sha256": null
+            },
+            {
+              "code": "PRO-1",
+              "title": "Purchasing",
+              "rev": 0,
+              "state": "in_force",
+              "since": "2000-01-01T00:00:00.000Z",
+              "approver": "Example Approver",
+              "publisher": null,
+              "type": "procedure",
+              "marking": "internal",
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "revision_id": "rv-00a001-1",
+              "imported": true,
+              "approval_record": "signed_pdf",
+              "signed_pdf_sha256": "f7c6988ef6a00e55746c4e675557f9bc0690b0f87e613103a618a6b0c348e486"
+            }
+          ],
+          "next_cursor": "c2"
+        }
+      }
+    },
+    {
+      "name": "page 2 (last)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 54,
+        "method": "kb/review.in_force",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "limit": 2,
+          "cursor": "c2"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 54,
+        "result": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "rows": [
+            {
+              "code": "PRO-2",
+              "title": "Supplier evaluation",
+              "rev": 1,
+              "state": "in_force",
+              "since": "2000-01-05T08:00:00.000Z",
+              "approver": "Approver",
+              "publisher": "Owner",
+              "type": "procedure",
+              "marking": "restricted",
+              "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+              "revision_id": "rv-01a7c2-2",
+              "imported": false
+            }
+          ],
+          "next_cursor": null
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "not a reader",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "kb/review.in_force",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 55,
+        "error": {
+          "code": -32603,
+          "message": "not a member of this KB",
+          "data": {
+            "kind": "not_member"
+          }
+        }
+      }
+    }
+  ]
+}

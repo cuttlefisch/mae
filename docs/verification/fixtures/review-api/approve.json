@@ -1,0 +1,254 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.approve",
+  "description": "Approves one revision (an act, still gated: approver is not an author, persons only, second factor per policy). The controlled record of the approval is the signed PDF attached afterwards (kb/review.attach_signed_pdf). `in_force_since` is set only when this approval completed a set that goes into force on approval.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "first member of three approved",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "rendered_pdf_sha256": "ef6335dd6440d50a83b0584e57b04fdf6b564fc52d20adfa23bf5ecc336de3f3"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "result": {
+          "event_id": "ev-0000000005",
+          "revision_state": "approved",
+          "in_force_since": null
+        }
+      }
+    },
+    {
+      "name": "last member approved under in_force_on_approval",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-3"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "result": {
+          "event_id": "ev-0000000007",
+          "revision_state": "in_force",
+          "in_force_since": "2000-01-04T10:05:00.000Z"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "not on the approver list",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "error": {
+          "code": -32603,
+          "message": "not on this KB's approver list",
+          "data": {
+            "kind": "not_approver"
+          }
+        }
+      }
+    },
+    {
+      "case": "an agent, even when listed",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "error": {
+          "code": -32603,
+          "message": "an agent cannot act on a review",
+          "data": {
+            "kind": "agent_forbidden"
+          }
+        }
+      }
+    },
+    {
+      "case": "the reviewer approves where the type forbids it",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "error": {
+          "code": -32603,
+          "message": "a required act has not been performed yet",
+          "data": {
+            "kind": "act_out_of_order",
+            "capacity": "approve",
+            "awaiting": [
+              "review"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "case": "approval_requires_rendered_pdf, none attached",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32603,
+          "message": "this KB requires the rendered PDF's hash on approval",
+          "data": {
+            "kind": "rendered_pdf_required"
+          }
+        }
+      }
+    },
+    {
+      "case": "approval_requires_rendered_pdf, other bytes",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "rendered_pdf_sha256": "d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "error": {
+          "code": -32603,
+          "message": "that is not the revision's current rendered PDF",
+          "data": {
+            "kind": "rendered_pdf_mismatch",
+            "current": "ef6335dd6440d50a83b0584e57b04fdf6b564fc52d20adfa23bf5ecc336de3f3"
+          }
+        }
+      }
+    },
+    {
+      "case": "token has no qualifying amr",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "error": {
+          "code": -32603,
+          "message": "sign in again with a second factor",
+          "data": {
+            "kind": "mfa_required",
+            "accepted_amr": [
+              "mfa"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "case": "sign-in older than the KB's window (or auth_time absent)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 23,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 23,
+        "error": {
+          "code": -32603,
+          "message": "sign in again to approve",
+          "data": {
+            "kind": "reauthentication_required",
+            "max_age": 300,
+            "auth_time": 946890000
+          }
+        }
+      }
+    },
+    {
+      "case": "requirement on, operator configured no amr values",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 24,
+        "method": "kb/review.approve",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 24,
+        "error": {
+          "code": -32603,
+          "message": "no second-factor values are configured; every controlled act is refused",
+          "data": {
+            "kind": "second_factor_unconfigured"
+          }
+        }
+      }
+    }
+  ]
+}
