@@ -1,0 +1,183 @@
+# ADR-113 PR-5 (acts and publication): one mutant per guard, each named for
+# the test that must catch it. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "daemon-review-pr5/agent-may-act"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(authors_agents_and_unlisted_people_are_refused)"
+ref = "D3, C3: an agent never acts"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    if who.kind == PrincipalKind::Person {'''
+replace = '''    if true {'''
+
+[[mutant]]
+id = "daemon-review-pr5/any-group-is-listed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(authors_agents_and_unlisted_people_are_refused)"
+ref = "D3: only a listed group acts"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''        Performer::Group(g) => groups.iter().any(|x| x == g),'''
+replace = '''        Performer::Group(_) => !groups.is_empty(),'''
+
+[[mutant]]
+id = "daemon-review-pr5/requester-not-an-author"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(authors_agents_and_unlisted_people_are_refused)"
+ref = "D3: the requester is an author"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    if rev.created_by == who.principal {'''
+replace = '''    if rev.created_by == who.principal && false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/editor-record-author-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_listed_approver_may_withdraw_unless_an_author)"
+ref = "D3, A1: an editor since the last approval is an author"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''        Authors::Known(set) if set.contains(&who.principal) => Err(author()),'''
+replace = '''        Authors::Known(set) if set.is_empty() && set.contains(&who.principal) => Err(author()),'''
+
+[[mutant]]
+id = "daemon-review-pr5/unknown-authors-allowed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(unknown_authors_refuse_approval)"
+ref = "A3: unknown authors refuse approval"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''        Authors::Unknown(_) => Err(McpError::authors_unknown('''
+replace = '''        Authors::Unknown(_) if false => Err(McpError::authors_unknown('''
+
+[[mutant]]
+id = "daemon-review-pr5/required-act-skipped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_required_review_comes_first_and_by_someone_else)"
+ref = "D3: required acts come first"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    if let Some(missing) = awaiting(&i.required, &acts, &i.principal) {'''
+replace = '''    if let Some(missing) = awaiting(&i.required, &acts, &i.principal).filter(|_| false) {'''
+
+[[mutant]]
+id = "daemon-review-pr5/one-person-two-acts"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_required_review_comes_first_and_by_someone_else)"
+ref = "C3: one person, one act on a revision"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let acts = store::acts_of(c, &i.id)?;
+    if acts.iter().any(|(_, p)| *p == i.principal) {'''
+replace = '''    let acts = store::acts_of(c, &i.id)?;
+    if acts.iter().any(|(_, p)| *p == i.principal) && false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/set-moves-per-member"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_set_enters_into_force_whole_or_not_at_all)"
+ref = "D4: a set enters into force whole"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let all_approved = members.iter().all(|m| m.state == "approved");'''
+replace = '''    let all_approved = true;'''
+
+[[mutant]]
+id = "daemon-review-pr5/signed-pdf-not-awaited-on-approval"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_entry_into_force_waits_for_the_pdf)"
+ref = "E3, O19: no entry into force without the PDF"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let by_act = members.iter().all(|m| m.approval_record != "signed_pdf");'''
+replace = '''    let by_act = true;'''
+
+[[mutant]]
+id = "daemon-review-pr5/signed-pdf-not-awaited-by-act"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_entry_into_force_waits_for_the_pdf)"
+ref = "E3, O19: enter_into_force waits for every PDF"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                if !no_pdf.is_empty() {'''
+replace = '''                if !no_pdf.is_empty() && false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/incomplete-set-enters"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_set_enters_into_force_whole_or_not_at_all)"
+ref = "D4: set_incomplete"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                if !missing.is_empty() {'''
+replace = '''                if !missing.is_empty() && false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/previous-not-superseded"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(approve_then_enter_into_force_then_supersede)"
+ref = "D4: the previous in-force revision is superseded"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                store::end_revision(c, &prev.revision_id, "superseded", since, None, None)?;'''
+replace = '''                let _ = &prev;'''
+
+[[mutant]]
+id = "daemon-review-pr5/reject-ends-one-member"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(rejecting_one_member_ends_the_set)"
+ref = "E2: a rejection ends the whole request"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                    let note = named.then_some(reason.as_str());'''
+replace = '''                    if !named {
+                        continue;
+                    }
+                    let note = named.then_some(reason.as_str());'''
+
+[[mutant]]
+id = "daemon-review-pr5/approver-cannot-withdraw"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_listed_approver_may_withdraw_unless_an_author)"
+ref = "E2: a listed approver may withdraw"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if req.requester != who.principal && !who.approver {'''
+replace = '''    if req.requester != who.principal {'''
+
+[[mutant]]
+id = "daemon-review-pr5/named-member-not-checked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_performer_lists_are_stored_and_a_named_member_must_be_a_person)"
+ref = "ADR-117 D8: a named performer is a person"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    match members.into_iter().find(|m| !persons.contains(*m)) {'''
+replace = '''    match members.into_iter().find(|m| m.is_empty() && !persons.contains(*m)) {'''
+
+[[mutant]]
+id = "daemon-review-pr5/lists-not-migrated"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_pr4_policy_table_gains_empty_performer_lists)"
+ref = "PR-5: a PR-4 database gains the lists"
+[[mutant.edit]]
+file = "daemon/src/review/store.rs"
+find = '''        if !has_column(conn, "kb_review_policy", col)? {'''
+replace = '''        if !has_column(conn, "kb_review_policy", col)? && false {'''

@@ -22,6 +22,7 @@
 //! collection's owner field. The import act (A4, E4) is an operator CLI and
 //! must never get a method here (principle #16).
 
+mod acts;
 pub mod chain;
 mod methods;
 mod reads;
@@ -59,6 +60,11 @@ pub async fn dispatch(
     match method {
         "kb/review.request" => methods::request(store, &kb_id, who, params, limits).await,
         "kb/review.withdraw" => methods::withdraw(store, &kb_id, who, params).await,
+        "kb/review.act" => acts::act(store, &kb_id, who, params).await,
+        "kb/review.approve" => acts::approve(store, &kb_id, who, params).await,
+        "kb/review.reject" => acts::reject(store, &kb_id, who, params).await,
+        "kb/review.enter_into_force" => acts::enter_into_force(store, &kb_id, who, params).await,
+        "kb/review.derogate" => acts::derogate(store, &kb_id, who, params).await,
         "kb/review.set_policy" => methods::set_policy(store, &kb_id, who, params).await,
         "kb/review.set_code" => methods::set_code(store, &kb_id, who, params).await,
         "kb/review.status" => reads::status(store, &kb_id, who, params).await,

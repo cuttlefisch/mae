@@ -15,6 +15,7 @@ use crate::kb_query::{self, KbQueryLimits};
 use crate::oauth_self_issue::{Credential, PrincipalKind, ValidatedPrincipal};
 use crate::storage::SqliteBackend;
 
+mod act_tests;
 mod chain_store_tests;
 mod fixture_shape_tests;
 mod freeze_race_tests;

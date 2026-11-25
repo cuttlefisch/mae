@@ -129,7 +129,12 @@
             "capacity": "review",
             "performer": {
               "group": "quality-reviewers"
-            }
+            },
+            "performers": [
+              {
+                "group": "quality-reviewers"
+              }
+            ]
           }
         }
       }

@@ -553,7 +553,7 @@ async fn a_non_requester_gets_one_refusal_whatever_the_request_state() {
     }
     let only = BTreeSet::from([(
         "not_approver".to_string(),
-        "only the requester may withdraw this request".to_string(),
+        "only the requester or a listed approver may withdraw this request".to_string(),
     )]);
     assert_eq!(seen, only);
 }

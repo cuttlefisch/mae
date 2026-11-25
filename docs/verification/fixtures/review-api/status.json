@@ -40,7 +40,12 @@
                 "capacity": "approve",
                 "performer": {
                   "group": "quality-approvers"
-                }
+                },
+                "performers": [
+                  {
+                    "group": "quality-approvers"
+                  }
+                ]
               }
             ]
           },

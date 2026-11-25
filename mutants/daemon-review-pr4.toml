@@ -212,8 +212,8 @@ filter = "test(a_withdrawal_by_the_requester_ends_the_whole_request)"
 ref = "E2 as PR-4 builds it: the requester withdraws"
 [[mutant.edit]]
 file = "daemon/src/review/methods.rs"
-find = '''    if req.requester != principal {'''
-replace = '''    if false && req.requester != principal {'''
+find = '''    if req.requester != who.principal && !who.approver {'''
+replace = '''    if false && req.requester != who.principal && !who.approver {'''
 
 [[mutant]]
 id = "daemon-review-pr4/never-a-draft"

@@ -22,10 +22,10 @@ use crate::storage::StorageError;
 
 /// A revision is open while its request can still move: in review, or
 /// approved and not yet in force.
-const OPEN_STATES: &[&str] = &["in_review", "approved"];
+pub(super) const OPEN_STATES: &[&str] = &["in_review", "approved"];
 /// States a withdrawal can no longer end (E1): only a successor or a
 /// derogation ends a revision in force.
-const ENDED_BY_FORCE: &[&str] = &["in_force", "superseded", "derogated"];
+pub(super) const ENDED_BY_FORCE: &[&str] = &["in_force", "superseded", "derogated"];
 
 /// An opaque identifier (E9): `prefix-` and 16 random hex digits.
 fn new_id(prefix: &str) -> String {
@@ -39,9 +39,9 @@ fn node_not_in_kb() -> McpError {
 }
 
 /// A refusal decided inside a transaction, or the transaction's own failure.
-type TxnResult<T> = Result<Result<T, McpError>, StorageError>;
+pub(super) type TxnResult<T> = Result<Result<T, McpError>, StorageError>;
 
-fn flatten<T>(r: TxnResult<T>) -> Result<T, McpError> {
+pub(super) fn flatten<T>(r: TxnResult<T>) -> Result<T, McpError> {
     r.map_err(storage_fault)?
 }
 
@@ -300,20 +300,36 @@ pub(super) async fn withdraw(
     who: &ValidatedPrincipal,
     params: &Value,
 ) -> Result<Value, McpError> {
-    gate(store, kb_id, Some(&who.principal), true).await?;
+    let g = gate(store, kb_id, Some(&who.principal), true).await?;
     let request_id = required_str(params, "request_id")?.to_string();
     let reason = required_text(params, "reason")?.to_string();
     within_bytes("reason", &reason, MAX_REASON_BYTES)?;
+    // E2: a listed approver who is a person and an author of no member may
+    // withdraw too; anyone else gets the requester's refusal.
+    let approver =
+        super::acts::approver_may_withdraw(store, kb_id, &request_id, who, &g.policy.approvers)
+            .await?;
     let signer = signer(store)?;
     let (kb, principal, actor) = (kb_id.to_string(), who.principal.clone(), actor(who));
     let at = store.now_ms() as i64;
     flatten(
         store
             .review_write(move |c| {
-                record_withdrawal(c, &signer, &kb, &request_id, &reason, &principal, actor, at)
+                let who = Withdrawer {
+                    principal: &principal,
+                    approver,
+                };
+                record_withdrawal(c, &signer, &kb, &request_id, &reason, who, actor, at)
             })
             .await,
     )
+}
+
+/// Who is withdrawing: their principal, and whether they qualified as a
+/// listed approver (checked before the write, E2).
+struct Withdrawer<'a> {
+    principal: &'a str,
+    approver: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -323,7 +339,7 @@ fn record_withdrawal(
     kb_id: &str,
     request_id: &str,
     reason: &str,
-    principal: &str,
+    who: Withdrawer<'_>,
     actor: Value,
     at: i64,
 ) -> TxnResult<Value> {
@@ -334,9 +350,9 @@ fn record_withdrawal(
     };
     // Before anything about its state: a non-requester learns nothing of where
     // the request stands (open, ended or in force) from the refusal.
-    if req.requester != principal {
+    if req.requester != who.principal && !who.approver {
         return Ok(Err(McpError::not_approver(
-            "only the requester may withdraw this request".into(),
+            "only the requester or a listed approver may withdraw this request".into(),
         )));
     }
     let members = store::request_revisions(c, request_id)?;

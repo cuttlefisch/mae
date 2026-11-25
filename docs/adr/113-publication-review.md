@@ -1063,7 +1063,9 @@ Field notes:
 - **`status`.** Its `revisions` entries carry: `revision_id, rev, state, request_id, set_name,
   source_sha256, version, created_at, approved_at, in_force_since, ended_at, reason, rejected_with,
   replaces, superseded_by, imported, signed_pdf_sha256`. Its `in_review.waiting_for` names
-  capacities and a group or a label, never the members of a group (ADR-117 D1).
+  capacities and a group or a label, never the members of a group (ADR-117 D1). *(PR-5: each entry
+  is a required act not yet performed; `performers` is the whole list that may perform it, and
+  `performer` its first entry, what a one-entry list shows.)*
 - **`pending`.** It is per KB. The proposal sent to the client had `kb_id` optional and "the caller's
   open requests". That is ADR-117 D1's `kb/review.my_pending`, which spans KBs; this method stays
   the KB's own list, as ADR-117 states.
