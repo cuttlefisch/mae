@@ -523,6 +523,55 @@ turns off part of the record: no per-route opt-out and no sampling.
 | `tracing` | Unchanged and not a record. Nothing that needs to be complete or durable goes only there. |
 | ADR-027 metrics | Gains the writer's counters (D5), which carry the AU-5 alert. |
 
+### D13. The operator contract: health, status, and the head line
+
+A deployment's monitoring and log collector are built against exactly this, so it is part of the
+decision, and a test pins each line of it.
+
+**Health.** `GET /api/health` on the OAuth listener (the address in `oauth.bind`), unauthenticated,
+status only, as ADR-111 P1 defines it:
+- `200 {"status":"ok"}` when the record is disabled, or enabled and taking events;
+- `503 {"status":"unavailable"}` when the record is enabled and the writer has failed, or an event has
+  waited past `activity.commit_timeout_ms` without a successful commit since. Nothing else is said:
+  the public surface carries no detail (`health_opens_nothing_else`).
+- It recovers by itself. The writer retries the failed batch, and the first successful commit returns
+  the health check to `200`. No restart is needed, and a restart does not skip the alert: a daemon
+  that cannot open `activity.db` at start-up answers `503` from its first request.
+
+**Status, with the counters.** `mae-daemon activity status [--json]` on the host. Exit 0 healthy, 1
+unhealthy, 2 when it cannot reach the running daemon. `--json` prints one object:
+`{"healthy", "unavailable_total", "queue_depth", "last_commit_age_ms", "last_head_age_s",
+"chains": {"long": {"seq", "entry_hash"}, "short": {"seq", "entry_hash"}}}`. mae-daemon has no
+metrics endpoint; this command is where the counters are read.
+
+**Log lines.** Through the daemon's ordinary log (stdout): one `ERROR` line with the stable message
+`activity_record_unavailable` on the transition to unhealthy, and one `INFO` line
+`activity_record_recovered` on recovery. A collector may alert on either signal; the health check is
+the authoritative one.
+
+**The head line.** Each signed head is written to **stdout** as one line holding one JSON object,
+outside the log formatter, so it is never wrapped in a log prefix. The line begins with exactly
+`{"mae_activity_head":1,`, which is how a collector selects it. Its fields:
+- `mae_activity_head`: the line format's version, `1`;
+- `chain`: `"long"` or `"short"`;
+- `seq`: the last event the head covers;
+- `entry_hash`: that event's `entry_hash`, lowercase hex;
+- `at`: the head's time, RFC 3339 UTC with milliseconds;
+- `key_id`: the SHA-256 of the daemon's Ed25519 public key, lowercase hex;
+- `sig`: the Ed25519 signature, base64, over the head's canonical bytes (D7's domain prefix and the
+  RFC 8785 encoding of the object without `sig`).
+
+**Cadence:** a head for each chain at start-up and at shutdown, and every `activity.head_interval_secs`
+(default 10) for a chain that advanced since its last head, never for an idle one. So an idle daemon
+writes nothing between its start and stop lines, and `last_head_age_s` grows; that is not an alarm by
+itself.
+
+**The external copy.** `mae-daemon activity verify --key <public-key-file> --against <file>` reads
+`<file>` as lines, ignores every line that does not begin with the head prefix, and checks the record
+against the latest head of each chain that verifies under `--key`. The log host's copy is therefore
+simply the collected lines, one file or a concatenation, in any order. A head with a bad signature
+fails verification; it is never skipped silently.
+
 ## Consequences
 
 - Every request to a daemon with the record on is either recorded or refused. A read is never
