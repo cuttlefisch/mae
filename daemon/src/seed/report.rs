@@ -63,6 +63,8 @@ fn counts(plan: &SeedPlan) -> Value {
         "history_diff_entries": plan.history_diff_entries,
         "objects_verified": plan.objects_verified,
         "missing_code": plan.missing_code.len(),
+        "attachments": plan.unique_attachments().len(),
+        "attachment_bytes": plan.unique_attachments().iter().map(|a| a.size).sum::<u64>(),
     })
 }
 
@@ -85,6 +87,14 @@ fn node_json(n: &PlannedNode) -> Value {
         "body_bytes": f.body.len(),
         "body_sha256": sha256_hex(f.body.as_bytes()),
         "canonical": n.canonical,
+        "attachments": n.attachments.iter().map(|a| json!({
+            "name": a.name,
+            "path": a.path,
+            "blob": a.blob,
+            "sha256": a.sha256,
+            "size": a.size,
+            "media_type": a.media_type,
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -111,6 +121,19 @@ fn render(plan: &SeedPlan, update: Option<&UpdateDiff>) -> String {
         plan.refusals.iter().map(|r| {
             let path = if r.path.is_empty() { "(run)" } else { &r.path };
             format!("{path}: {}: {}", r.kind.as_str(), r.detail)
+        }),
+    );
+    // ADR-115 D7: every file the apply would store, as processing makes it.
+    section(
+        &mut out,
+        "attachments: NAME -> sha256 of the processed file",
+        plan.nodes.iter().flat_map(|n| {
+            n.attachments.iter().map(|a| {
+                format!(
+                    "{}: {} -> {} ({} bytes, {}) from {}",
+                    n.path, a.name, a.sha256, a.size, a.media_type, a.path
+                )
+            })
         }),
     );
     section(

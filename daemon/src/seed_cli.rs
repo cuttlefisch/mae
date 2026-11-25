@@ -48,7 +48,7 @@ const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag
 /// `mae-daemon kb <action> …`. Exit code: 0 OK, 1 refused or failed, 2 usage.
 pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
-        Some("seed") => match run_seed(&rest[1..]) {
+        Some("seed") => match run_seed(&rest[1..], attachment_limits(config)) {
             Step::Exit(code) => code,
             Step::Store(args) => crate::seed_apply_cli::run_apply(config, &args).await,
         },
@@ -97,7 +97,7 @@ pub(crate) struct SeedArgs {
     pub(crate) plan_hash: Option<String>,
 }
 
-fn run_seed(args: &[String]) -> Step {
+fn run_seed(args: &[String], limits: seed::AttachmentLimits) -> Step {
     // Parsing reads nothing. `--dry-run` is a flag of the parse, not a word
     // searched for in the raw arguments: `--name --dry-run` names a KB
     // "--dry-run" (refused as a value) rather than passing the guard.
@@ -111,12 +111,12 @@ fn run_seed(args: &[String]) -> Step {
     if !parsed.dry_run || parsed.update {
         return Step::Store(Box::new(parsed));
     }
-    Step::Exit(dry_run(&parsed))
+    Step::Exit(dry_run(&parsed, limits))
 }
 
 /// The plan options the arguments name (the same for a dry run and an apply,
 /// so the apply recomputes exactly the plan that was reviewed).
-pub(crate) fn plan_options(parsed: &SeedArgs) -> PlanOptions {
+pub(crate) fn plan_options(parsed: &SeedArgs, limits: seed::AttachmentLimits) -> PlanOptions {
     PlanOptions {
         repo: parsed.git.clone().unwrap_or_default(),
         rev: parsed.rev.clone().unwrap_or_default(),
@@ -128,21 +128,34 @@ pub(crate) fn plan_options(parsed: &SeedArgs) -> PlanOptions {
         require_canonical: parsed.require_canonical,
         code_property: parsed.code_property.clone(),
         allow_received_times: parsed.allow_received_times,
+        attachment_limits: limits,
+    }
+}
+
+/// The attachment bounds `[oauth]` sets (ADR-115 D7): a seed reads and
+/// processes files under the same limits as an upload, in its dry run too.
+pub(crate) fn attachment_limits(config: &DaemonConfig) -> seed::AttachmentLimits {
+    seed::AttachmentLimits {
+        max_bytes: config.oauth.max_attachment_bytes,
+        max_pixels: config.oauth.max_attachment_pixels,
     }
 }
 
 /// The default plan options for `repo` at `rev`, as a bare `kb seed` would use.
 #[cfg(test)]
 pub(crate) fn plan_options_for_test(repo: &std::path::Path, rev: &str) -> PlanOptions {
-    plan_options(&SeedArgs {
-        git: Some(repo.to_path_buf()),
-        rev: Some(rev.to_string()),
-        ..SeedArgs::default()
-    })
+    plan_options(
+        &SeedArgs {
+            git: Some(repo.to_path_buf()),
+            rev: Some(rev.to_string()),
+            ..SeedArgs::default()
+        },
+        seed::AttachmentLimits::default(),
+    )
 }
 
-fn dry_run(parsed: &SeedArgs) -> i32 {
-    let opts = plan_options(parsed);
+fn dry_run(parsed: &SeedArgs, limits: seed::AttachmentLimits) -> i32 {
+    let opts = plan_options(parsed, limits);
     match seed::plan(&opts) {
         Ok(plan) => {
             if parsed.json {
@@ -332,14 +345,16 @@ mod tests {
                 "x",
             ],
         ] {
-            assert_eq!(exit(run_seed(&args(a))), 2, "{a:?}");
+            assert_eq!(
+                exit(run_seed(&args(a), seed::AttachmentLimits::default())),
+                2,
+                "{a:?}"
+            );
         }
-        match run_seed(&args(&[
-            "--git=/r",
-            "--rev=v1",
-            "--kb-id=k",
-            "--plan-hash=h",
-        ])) {
+        match run_seed(
+            &args(&["--git=/r", "--rev=v1", "--kb-id=k", "--plan-hash=h"]),
+            seed::AttachmentLimits::default(),
+        ) {
             Step::Store(a) => assert_eq!(a.plan_hash.as_deref(), Some("h")),
             Step::Exit(c) => panic!("a complete apply must reach apply, got exit {c}"),
         }
@@ -391,34 +406,35 @@ mod tests {
                 "--kb-id=k",
             ],
         ] {
-            assert_eq!(exit(run_seed(&args(&bad))), 2, "{bad:?}");
+            assert_eq!(
+                exit(run_seed(&args(&bad), seed::AttachmentLimits::default())),
+                2,
+                "{bad:?}"
+            );
         }
-        let dry = run_seed(&args(&[
-            "--update",
-            "--dry-run",
-            "--git=/r",
-            "--rev=v1",
-            "--kb-id=k",
-        ]));
+        let dry = run_seed(
+            &args(&["--update", "--dry-run", "--git=/r", "--rev=v1", "--kb-id=k"]),
+            seed::AttachmentLimits::default(),
+        );
         assert!(matches!(dry, Step::Store(a) if a.update && a.dry_run));
-        let apply = run_seed(&args(&with(&["--discard-edits", "e1"])));
+        let apply = run_seed(
+            &args(&with(&["--discard-edits", "e1"])),
+            seed::AttachmentLimits::default(),
+        );
         assert!(matches!(
             apply,
             Step::Store(a) if a.update && a.discard_edits.as_deref() == Some("e1") && !a.dry_run
         ));
-        let plain = run_seed(&args(&up));
+        let plain = run_seed(&args(&up), seed::AttachmentLimits::default());
         assert!(matches!(plain, Step::Store(a) if a.discard_edits.is_none()));
     }
 
     #[test]
     fn a_missing_repo_with_dry_run_is_an_error_not_a_plan() {
-        let code = exit(run_seed(&args(&[
-            "--dry-run",
-            "--git",
-            "/nonexistent/repo",
-            "--rev",
-            "v1",
-        ])));
+        let code = exit(run_seed(
+            &args(&["--dry-run", "--git", "/nonexistent/repo", "--rev", "v1"]),
+            seed::AttachmentLimits::default(),
+        ));
         assert_eq!(code, 1);
     }
 
@@ -447,14 +463,17 @@ mod tests {
     /// arguments for the word, which `--name --dry-run` passed.
     #[test]
     fn dry_run_is_a_flag_not_a_word_in_the_arguments() {
-        let code = exit(run_seed(&args(&[
-            "--git",
-            "/nonexistent/repo",
-            "--rev",
-            "v1",
-            "--name",
-            "--dry-run",
-        ])));
+        let code = exit(run_seed(
+            &args(&[
+                "--git",
+                "/nonexistent/repo",
+                "--rev",
+                "v1",
+                "--name",
+                "--dry-run",
+            ]),
+            seed::AttachmentLimits::default(),
+        ));
         assert_eq!(code, 2);
         assert!(parse_seed_args(&args(&[
             "--git",

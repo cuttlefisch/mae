@@ -17,13 +17,26 @@
 //! `node_from_file` of the re-split file) must equal the node itself, every
 //! field of [`MaterializedNode`]: a node carrying something the file cannot
 //! (an `aliases` array, a todo state, a priority, links, a source version, a
-//! `kind` that is not its `KIND` property, an `attachments` map until ADR-115
-//! P4 exports the files) is refused naming those fields
+//! `kind` that is not its `KIND` property, an attachment no
+//! `[[attachment:NAME]]` link of the text names) is refused naming those fields
 //! (`unrepresentable`), never written without them. Three fields are exempt,
 //! because the seed sets them by definition rather than reading them from the
 //! file: `source` (always `user_org`), `created_at` (from git history, kept in
 //! the seed record) and `org_header` (the file's own shape, which the export
 //! writes from the node and reports in its notes).
+//!
+//! **Attachments** (ADR-115 P4, D7). Each `[[attachment:NAME]]` link of the
+//! written text is read with the seed's own function (`attach::links`), and
+//! the node's map entry for NAME is written, as the bytes the store holds, at
+//! org-attach's layout next to the page (`data/<ID[0:2]>/<ID[2:]>/NAME`).
+//! The bytes are checked against their sha256 before they are written. A
+//! node is refused, nothing of it written, when a link names no entry or a
+//! blob the store lacks (the file would not seed back), when two of its NAMEs
+//! are one file on APFS or NTFS (writing both would lose one), or when one of
+//! its files is the same file as another node's (`AttachmentCollision`). What
+//! is written is the PROCESSED image: an image the seed stripped or rotated
+//! does not come back byte for byte as it was in the repository, though it
+//! seeds back to the same hash (processing is idempotent).
 //!
 //! @ai-caution: [security] The target directory is the operator's, and a seed
 //! path is input. Paths are relative and normal; every directory on the way
@@ -34,10 +47,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, MaterializedNode, BODY_FORMAT_ORG_LITERAL_V1};
+use std::collections::BTreeMap;
+
+use mae_sync::kb::{
+    AttachmentRef, KbCollectionDoc, KbNodeDoc, MaterializedNode, BODY_FORMAT_ORG_LITERAL_V1,
+};
 use mae_sync::DocAddress;
 
 use super::apply::node_from_file;
+use super::attach;
 use super::{regen, split, SeedError, SplitFile};
 use crate::doc_store::DocStore;
 use crate::storage::SeedNodeRow;
@@ -62,6 +80,13 @@ pub enum ExportRefusalKind {
     /// Another node's path names the same file on a case- or
     /// normalization-insensitive filesystem; neither is written.
     PathCollision,
+    /// An `[[attachment:NAME]]` link names no entry of the node's map, or a
+    /// blob the store does not hold (or no longer holds intact): the file
+    /// would not seed back.
+    AttachmentMissing,
+    /// Two of the node's NAMEs, or one of its files and another node's, are
+    /// one file on a case- or normalization-insensitive filesystem.
+    AttachmentCollision,
 }
 
 impl ExportRefusalKind {
@@ -74,6 +99,8 @@ impl ExportRefusalKind {
             Self::Unreadable => "unreadable",
             Self::WriteFailed => "write_failed",
             Self::PathCollision => "path_collision",
+            Self::AttachmentMissing => "attachment_missing",
+            Self::AttachmentCollision => "attachment_collision",
         }
     }
 }
@@ -90,16 +117,29 @@ pub struct ExportRefusal {
 pub struct ExportReport {
     /// Paths written.
     pub written: Vec<String>,
+    /// Attachment files written (ADR-115 D7), by repository path.
+    pub attachments: Vec<String>,
     pub refused: Vec<ExportRefusal>,
     /// Header adjustments (keys outside the recorded order, or missing from
     /// the node), one line each, `node_id: …`.
     pub notes: Vec<String>,
 }
 
-/// The file text of one node, with its notes.
+/// The file text of one node, with its notes and the attachment files it
+/// carries.
 pub struct Rendered {
     pub text: String,
     pub notes: Vec<String>,
+    pub attachments: Vec<RenderedAttachment>,
+}
+
+/// One attachment an export writes: its NAME, the directory the text puts it
+/// in (relative to the page's own, `data/ab/cdef…/`), and its entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedAttachment {
+    pub name: String,
+    pub dir: String,
+    pub entry: AttachmentRef,
 }
 
 /// Export KB `kb_id` into `dir`. Refuses a non-empty `dir` unless `force`.
@@ -133,6 +173,7 @@ pub async fn export(
     ids.sort();
     let mut report = ExportReport::default();
     let colliding = colliding_nodes(&ids, &rows);
+    let mut prepared = Vec::new();
     for id in ids {
         if let Some(detail) = colliding.get(&id) {
             report.refused.push(ExportRefusal {
@@ -142,9 +183,65 @@ pub async fn export(
             });
             continue;
         }
-        export_node(store, kb_id, &id, rows.get(&id), dir, &mut report).await;
+        match prepare_node(store, kb_id, &id, rows.get(&id)).await {
+            Ok(p) => prepared.push(p),
+            Err(r) => report.refused.push(r),
+        }
     }
+    let colliding = colliding_files(&prepared);
+    for p in prepared {
+        match colliding.get(&p.id) {
+            Some(detail) => report.refused.push(ExportRefusal {
+                node_id: p.id,
+                kind: ExportRefusalKind::AttachmentCollision,
+                detail: detail.clone(),
+            }),
+            None => write_node(store, kb_id, p, dir, &mut report),
+        }
+    }
+    report.refused.sort_by(|a, b| a.node_id.cmp(&b.node_id));
     Ok(report)
+}
+
+/// One node ready to write: its page and its attachment files.
+struct Prepared {
+    id: String,
+    path: String,
+    rel: PathBuf,
+    text: String,
+    notes: Vec<String>,
+    /// `(repository path, entry)` of each attachment file.
+    files: Vec<(String, AttachmentRef)>,
+}
+
+/// Every node whose attachment file is the same file as another written
+/// file (a page, or another node's attachment) once case and Unicode
+/// normalization are ignored: all of them are refused, never first-wins.
+fn colliding_files(prepared: &[Prepared]) -> HashMap<String, String> {
+    let mut by_key: HashMap<String, Vec<(&str, &str)>> = HashMap::new();
+    for p in prepared {
+        let paths = std::iter::once(p.path.as_str()).chain(p.files.iter().map(|f| f.0.as_str()));
+        for path in paths {
+            by_key
+                .entry(super::path_fold_key(path))
+                .or_default()
+                .push((&p.id, path));
+        }
+    }
+    let mut out = HashMap::new();
+    for group in by_key.into_values().filter(|g| g.len() > 1) {
+        let paths: Vec<&str> = group.iter().map(|(_, p)| *p).collect();
+        for (id, _) in &group {
+            out.insert(
+                id.to_string(),
+                format!(
+                    "{} would be one file on a case- or normalization-insensitive filesystem",
+                    paths.join(", ")
+                ),
+            );
+        }
+    }
+    out
 }
 
 async fn literal_collection(store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, SeedError> {
@@ -226,50 +323,121 @@ fn prepare_dir(dir: &Path, force: bool) -> Result<(), SeedError> {
     }
 }
 
-async fn export_node(
+async fn prepare_node(
     store: &DocStore,
     kb_id: &str,
     id: &str,
     row: Option<&SeedNodeRow>,
-    dir: &Path,
-    report: &mut ExportReport,
-) {
+) -> Result<Prepared, ExportRefusal> {
     let refuse = |kind, detail: String| ExportRefusal {
         node_id: id.to_string(),
         kind,
         detail,
     };
-    let result = async {
-        let row = row.ok_or_else(|| {
-            refuse(
-                ExportRefusalKind::NoSourcePath,
-                "the seed record has no source path for this node".into(),
-            )
-        })?;
-        let rel = checked_relative(&row.path).map_err(|d| refuse(ExportRefusalKind::BadPath, d))?;
-        let name = mae_sync::kb_node_doc_name(kb_id, id);
-        let doc = match store
-            .encode_state(&name)
-            .await
-            .map(|b| KbNodeDoc::from_bytes(&b))
-        {
-            Ok(Ok(doc)) => doc,
-            Ok(Err(e)) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
-            Err(e) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
-        };
-        let r = render(id, &doc).map_err(|(kind, d)| refuse(kind, d))?;
-        write_inside(dir, &rel, &r.text).map_err(|d| refuse(ExportRefusalKind::WriteFailed, d))?;
-        Ok((row.path.clone(), r.notes))
+    let row = row.ok_or_else(|| {
+        refuse(
+            ExportRefusalKind::NoSourcePath,
+            "the seed record has no source path for this node".into(),
+        )
+    })?;
+    let rel = checked_relative(&row.path).map_err(|d| refuse(ExportRefusalKind::BadPath, d))?;
+    let name = mae_sync::kb_node_doc_name(kb_id, id);
+    let doc = match store
+        .encode_state(&name)
+        .await
+        .map(|b| KbNodeDoc::from_bytes(&b))
+    {
+        Ok(Ok(doc)) => doc,
+        Ok(Err(e)) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
+        Err(e) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
+    };
+    let r = render(id, &doc).map_err(|(kind, d)| refuse(kind, d))?;
+    let mut files = Vec::with_capacity(r.attachments.len());
+    for a in r.attachments {
+        let path = attach::file_path(&row.path, &a.dir, &a.name)
+            .map_err(|d| refuse(ExportRefusalKind::BadPath, d))?;
+        checked_relative(&path).map_err(|d| refuse(ExportRefusalKind::BadPath, d))?;
+        let held = store
+            .blob_store()
+            .map(|b| b.get(kb_id, &a.entry.sha256))
+            .transpose()
+            .map_err(|e| refuse(ExportRefusalKind::Unreadable, e.to_string()))?
+            .flatten();
+        if held.is_none() {
+            return Err(refuse(
+                ExportRefusalKind::AttachmentMissing,
+                format!(
+                    "[[attachment:{}]]: the store holds no blob {} for this KB (or this \
+                     daemon stores no attachments)",
+                    a.name, a.entry.sha256
+                ),
+            ));
+        }
+        files.push((path, a.entry));
     }
-    .await;
-    match result {
-        Ok((path, notes)) => {
-            report.written.push(path);
+    Ok(Prepared {
+        id: id.to_string(),
+        path: row.path.clone(),
+        rel,
+        text: r.text,
+        notes: r.notes,
+        files,
+    })
+}
+
+/// Write a prepared node: its attachment files first, each checked against
+/// its sha256 as read, then its page. A failure leaves the page unwritten.
+fn write_node(store: &DocStore, kb_id: &str, p: Prepared, dir: &Path, report: &mut ExportReport) {
+    let refuse = |kind, detail: String| ExportRefusal {
+        node_id: p.id.clone(),
+        kind,
+        detail,
+    };
+    let mut written = Vec::new();
+    for (path, entry) in &p.files {
+        let bytes = store
+            .blob_store()
+            .ok_or_else(|| "this daemon stores no attachments".to_string())
+            .and_then(|b| {
+                std::fs::read(b.blob_path(kb_id, &entry.sha256)).map_err(|e| e.to_string())
+            });
+        let bytes = match bytes {
+            Ok(b) if super::plan::sha256_hex(&b) == entry.sha256 => b,
+            Ok(_) => {
+                report.refused.push(refuse(
+                    ExportRefusalKind::AttachmentMissing,
+                    format!("{path}: the stored blob {} is damaged", entry.sha256),
+                ));
+                return;
+            }
+            Err(e) => {
+                report.refused.push(refuse(
+                    ExportRefusalKind::AttachmentMissing,
+                    format!("{path}: blob {}: {e}", entry.sha256),
+                ));
+                return;
+            }
+        };
+        let rel = Path::new(path);
+        if let Err(d) = write_inside(dir, rel, &bytes) {
+            report
+                .refused
+                .push(refuse(ExportRefusalKind::WriteFailed, d));
+            return;
+        }
+        written.push(path.clone());
+    }
+    match write_inside(dir, &p.rel, p.text.as_bytes()) {
+        Ok(()) => {
+            report.written.push(p.path.clone());
+            report.attachments.extend(written);
             report
                 .notes
-                .extend(notes.into_iter().map(|n| format!("{id}: {n}")));
+                .extend(p.notes.into_iter().map(|n| format!("{}: {n}", p.id)));
         }
-        Err(r) => report.refused.push(r),
+        Err(d) => report
+            .refused
+            .push(refuse(ExportRefusalKind::WriteFailed, d)),
     }
 }
 
@@ -292,14 +460,80 @@ pub fn render(id: &str, doc: &KbNodeDoc) -> Result<Rendered, (ExportRefusalKind,
     };
     let text = regen(&file);
     let back = reads_back(&file, &text).map_err(|d| (ExportRefusalKind::NotReproducible, d))?;
-    let lost = unrepresented(doc.materialize(), &back);
+    let node = doc.materialize();
+    let attachments = linked_attachments(&text, &node.attachments)?;
+    let carried = attachments
+        .iter()
+        .map(|a| (a.name.clone(), a.entry.clone()))
+        .collect();
+    let lost = unrepresented(node, &back, carried);
     if !lost.is_empty() {
         return Err((
             ExportRefusalKind::Unrepresentable,
             unrepresented_detail(&lost),
         ));
     }
-    Ok(Rendered { text, notes })
+    Ok(Rendered {
+        text,
+        notes,
+        attachments,
+    })
+}
+
+/// The attachments `text` carries: one per NAME its `[[attachment:NAME]]`
+/// links name, each with its map entry and the directory the text puts it in,
+/// checked as the seed checks them (`attach::wanted`), so a file this writes
+/// seeds back. A link naming no entry, and two NAMEs of the map that are one
+/// file, refuse the node.
+fn linked_attachments(
+    text: &str,
+    map: &BTreeMap<String, AttachmentRef>,
+) -> Result<Vec<RenderedAttachment>, (ExportRefusalKind, String)> {
+    // @ai-caution: [kb-truth] Two NAMEs of one node can fold to one key
+    // (`mae_sync::portable_name::fold_key`) although every writer refuses the
+    // second, because two peers can bind them concurrently and the reader
+    // keeps both. They are one file on APFS and NTFS, so writing both loses
+    // one image silently: refuse such a node naming both, never pick one.
+    let mut keys: HashMap<String, &str> = HashMap::new();
+    for name in map.keys() {
+        if let Some(other) = keys.insert(super::path_fold_key(name), name) {
+            return Err((
+                ExportRefusalKind::AttachmentCollision,
+                format!(
+                    "the NAMEs {other:?} and {name:?} are one file on a case- or \
+                     normalization-insensitive filesystem; rename one, then export"
+                ),
+            ));
+        }
+    }
+    // The seed's own reading of the text: its refusals are this node's.
+    let (wanted, problems) = attach::wanted("", text);
+    if let Some(p) = problems.first() {
+        return Err((
+            ExportRefusalKind::NotReproducible,
+            format!("the text would be refused by the seed: {}", p.detail),
+        ));
+    }
+    let mut out = Vec::with_capacity(wanted.len());
+    for (name, w) in wanted {
+        let Some(entry) = map.get(&name) else {
+            return Err((
+                ExportRefusalKind::AttachmentMissing,
+                format!("[[attachment:{name}]] names no attachment of this node"),
+            ));
+        };
+        let dir = w
+            .path
+            .strip_suffix(name.as_str())
+            .unwrap_or_default()
+            .to_string();
+        out.push(RenderedAttachment {
+            name,
+            dir,
+            entry: entry.clone(),
+        });
+    }
+    Ok(out)
 }
 
 /// The node's properties in the recorded order, then the rest sorted.
@@ -370,9 +604,16 @@ fn reads_back(file: &SplitFile, text: &str) -> Result<SplitFile, String> {
 /// The fields of `node` that the file `back` would not seed back: the seed's
 /// own node for the file, compared with `node` field by field. The fields the
 /// seed sets by definition, not from the file, are taken from `node`.
-fn unrepresented(node: MaterializedNode, back: &SplitFile) -> Vec<&'static str> {
+fn unrepresented(
+    node: MaterializedNode,
+    back: &SplitFile,
+    carried: BTreeMap<String, AttachmentRef>,
+) -> Vec<&'static str> {
     // The creation time is overwritten below; any value would do.
     let mut reseeded = node_from_file(back, 0).materialize();
+    // What the written files seed back to: the entries the text links,
+    // written as the stored bytes, which processing maps to the same hash.
+    reseeded.attachments = carried;
     // Provenance: a seed always writes `user_org`.
     reseeded.source = node.source.clone();
     // From git history, kept in the seed record; no file line carries it.
@@ -440,15 +681,11 @@ fn unrepresented_detail(fields: &[&str]) -> String {
     if fields.contains(&"kind") {
         out.push_str(" (the kind is the KIND property's value)");
     }
-    // @ai-caution: [kb-truth] When ADR-115 P4 replaces this refusal by writing
-    // the files: two NAMEs of one node can fold to one key
-    // (`mae_sync::portable_name::fold_key`) although every writer refuses the
-    // second, because two peers can bind them concurrently and the reader keeps
-    // both. They are one file on APFS and NTFS, so writing both loses one image
-    // silently. The export must refuse such a node naming both NAMEs, unless a
-    // defined disambiguation exists by then; it must never pick one.
     if fields.contains(&"attachments") {
-        out.push_str(" (exporting attachment files is not built yet, ADR-115 P4)");
+        out.push_str(
+            " (an attachment is exported only where an [[attachment:NAME]] link of the text \
+             names it)",
+        );
     }
     out
 }
@@ -464,9 +701,9 @@ fn checked_relative(path: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Write `text` at `dir/rel`, creating real directories on the way and never
+/// Write `bytes` at `dir/rel`, creating real directories on the way and never
 /// following a symlink.
-fn write_inside(dir: &Path, rel: &Path, text: &str) -> Result<(), String> {
+fn write_inside(dir: &Path, rel: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut at = dir.to_path_buf();
     let parts: Vec<_> = rel.components().collect();
     let (file, parents) = parts.split_last().ok_or("empty path")?;
@@ -482,10 +719,10 @@ fn write_inside(dir: &Path, rel: &Path, text: &str) -> Result<(), String> {
         }
     }
     at.push(file);
-    replace_file(&at, text)
+    replace_file(&at, bytes)
 }
 
-fn replace_file(path: &Path, text: &str) -> Result<(), String> {
+fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
     if let Ok(m) = std::fs::symlink_metadata(path) {
@@ -509,7 +746,7 @@ fn replace_file(path: &Path, text: &str) -> Result<(), String> {
         .open(&tmp)
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
     let written = f
-        .write_all(text.as_bytes())
+        .write_all(bytes)
         .and_then(|()| f.sync_all())
         .and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = written {

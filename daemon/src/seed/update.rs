@@ -70,8 +70,8 @@ use mae_sync::kb::history::{diff as field_diff, VersionKind};
 use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, MaterializedNode, BODY_FORMAT_ORG_LITERAL_V1};
 
 use super::apply::{
-    build_node, checked_hash, collection_doc, existing_state, refuse, row_from_plan, storage,
-    ApplyError, ApplyRefusalKind, ApplyTarget, BY,
+    attachment_store, build_node, checked_hash, collection_doc, existing_state, refuse,
+    row_from_plan, storage, store_attachments, ApplyError, ApplyRefusalKind, ApplyTarget, BY,
 };
 use super::{PlannedNode, SeedPlan, CONTRACT};
 use crate::doc_store::DocStore;
@@ -265,9 +265,16 @@ pub async fn update(
         }
         Some((_, nodes)) => resumable(store, t.kb_id, plan, nodes, discard_edits).await?,
         None if applied.record.plan_hash == hash => return Ok(UpdateOutcome::AlreadyApplied),
-        None => begin(store, plan, &hash, &applied, t, discard_edits).await?,
+        None => {
+            attachment_store(store, plan, t)?;
+            begin(store, plan, &hash, &applied, t, discard_edits).await?
+        }
     };
     crash::at(crash::Step::Begun)?;
+    // ADR-115 D7: every blob the plan binds is stored before any node binds
+    // it. A blob the plan no longer binds stays in the store, referenced by
+    // the version cut before its node changed; the sweep (D5) decides.
+    store_attachments(store, plan, t).await?;
     write(store, t, plan, &nodes).await
 }
 
@@ -589,6 +596,19 @@ async fn write_node(
             count.written += 1;
             cut(store, t.kb_id, &p.file.id, VersionKind::Seed).await?;
             let update = doc.assign(&target.materialize());
+            // `assign` leaves an attachment a writer refuses (a NAME folding
+            // onto an entry stored outside the display reader's view): the
+            // update must not report a node it did not reach.
+            if doc.attachments() != target.attachments() {
+                return Err(refuse(
+                    ApplyRefusalKind::NodeDiffers,
+                    format!(
+                        "node '{}' holds an attachment entry the plan's cannot replace; \
+                         nothing was written to it",
+                        p.file.id
+                    ),
+                ));
+            }
             let r = store.apply_update(&name, &update, None, BY).await;
             (r.map_err(storage)?.wal_seq, doc.version())
         }

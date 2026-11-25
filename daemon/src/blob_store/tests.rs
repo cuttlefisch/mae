@@ -26,7 +26,7 @@ const LIMITS: ProcessLimits = ProcessLimits {
 const LATITUDE: [u8; 24] = [
     51, 0, 0, 0, 1, 0, 0, 0, 30, 0, 0, 0, 1, 0, 0, 0, 0x59, 0x0A, 0, 0, 100, 0, 0, 0,
 ];
-const CAMERA: &[u8] = b"SecretCam-9000";
+pub(crate) const CAMERA: &[u8] = b"SecretCam-9000";
 /// Not a real profile, and need not be: the decoders carry it as bytes.
 const ICC: &[u8] = b"\0\0\x02\x0cTEST-ICC-PROFILE-BYTES-0123456789abcdef";
 
@@ -39,7 +39,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 }
 
 /// A TIFF/EXIF block: orientation, the camera's make, and a GPS IFD.
-fn exif(orientation: u16) -> Vec<u8> {
+pub(crate) fn exif(orientation: u16) -> Vec<u8> {
     let mut t = b"II*\0".to_vec();
     t.extend_from_slice(&8u32.to_le_bytes());
     // IFD0 at 8: three entries.
@@ -70,7 +70,7 @@ fn exif(orientation: u16) -> Vec<u8> {
 }
 
 /// A two-colour image, left half red and right half blue, so a rotation shows.
-fn halves(w: u32, h: u32) -> RgbImage {
+pub(crate) fn halves(w: u32, h: u32) -> RgbImage {
     RgbImage::from_fn(w, h, |x, _| {
         if x < w / 2 {
             Rgb([220, 20, 30])
@@ -89,7 +89,7 @@ fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
 
 /// A JPEG carrying EXIF (with GPS), XMP, a comment, an ICC profile, and
 /// HTML appended after its end.
-fn hostile_jpeg(orientation: u16) -> Vec<u8> {
+pub(crate) fn hostile_jpeg(orientation: u16) -> Vec<u8> {
     let mut plain = Vec::new();
     let mut enc = JpegEncoder::new_with_quality(&mut plain, 90);
     enc.set_icc_profile(ICC.to_vec()).unwrap();
@@ -125,7 +125,7 @@ fn crc32(bytes: &[u8]) -> u32 {
     !c
 }
 
-fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+pub(crate) fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut c = (data.len() as u32).to_be_bytes().to_vec();
     c.extend_from_slice(kind);
     c.extend_from_slice(data);
@@ -135,7 +135,7 @@ fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
     c
 }
 
-fn png_of(img: &DynamicImage, icc: bool) -> Vec<u8> {
+pub(crate) fn png_of(img: &DynamicImage, icc: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let mut enc = PngEncoder::new(&mut out);
     if icc {

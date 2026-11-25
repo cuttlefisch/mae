@@ -10,9 +10,12 @@
 //!   `mae_sync::kb::aliases` — in an `org-literal-v1` KB derived from the
 //!   `ROAM_ALIASES` property, elsewhere the node's array — plus
 //!   `aliases_problems` (strings) when that value could not be read cleanly.
-//! - `attachments`: the node's attachments map (ADR-115 D4), NAME to
-//!   `{sha256, size, media_type}`, `{}` when it has none. Only entries the
-//!   tolerant reader accepts; a client fetches each blob by its hash.
+//! - `attachments`: the node's attachments (ADR-115 D4), one
+//!   `{name, sha256, size, media_type, url}` per NAME in NAME order, `[]` when
+//!   it has none. Only entries the tolerant reader accepts. `url` is the blob's
+//!   route on the daemon's HTTPS listener, `/kb/<kb_id>/blobs/<sha256>`, which
+//!   authorizes the reader again on every request: holding a URL grants
+//!   nothing.
 //! - `created_at` and `modified_at`: RFC 3339 UTC, or null when unknown, with
 //!   `modified_at_basis` saying where `modified_at` came from and, when the edit
 //!   record could not be used, `modified_at_note` saying why.
@@ -38,7 +41,7 @@ pub(super) async fn node_fields(
     doc: &KbNodeDoc,
     body_format: Option<&str>,
 ) -> Map<String, Value> {
-    let mut m = content_fields(&doc.materialize(), body_format);
+    let mut m = content_fields(&doc.materialize(), body_format, kb_id);
     m.insert("version".into(), json!(doc.version()));
     m.insert("schema_v".into(), json!(doc.schema_version()));
     m.extend(modified(store, kb_id, node_id).await);
@@ -52,6 +55,7 @@ pub(super) async fn node_fields(
 pub(crate) fn content_fields(
     n: &MaterializedNode,
     body_format: Option<&str>,
+    kb_id: &str,
 ) -> Map<String, Value> {
     let aliases = mae_sync::kb::aliases::node_aliases(body_format, &n.aliases, &n.properties);
     let properties: Map<String, Value> = n
@@ -74,7 +78,7 @@ pub(crate) fn content_fields(
             "has_filetags_line": h.has_filetags_line,
         })),
         "tags": n.tags,
-        "attachments": n.attachments,
+        "attachments": attachments(n, kb_id),
         "created_at": n.created_at.map(rfc3339::utc),
     });
     let fields = m.as_object_mut().expect("an object literal");
@@ -83,6 +87,28 @@ pub(crate) fn content_fields(
         fields.insert("aliases_problems".into(), json!(problems));
     }
     std::mem::take(fields)
+}
+
+/// The node's attachments as a reader fetches them: each NAME's entry and the
+/// URL of its blob, in NAME order (the map's).
+fn attachments(n: &MaterializedNode, kb_id: &str) -> Vec<Value> {
+    n.attachments
+        .iter()
+        .map(|(name, a)| {
+            json!({
+                "name": name,
+                "sha256": a.sha256,
+                "size": a.size,
+                "media_type": a.media_type,
+                "url": blob_url(kb_id, &a.sha256),
+            })
+        })
+        .collect()
+}
+
+/// The route a blob of KB `kb_id` is read at (`oauth_blobs`).
+pub(crate) fn blob_url(kb_id: &str, sha256: &str) -> String {
+    format!("/kb/{kb_id}/blobs/{sha256}")
 }
 
 /// `modified_at`, `modified_at_basis` and (when the edit record is not usable)
