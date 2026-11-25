@@ -115,6 +115,28 @@ fn the_address_survives_only_where_the_rule_allows_it() {
     assert!(allowed > 50 && allowed < 350, "the mix covered both sides");
 }
 
+/// D2: the cap on `node_ids` is the encoder's, whatever a caller set: an
+/// event built with 10,000 ids encodes the first `NODE_IDS_MAX` and the true
+/// number; one under the cap encodes every id and a `null` total.
+#[test]
+fn the_encoder_caps_node_ids_and_keeps_the_true_count() {
+    let ids: Vec<String> = (0..10_000).map(|i| format!("n{i}")).collect();
+    let mut ev = Event::new(EventKind::Read, T0, Transport::Https);
+    ev.node_ids = Some(ids.clone());
+    let body = ev.body(&[0; 16]);
+    assert_eq!(body["node_ids"].as_array().unwrap().len(), NODE_IDS_MAX);
+    assert_eq!(body["node_ids"][NODE_IDS_MAX - 1], ids[NODE_IDS_MAX - 1]);
+    assert_eq!(body["node_ids_total"], 10_000);
+    ev.node_ids = Some(ids[..NODE_IDS_MAX].to_vec());
+    let body = ev.body(&[0; 16]);
+    assert_eq!(body["node_ids"].as_array().unwrap().len(), NODE_IDS_MAX);
+    assert!(
+        body["node_ids_total"].is_null(),
+        "{}",
+        body["node_ids_total"]
+    );
+}
+
 /// The forwarded address is kept apart from the peer's own.
 #[test]
 fn a_forwarded_address_is_kept_apart_from_the_peers() {
@@ -665,6 +687,83 @@ fn ten_thousand_refusals_coalesce_to_a_bounded_count_that_sums() {
     let total: u64 = rows.iter().map(|b| b["count"].as_u64().unwrap()).sum();
     assert_eq!(total, 10_000);
     assert!(rows.iter().all(|b| b["peer"]["addr"] == "203.0.113.7:4431"));
+}
+
+/// A window whose first refusal could not be committed is closed: the next
+/// refusal with its key is admitted to commit (so it meets the record's own
+/// refusal rather than its real answer), and what the window counted
+/// meanwhile is kept for the next drain. An abandon naming an older opening
+/// leaves the newer window alone.
+#[test]
+fn a_window_whose_first_failed_is_closed_and_keeps_its_count() {
+    let settings = ActivitySettings {
+        refusal_window_secs: 60,
+        ..ActivitySettings::default()
+    };
+    let c = Coalescer::new(&settings);
+    let first = bad_token(T0);
+    assert!(c.admit(&first, T0, false).commit);
+    for i in 1..=4 {
+        assert!(!c.admit(&bad_token(T0 + i), T0 + i, false).commit);
+    }
+    c.abandon(&first, T0);
+    assert_eq!(c.open_windows(), 0);
+    assert!(
+        c.admit(&bad_token(T0 + 10), T0 + 10, false).commit,
+        "the next refusal is not answered as counted"
+    );
+    c.abandon(&first, T0);
+    assert_eq!(c.open_windows(), 1, "a stale abandon closes nothing");
+    let kept = c.drain_expired(T0 + 20);
+    assert_eq!(
+        kept.len(),
+        1,
+        "the abandoned window's count, before its end"
+    );
+    assert_eq!(kept[0].events[0].count, 4);
+}
+
+/// A held writer and a full queue: a sweep returns within the commit timeout
+/// and keeps the window's count; once the writer is released the next sweep
+/// queues it, and the stored counts sum to what was counted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_writer_delays_a_swept_count_and_never_drops_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(super::DB_FILE);
+    let rec = ActivityRecord::start(&path, settings(1, 200), SessionKey::generate());
+    let held = Held::new(&path);
+    // One is taken into the stalled batch; one more fills the queue.
+    for _ in 0..2 {
+        rec.submit(read_entry()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let t = super::now_us();
+    assert!(rec.coalescer().admit(&bad_token(t), t, false).commit);
+    for i in 1..=3 {
+        assert!(
+            !rec.coalescer()
+                .admit(&bad_token(t + i), t + i, false)
+                .commit
+        );
+    }
+    let ended = t + 3_600_000_000;
+    let started = Instant::now();
+    let back = tokio::time::timeout(Duration::from_secs(5), rec.flush_coalesced(ended))
+        .await
+        .expect("the sweep never stalls on a held writer");
+    assert_eq!(back, 1);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(held);
+    assert_eq!(rec.flush_coalesced(ended).await, 0);
+    rec.shutdown(Event::daemon(EventKind::DaemonStop, super::now_us()))
+        .await;
+    let db = ActivityDb::open_read_only(&path).unwrap();
+    let counted: u64 = bodies(&db)
+        .iter()
+        .filter(|b| b["outcome"]["result"] == "refused")
+        .map(|b| b["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(counted, 3);
 }
 
 /// Past half the queue, or past the window bound, refusals go into one

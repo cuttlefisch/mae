@@ -31,6 +31,8 @@ use crate::oauth_activity::classify_method;
 const AUD: &str = "https://mae.test";
 const ISS: &str = "https://idp.test";
 const KID: &str = "activity-test";
+/// A browser page's origin, allowed to mint a ticket.
+const APP_ORIGIN: &str = "https://app.test";
 /// The node's body: never in a refused answer.
 const SECRET: &str = "the-body-only-a-reader-may-see";
 
@@ -102,6 +104,16 @@ impl Harness {
 
     /// `db_at`: the record's path, when a test needs one that cannot open.
     async fn at(settings: Option<ActivitySettings>, db_at: Option<PathBuf>) -> Harness {
+        Harness::build(settings, db_at, None).await
+    }
+
+    /// `blob_hook`: the blob store's commit seam, for a test that pauses an
+    /// upload mid-commit.
+    async fn build(
+        settings: Option<ActivitySettings>,
+        db_at: Option<PathBuf>,
+        blob_hook: Option<mae_daemon::blob_store::FaultHook>,
+    ) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let db = db_at.unwrap_or_else(|| dir.path().join(mae_daemon::activity::DB_FILE));
         let record = settings.map(|s| ActivityRecord::start(&db, s, SessionKey::generate()));
@@ -139,12 +151,17 @@ impl Harness {
         };
         let ws_config = crate::oauth_config::OAuthConfig {
             ws_enabled: true,
+            ws_allowed_origins: vec![APP_ORIGIN.into()],
             ..Default::default()
         };
         let ws = crate::ws::state_from_config(&ws_config, Some(deps), true);
         assert!(ws.is_some());
+        let mut store = BlobStore::open(&dir.path().join("blobs")).unwrap();
+        if let Some(hook) = blob_hook {
+            store = store.with_fault_hook(hook);
+        }
         let blobs = Arc::new(crate::oauth_blobs::BlobRoutes::new(
-            Arc::new(BlobStore::open(&dir.path().join("blobs")).unwrap()),
+            Arc::new(store),
             test_limits(),
         ));
         let bindings = Arc::new(mae_daemon::identity_binding::BindingStore::open_memory().unwrap());
@@ -253,7 +270,8 @@ fn bodies_at(db: &Path) -> Vec<Value> {
 }
 
 /// The listener's service over plain HTTP/1.1, with each request's peer
-/// address put on it as the real accept loop does.
+/// address put on it, through the same connection builder as the real accept
+/// loop (`oauth::run_oauth_listener`), so a client hanging up is handled as it is live.
 async fn serve(listener: Arc<Listener>) -> SocketAddr {
     let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp.local_addr().unwrap();
@@ -271,10 +289,11 @@ async fn serve(listener: Arc<Listener>) -> SocketAddr {
                         .insert(crate::oauth_activity::PeerAddr(peer));
                     crate::oauth::serve(req, Arc::clone(&listener), Arc::clone(&guard))
                 });
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
-                    .with_upgrades()
-                    .await;
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
+                .await;
             });
         }
     });
@@ -789,31 +808,46 @@ async fn with_the_record_off_nothing_is_recorded_or_sent() {
 // --- coalescing ----------------------------------------------------------------
 
 /// A flood of bad tokens from one address: the first is committed before its
-/// answer (it waits on a held writer), the rest are answered at once and
-/// counted, and at a clean shutdown the counts sum to the number sent.
+/// answer (it waits on a held writer, and is answered only once released),
+/// the rest are answered at once and counted while it waits, and at a clean
+/// shutdown the counts sum to the number sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bad_token_flood_is_coalesced_and_its_first_waits_for_the_commit() {
-    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let h = Harness::new(Some(record_settings(|s| s.commit_timeout_ms = 10_000))).await;
     let n = 300;
     let held = Held::new(&h.db);
     let started = Instant::now();
-    let first = h.send("POST", "/", Some("not.a.token"), "", "").await;
-    assert_eq!(first.status, 503, "the first waited for its commit");
-    assert!(started.elapsed() >= Duration::from_millis(280));
-    let started = Instant::now();
-    for _ in 1..n {
-        assert_eq!(
-            h.send("POST", "/", Some("not.a.token"), "", "")
-                .await
-                .status,
-            401
-        );
-    }
-    assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "the rest did not wait"
+    let ((first, answered_at), released_at) = tokio::join!(
+        async {
+            let r = h.send("POST", "/", Some("not.a.token"), "", "").await;
+            (r, started.elapsed())
+        },
+        async {
+            // The first has opened its window and is waiting on its commit.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let rest = Instant::now();
+            for _ in 1..n {
+                assert_eq!(
+                    h.send("POST", "/", Some("not.a.token"), "", "")
+                        .await
+                        .status,
+                    401
+                );
+            }
+            assert!(
+                rest.elapsed() < Duration::from_secs(9),
+                "the rest did not wait"
+            );
+            let released_at = started.elapsed();
+            drop(held);
+            released_at
+        }
     );
-    drop(held);
+    assert_eq!(first.status, 401);
+    assert!(
+        answered_at >= released_at,
+        "the first was answered only once its event could commit"
+    );
     let record = h.record.clone().unwrap();
     record
         .shutdown(Event::daemon(
@@ -906,4 +940,194 @@ async fn the_upgrade_carries_the_connections_id_and_a_ticket_is_a_sign_in() {
     assert_eq!(sign_in["detail"]["method"], "ws_ticket");
     assert_eq!(sign_in["principal"]["id"], h.member.fingerprint());
     assert_eq!(sign_in["principal"]["kind"], "service");
+}
+
+// --- a client that hangs up mid-request (D5/D6) -------------------------------
+
+/// A client that hangs up while its upload is mid-commit. The commit runs on a
+/// blocking thread, so the blob lands whatever the connection does; its event
+/// must land with it, as the success it was, never be lost with the
+/// connection (D6: no effect without its event).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_hanging_up_mid_upload_leaves_the_effect_and_its_event() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let seam = std::sync::Mutex::new((entered_tx, go_rx));
+    let hook: mae_daemon::blob_store::FaultHook = Arc::new(move |step| {
+        if step == mae_daemon::blob_store::CommitStep::BeforeRename {
+            let seam = seam.lock().unwrap();
+            let _ = seam.0.send(());
+            let _ = seam.1.recv_timeout(Duration::from_secs(20));
+        }
+        false
+    });
+    let settings = record_settings(|s| s.commit_timeout_ms = 10_000);
+    let h = Harness::build(Some(settings), None, Some(hook)).await;
+    let body = super::blob_route_tests::png(4, 4, 7);
+    let head = format!(
+        "POST /kb/kb-a/blobs HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer {}\r\n\
+         Content-Length: {}\r\n\r\n",
+        h.token(3600),
+        body.len()
+    );
+    let mut s = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+    s.write_all(head.as_bytes()).await.unwrap();
+    s.write_all(&body).await.unwrap();
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(20)))
+        .await
+        .unwrap()
+        .expect("the upload reached its commit");
+    // The client hangs up while the handler is paused mid-commit.
+    drop(s);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    go_tx.send(()).unwrap();
+
+    let rows_at = h._dir.path().join("blobs").join("blobs.db");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (rows, uploads) = loop {
+        let rows = mae_daemon::blob_store::list_rows(&rows_at).unwrap_or_default();
+        let uploads: Vec<Value> = h
+            .bodies()
+            .into_iter()
+            .filter(|e| e["kind"] == "upload")
+            .collect();
+        if (!rows.is_empty() && !uploads.is_empty()) || Instant::now() > deadline {
+            break (rows, uploads);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(rows.len(), 1, "the effect landed: {rows:?}");
+    assert_eq!(uploads.len(), 1, "the effect's event: {uploads:#?}");
+    let e = &uploads[0];
+    assert_eq!(e["outcome"]["result"], "ok", "{e}");
+    assert_eq!(e["blob"].as_str(), Some(rows[0].1.as_str()), "{e}");
+}
+
+// --- node_ids is bounded (D2) -------------------------------------------------
+
+/// A result naming 10,000 nodes (each twice) records a bounded body: the first
+/// `NODE_IDS_MAX` ids in order, and `node_ids_total` with the true number.
+/// The draft is bounded too, not only the encoder's output.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_result_of_ten_thousand_ids_records_a_bounded_body_and_the_true_count() {
+    use mae_daemon::activity::event::NODE_IDS_MAX;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(mae_daemon::activity::DB_FILE);
+    let record = ActivityRecord::start(&db, record_settings(|_| {}), SessionKey::generate());
+    let ids: Vec<String> = (0..10_000).map(|i| format!("node-{i:05}")).collect();
+    let answer = json!({"jsonrpc": "2.0", "id": 1, "result": {
+        "results": ids.iter().map(|i| json!({"id": i})).collect::<Vec<_>>(),
+        "links_to": ids,
+    }});
+    let (entry, ev) = crate::oauth_activity::built_in_scope(Arc::clone(&record), || {
+        crate::oauth_activity::rpc("kb/query.search", &json!({"kb_id": "kb-a"}));
+        crate::oauth_activity::rpc_answer(&answer);
+    });
+    let kept = ev.node_ids.clone().unwrap();
+    assert_eq!(kept.len(), NODE_IDS_MAX, "the draft itself is bounded");
+    assert_eq!(kept, ids[..NODE_IDS_MAX].to_vec());
+    assert_eq!(ev.node_ids_total, Some(10_000));
+    record.commit(entry).await.unwrap();
+    let stored = bodies_at(&db);
+    let body = stored
+        .iter()
+        .find(|e| e["route"] == "kb/query.search")
+        .expect("the event committed");
+    assert_eq!(body["node_ids"].as_array().unwrap().len(), NODE_IDS_MAX);
+    assert_eq!(body["node_ids"][0], "node-00000");
+    assert_eq!(body["node_ids_total"], 10_000);
+    let size = serde_json::to_vec(body).unwrap().len();
+    assert!(size < 8_192, "a bounded body, {size} bytes");
+
+    // Under the cap: every id, and no total.
+    let small = json!({"result": {"results": [{"id": "a"}, {"id": "b"}, {"id": "a"}]}});
+    let (_, ev) = crate::oauth_activity::built_in_scope(Arc::clone(&record), || {
+        crate::oauth_activity::rpc("kb/query.get", &json!({"kb_id": "kb-a", "node_id": "a"}));
+        crate::oauth_activity::rpc_answer(&small);
+    });
+    assert_eq!(ev.node_ids, Some(vec!["a".to_string(), "b".to_string()]));
+    assert_eq!(ev.node_ids_total, None);
+}
+
+// --- refusals during an outage (D5/D6) ----------------------------------------
+
+/// Wait until `GET /api/health` answers 200, within five seconds.
+async fn until_healthy(h: &Harness) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while health(h).await.0 != 200 {
+        assert!(Instant::now() < deadline, "the record never recovered");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// With the writer held, a refusal whose first could not be recorded leaves
+/// no window behind: the next bad token from the same address meets the
+/// record's `503` too, never its real `401`. Recovered, it gets the `401`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_a_failed_first_refusal_the_next_meets_the_records_refusal_too() {
+    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let held = Held::new(&h.db);
+    for label in ["first", "second"] {
+        let r = h.send("POST", "/", Some("not.a.token"), "", "").await;
+        assert_eq!(r.status, 503, "{label}");
+        assert_eq!(r.kind(), "activity_record_unavailable", "{label}");
+    }
+    drop(held);
+    until_healthy(&h).await;
+    let r = h.send("POST", "/", Some("not.a.token"), "", "").await;
+    assert_eq!(r.status, 401);
+}
+
+/// The record's `503` on `POST /ws/ticket` carries the CORS header that
+/// route's own answers carry, so a browser page can read why; a disallowed
+/// origin, and every other route, get none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_records_503_carries_the_routes_cors_header() {
+    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let token = h.token(3600);
+    let with_origin = |o: &str| format!("Origin: {o}\r\n");
+    let held = Held::new(&h.db);
+    let r = h
+        .send(
+            "POST",
+            "/ws/ticket",
+            Some(&token),
+            "",
+            &with_origin(APP_ORIGIN),
+        )
+        .await;
+    assert_eq!(r.status, 503);
+    assert_eq!(r.kind(), "activity_record_unavailable");
+    assert_eq!(r.header("access-control-allow-origin"), Some(APP_ORIGIN));
+    assert_eq!(r.header("vary"), Some("Origin"));
+    let r = h
+        .send(
+            "POST",
+            "/ws/ticket",
+            Some(&token),
+            "",
+            &with_origin("https://elsewhere.test"),
+        )
+        .await;
+    assert_eq!(r.status, 503);
+    assert_eq!(r.header("access-control-allow-origin"), None);
+    let r = h
+        .send("POST", "/", Some(&token), "", &with_origin(APP_ORIGIN))
+        .await;
+    assert_eq!(r.status, 503);
+    assert_eq!(r.header("access-control-allow-origin"), None);
+    drop(held);
+    // The route's own answer, for comparison: the same header.
+    until_healthy(&h).await;
+    let r = h
+        .send(
+            "POST",
+            "/ws/ticket",
+            Some(&token),
+            "",
+            &with_origin(APP_ORIGIN),
+        )
+        .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.header("access-control-allow-origin"), Some(APP_ORIGIN));
 }

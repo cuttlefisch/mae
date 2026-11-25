@@ -280,6 +280,35 @@ pub struct Unverified {
 /// to every other string a client chose (a KB id, a node id).
 pub const CLAIM_MAX_BYTES: usize = 256;
 
+/// D2: at most this many ids in `node_ids`. A listing or a query result can
+/// name thousands of nodes, and an event is written inside the group commit
+/// under `synchronous=FULL`, so one large result would make every waiting
+/// request's commit wait on a multi-megabyte write. 100 ids of at most
+/// [`CLAIM_MAX_BYTES`] bound an event's ids near 26 KB, while still naming
+/// every node of an ordinary page, search or neighbourhood (their own result
+/// caps are of this order). Past it, `node_ids_total` says how many there were.
+pub const NODE_IDS_MAX: usize = 100;
+
+/// `ids`, each truncated to [`CLAIM_MAX_BYTES`], duplicates dropped, the
+/// first [`NODE_IDS_MAX`] kept in order; with the number of distinct ids when
+/// more were named than kept (D2's `node_ids_total`), else `None`.
+pub fn bound_node_ids(ids: impl IntoIterator<Item = String>) -> (Vec<String>, Option<u64>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut kept = Vec::new();
+    for id in ids {
+        let id = truncate(&id, CLAIM_MAX_BYTES);
+        if seen.contains(&id) {
+            continue;
+        }
+        if kept.len() < NODE_IDS_MAX {
+            kept.push(id.clone());
+        }
+        seen.insert(id);
+    }
+    let total = seen.len();
+    (kept, (total > NODE_IDS_MAX).then_some(total as u64))
+}
+
 /// `s` cut to at most `max` bytes, on a character boundary.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -306,6 +335,10 @@ pub struct Event {
     pub route: Option<String>,
     pub kb_id: Option<String>,
     pub node_ids: Option<Vec<String>>,
+    /// How many distinct ids the request named, when that was more than
+    /// [`NODE_IDS_MAX`] (`node_ids` then holds the first of them); `None`
+    /// otherwise.
+    pub node_ids_total: Option<u64>,
     pub revision: Option<String>,
     pub blob: Option<String>,
     pub wal: Option<(i64, i64)>,
@@ -346,6 +379,7 @@ impl Event {
             route: None,
             kb_id: None,
             node_ids: None,
+            node_ids_total: None,
             revision: None,
             blob: None,
             wal: None,
@@ -386,6 +420,17 @@ impl Event {
             .as_ref()
             .filter(|_| self.result == OutcomeResult::Refused)
             .map(|u| json!({"iss": u.iss, "sub": u.sub}));
+        // The cap is the encoder's too, whatever a caller put there.
+        let node_ids = self
+            .node_ids
+            .as_ref()
+            .map(|ids| &ids[..ids.len().min(NODE_IDS_MAX)]);
+        let node_ids_total = match &self.node_ids {
+            Some(ids) if ids.len() > NODE_IDS_MAX => {
+                Some(self.node_ids_total.unwrap_or(0).max(ids.len() as u64))
+            }
+            _ => self.node_ids_total,
+        };
         let at = super::at_string(self.at_us);
         json!({
             "v": 1,
@@ -397,7 +442,8 @@ impl Event {
             "transport": self.transport.map(Transport::as_str),
             "route": self.route,
             "kb_id": self.kb_id,
-            "node_ids": self.node_ids,
+            "node_ids": node_ids,
+            "node_ids_total": node_ids_total,
             "revision": self.revision,
             "blob": self.blob,
             "wal": self.wal.map(|(from, to)| json!({"from": from, "to": to})),

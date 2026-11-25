@@ -234,6 +234,28 @@ impl ActivityRecord {
         self.send(msg, events).await
     }
 
+    /// D6's sweep: queue every ended window's count, each within
+    /// `commit_timeout_ms`. One that cannot be queued in time goes back to the
+    /// coalescer with every one after it, for the next sweep: a held writer
+    /// delays a count and never drops it, and the sweep never stalls on it.
+    /// Returns how many went back.
+    pub async fn flush_coalesced(&self, now_us: i64) -> usize {
+        let limit = Duration::from_millis(self.settings.commit_timeout_ms);
+        let mut ready = self.coalescer.drain_expired(now_us).into_iter();
+        while let Some(entry) = ready.next() {
+            // A send cut off by the timeout sent nothing (`mpsc` is cancel
+            // safe), so the copy that goes back is the only one.
+            let queued = tokio::time::timeout(limit, self.submit(entry.clone())).await;
+            if !matches!(queued, Ok(Ok(()))) {
+                let back: Vec<Entry> = std::iter::once(entry).chain(ready).collect();
+                let n = back.len();
+                self.coalescer.requeue(back);
+                return n;
+            }
+        }
+        0
+    }
+
     /// Queue `msg`, counted in the depth before the writer can take it out.
     async fn send(&self, msg: Msg, events: usize) -> Result<(), Unavailable> {
         self.shared.queue_depth.fetch_add(events, Ordering::SeqCst);

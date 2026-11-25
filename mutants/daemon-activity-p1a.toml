@@ -144,7 +144,7 @@ filter = "test(a_held_writer_refuses_a_read_and_sends_none_of_it)"
 ref = "ADR-120 D5: nothing of the answer is sent"
 [[mutant.edit]]
 file = "daemon/src/oauth_activity.rs"
-find = '''        Err(_) => oauth::boxed(unavailable(record.settings().commit_timeout_ms)),'''
+find = '''        Err(_) => oauth::boxed(unavailable(record.settings().commit_timeout_ms, cors)),'''
 replace = '''        Err(_) => with_session_header(resp, header),'''
 
 [[mutant]]
@@ -477,3 +477,36 @@ ref = "ADR-120 D13: the stable INFO line"
 file = "daemon/src/activity/writer.rs"
 find = '''            tracing::info!("{LOG_RECOVERED}");'''
 replace = '''            tracing::info!("activity record recovered");'''
+
+[[mutant]]
+id = "daemon-activity-p1a/recorded-request-not-detached"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_client_hanging_up_mid_upload_leaves_the_effect_and_its_event)"
+ref = "ADR-120 D5/D6: a client hanging up does not drop an effect's event"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    let task = tokio::spawn(work);'''
+replace = '''    let task = async { Ok::<_, tokio::task::JoinError>(work.await) };'''
+
+[[mutant]]
+id = "daemon-activity-p1a/node-ids-uncapped-in-the-draft"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_result_of_ten_thousand_ids_records_a_bounded_body_and_the_true_count)"
+ref = "ADR-120 D2: node_ids holds at most NODE_IDS_MAX ids"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''        if kept.len() < NODE_IDS_MAX {'''
+replace = '''        if true {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/node-ids-uncapped-in-the-encoder"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_encoder_caps_node_ids_and_keeps_the_true_count)"
+ref = "ADR-120 D2: the cap is the encoder's"
+[[mutant.edit]]
+file = "daemon/src/activity/event.rs"
+find = '''            .map(|ids| &ids[..ids.len().min(NODE_IDS_MAX)]);'''
+replace = '''            .map(|ids| &ids[..]);'''

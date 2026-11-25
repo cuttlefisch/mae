@@ -37,7 +37,7 @@ use std::time::Duration;
 use mae_daemon::collab_handler::SessionDeps;
 
 pub(crate) use connect_ticket::{TicketStore, MAX_TICKET_TTL};
-pub(crate) use upgrade::handle;
+pub(crate) use upgrade::{cors_origin, handle, with_cors};
 
 /// The one protocol version this daemon speaks (B2).
 pub(crate) const PROTOCOL_V1: &str = "mae.v1";

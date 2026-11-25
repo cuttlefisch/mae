@@ -25,8 +25,8 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use mae_daemon::activity::event::{
-    truncate, ActorKind, Event, EventKind, OutcomeResult, Peer, Principal, Transport, Unverified,
-    CLAIM_MAX_BYTES,
+    bound_node_ids, truncate, ActorKind, Event, EventKind, OutcomeResult, Peer, Principal,
+    Transport, Unverified, CLAIM_MAX_BYTES,
 };
 use mae_daemon::activity::store::Entry;
 use mae_daemon::activity::writer::ActivityRecord;
@@ -64,6 +64,8 @@ struct Draft {
     kind: Option<EventKind>,
     kb_id: Option<String>,
     node_ids: Option<Vec<String>>,
+    /// D2: how many ids there were, when more than `node_ids` holds.
+    node_ids_total: Option<u64>,
     revision: Option<String>,
     blob: Option<String>,
     /// A JSON-RPC refusal answered inside a `200`.
@@ -170,8 +172,8 @@ pub(crate) fn binding_proved() {
 pub(crate) fn target(kb_id: &str, node_ids: Option<Vec<String>>, blob: Option<&str>) {
     with_draft(|d, _| {
         d.kb_id = Some(truncate(kb_id, CLAIM_MAX_BYTES));
-        if node_ids.is_some() {
-            d.node_ids = node_ids.map(bound_ids);
+        if let Some(ids) = node_ids {
+            d.set_node_ids(ids);
         }
         if let Some(b) = blob {
             d.blob = Some(truncate(b, CLAIM_MAX_BYTES));
@@ -179,10 +181,14 @@ pub(crate) fn target(kb_id: &str, node_ids: Option<Vec<String>>, blob: Option<&s
     });
 }
 
-fn bound_ids(ids: Vec<String>) -> Vec<String> {
-    ids.into_iter()
-        .map(|i| truncate(&i, CLAIM_MAX_BYTES))
-        .collect()
+impl Draft {
+    /// D2: `node_ids` bounded in length and in number, with the true number
+    /// beside it past the cap.
+    fn set_node_ids(&mut self, ids: Vec<String>) {
+        let (kept, total) = bound_node_ids(ids);
+        self.node_ids = Some(kept);
+        self.node_ids_total = total;
+    }
 }
 
 /// The site's page or listing (D1: `index.json` and `explorer.json` expose
@@ -227,6 +233,7 @@ pub(crate) fn rpc(method: &str, params: &Value) {
         d.kb_id = s("kb_id");
         d.revision = s("revision");
         d.node_ids = s("node_id").map(|n| vec![n]);
+        d.node_ids_total = None;
     });
 }
 
@@ -251,31 +258,19 @@ pub(crate) fn rpc_answer(answer: &Value) {
             let returned = returned_node_ids(result);
             if !returned.is_empty() {
                 let mut ids = d.node_ids.take().unwrap_or_default();
-                let fresh: Vec<String> = returned
-                    .into_iter()
-                    .filter(|r| !ids_contains(&ids, r))
-                    .collect();
-                ids.extend(fresh);
-                d.node_ids = Some(bound_ids(ids));
+                ids.extend(returned);
+                d.set_node_ids(ids);
             }
         }
     });
 }
 
-fn ids_contains(ids: &[String], id: &str) -> bool {
-    ids.iter().any(|i| i == id)
-}
-
 /// The node ids a `kb/query.*` result lists, under the keys its methods use
-/// (`results`, `nodes`, `pairs`, `links_from`, `links_to`, `root`): bounded
-/// by each method's own result cap (D1).
+/// (`results`, `nodes`, `pairs`, `links_from`, `links_to`, `root`), in order
+/// and with repeats: [`bound_node_ids`] drops those and caps the number (D2).
 fn returned_node_ids(result: &Value) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut push = |s: &str| {
-        if !ids_contains(&out, s) {
-            out.push(s.to_string());
-        }
-    };
+    let mut push = |s: &str| out.push(s.to_string());
     if let Some(r) = result.get("root").and_then(Value::as_str) {
         push(r);
     }
@@ -411,14 +406,48 @@ fn method_name(m: &hyper::Method) -> &'static str {
 /// Run `route` for `req` inside a scope, then commit its event before the
 /// response leaves. If the record cannot take it, the caller gets `503
 /// activity_record_unavailable` and nothing of the prepared response.
+///
+/// @ai-caution: [security] The dispatch and the commit run in their own task,
+/// which this request only awaits. hyper drops a service future when its
+/// client hangs up, and an effect already handed to another thread (a blob
+/// commit on a blocking thread) then lands with no event at all
+/// (`a_client_hanging_up_mid_upload_leaves_the_effect_and_its_event`). The
+/// task owns everything it uses and holds the connection's slot until its
+/// commit is done, so orphaned requests stay bounded by the connection cap,
+/// and its commit is bounded by `commit_timeout_ms` like any other.
 pub(crate) async fn recorded(
     req: Request<Incoming>,
     listener: Arc<Listener>,
     conn: Arc<ConnGuard>,
     record: Arc<ActivityRecord>,
     route: Route,
-    (template, kind): (String, EventKind),
+    class: (String, EventKind),
 ) -> Response<ResponseBody> {
+    let timeout_ms = record.settings().commit_timeout_ms;
+    let cors = crate::ws::cors_origin(&req, &listener);
+    let work = recorded_detached(req, listener, conn, record, route, class, cors.clone());
+    let task = tokio::spawn(work);
+    match task.await {
+        Ok(resp) => resp,
+        // A panic is the connection's, as it was before the task existed.
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        // The runtime is shutting down: nothing was committed for it.
+        Err(_) => oauth::boxed(unavailable(timeout_ms, cors)),
+    }
+}
+
+/// [`recorded`]'s work, in a task of its own.
+async fn recorded_detached(
+    req: Request<Incoming>,
+    listener: Arc<Listener>,
+    conn: Arc<ConnGuard>,
+    record: Arc<ActivityRecord>,
+    route: Route,
+    (template, kind): (String, EventKind),
+    cors: Option<hyper::header::HeaderValue>,
+) -> Response<ResponseBody> {
+    // Held to the end of the commit, past the dispatch that consumes `conn`.
+    let _slot = Arc::clone(&conn);
     let at = now_us();
     let peer = peer_of(&req, record.settings());
     let bearer = oauth::extract_bearer_token(&req).map(str::to_string);
@@ -450,8 +479,21 @@ pub(crate) async fn recorded(
     };
     match committed {
         Ok(()) => with_session_header(resp, header),
-        Err(_) => oauth::boxed(unavailable(record.settings().commit_timeout_ms)),
+        Err(_) => oauth::boxed(unavailable(record.settings().commit_timeout_ms, cors)),
     }
+}
+
+/// The entry and event `fill` builds inside a scope on `record`, as
+/// [`recorded`] builds them for an answered `200` (tests).
+#[cfg(test)]
+pub(crate) fn built_in_scope(record: Arc<ActivityRecord>, fill: impl FnOnce()) -> (Entry, Event) {
+    let scope = Arc::new(Scope {
+        record,
+        draft: Mutex::new(Draft::default()),
+    });
+    SCOPE.sync_scope(Arc::clone(&scope), fill);
+    let draft = std::mem::take(&mut *scope.draft.lock().unwrap_or_else(|e| e.into_inner()));
+    build_entry(draft, now_us(), OutcomeResult::Ok, None, None, None)
 }
 
 /// A refusal is coalesced (D6): the first of its window commits before its
@@ -465,7 +507,8 @@ async fn commit_refusal(
     let pre_auth = ev.principal.id.is_none();
     let half = record.settings().queue_capacity / 2;
     let aggregate = pre_auth && record.pre_auth_in_flight() >= half.max(1);
-    let admit = record.coalescer().admit(ev, now_us(), aggregate);
+    let now = now_us();
+    let admit = record.coalescer().admit(ev, now, aggregate);
     for flushed in admit.flushed {
         let record = Arc::clone(record);
         tokio::spawn(async move { record.submit(flushed).await });
@@ -473,7 +516,13 @@ async fn commit_refusal(
     if !admit.commit {
         return Ok(());
     }
-    record.commit_as(entry, pre_auth).await
+    let committed = record.commit_as(entry, pre_auth).await;
+    if committed.is_err() {
+        // The window's first was never recorded: close it, or the refusals
+        // after it would be answered with their real body during the outage.
+        record.coalescer().abandon(ev, now);
+    }
+    committed
 }
 
 /// The outcome the caller is about to receive (D2): a JSON-RPC refusal's own
@@ -525,6 +574,7 @@ fn build_entry(
     ev.route = d.route;
     ev.kb_id = d.kb_id;
     ev.node_ids = d.node_ids;
+    ev.node_ids_total = d.node_ids_total;
     ev.revision = d.revision;
     ev.blob = d.blob;
     ev.result = result;
@@ -613,8 +663,13 @@ fn with_session_header(
 }
 
 /// D5's refusal: `503 activity_record_unavailable` with `Retry-After`, and
-/// nothing of the answer that was prepared.
-pub(crate) fn unavailable(commit_timeout_ms: u64) -> Response<Full<Bytes>> {
+/// nothing of the answer that was prepared, but the CORS header the route's
+/// own answers carry (`cors`, from [`crate::ws::cors_origin`]), so a browser
+/// page can read why it was refused.
+pub(crate) fn unavailable(
+    commit_timeout_ms: u64,
+    cors: Option<hyper::header::HeaderValue>,
+) -> Response<Full<Bytes>> {
     let mut resp = oauth::kinded_response(
         StatusCode::SERVICE_UNAVAILABLE,
         "temporarily_unavailable",
@@ -627,6 +682,7 @@ pub(crate) fn unavailable(commit_timeout_ms: u64) -> Response<Full<Bytes>> {
     if let Ok(v) = hyper::header::HeaderValue::from_str(&secs.to_string()) {
         resp.headers_mut().insert(hyper::header::RETRY_AFTER, v);
     }
+    crate::ws::with_cors(&mut resp, cors);
     resp
 }
 

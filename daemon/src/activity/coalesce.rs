@@ -117,6 +117,9 @@ struct Inner {
     windows: HashMap<Key, Window>,
     /// One aggregate per refusal kind, without addresses.
     aggregates: HashMap<String, Window>,
+    /// Counts already flushed that could not be queued yet: handed out first
+    /// by the next drain, so a held writer delays a count and never drops it.
+    unsent: Vec<Entry>,
 }
 
 impl Coalescer {
@@ -196,19 +199,47 @@ impl Coalescer {
                 template.route = None;
                 template.kb_id = None;
                 template.node_ids = None;
+                template.node_ids_total = None;
                 Window::open(&template, now_us)
             })
             .add(ev.at_us);
     }
 
-    /// The flushes of every window that has ended by `now_us`.
+    /// The first refusal of the window `admit` opened for `ev` at `opened_us`
+    /// was not committed (the record is unavailable): close that window, so a
+    /// later refusal with its key is not answered as if its first had been
+    /// recorded, and keep any count it took for the next drain.
+    pub fn abandon(&self, ev: &Event, opened_us: i64) {
+        let key = Key::of(ev);
+        let mut inner = self.lock();
+        if inner
+            .windows
+            .get(&key)
+            .is_some_and(|w| w.opened_us == opened_us)
+        {
+            let w = inner.windows.remove(&key).expect("just found");
+            let at = opened_us.max(w.last_us);
+            inner.unsent.extend(w.flush(at));
+        }
+    }
+
+    /// Flushes that could not be queued, back for the next drain (D6: never
+    /// dropped).
+    pub fn requeue(&self, entries: Vec<Entry>) {
+        self.lock().unsent.extend(entries);
+    }
+
+    /// The flushes of every window that has ended by `now_us`, after any that
+    /// could not be queued before.
     pub fn drain_expired(&self, now_us: i64) -> Vec<Entry> {
         let mut guard = self.lock();
         let Inner {
             windows,
             aggregates,
+            unsent,
         } = &mut *guard;
-        let mut out = windows.take_expired(now_us, self.window_us);
+        let mut out = std::mem::take(unsent);
+        out.extend(windows.take_expired(now_us, self.window_us));
         out.extend(aggregates.take_expired(now_us, self.window_us));
         out
     }
@@ -216,11 +247,8 @@ impl Coalescer {
     /// The flushes of every window, ended or not (clean shutdown).
     pub fn drain_all(&self, now_us: i64) -> Vec<Entry> {
         let mut inner = self.lock();
-        let mut out: Vec<Entry> = inner
-            .windows
-            .drain()
-            .filter_map(|(_, w)| w.flush(now_us))
-            .collect();
+        let mut out = std::mem::take(&mut inner.unsent);
+        out.extend(inner.windows.drain().filter_map(|(_, w)| w.flush(now_us)));
         out.extend(
             inner
                 .aggregates

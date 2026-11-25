@@ -120,15 +120,14 @@ pub(crate) async fn stop(record: &ActivityRecord) {
         .await;
 }
 
-/// D6: each window's count is queued as it ends.
+/// D6: each window's count is queued as it ends, each sweep bounded by the
+/// commit timeout (`ActivityRecord::flush_coalesced`).
 fn spawn_coalesce_flush(record: Arc<ActivityRecord>) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             tick.tick().await;
-            for entry in record.coalescer().drain_expired(act::now_us()) {
-                let _ = record.submit(entry).await;
-            }
+            record.flush_coalesced(act::now_us()).await;
         }
     });
 }

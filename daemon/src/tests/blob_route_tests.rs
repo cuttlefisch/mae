@@ -409,7 +409,7 @@ fn sha(bytes: &[u8]) -> String {
     hex::encode(sha2::Sha256::digest(bytes))
 }
 
-fn png(w: u32, h: u32, seed: u8) -> Vec<u8> {
+pub(super) fn png(w: u32, h: u32, seed: u8) -> Vec<u8> {
     let img = image::RgbImage::from_fn(w, h, |x, y| {
         image::Rgb([(x as u8).wrapping_mul(seed), y as u8, seed])
     });
