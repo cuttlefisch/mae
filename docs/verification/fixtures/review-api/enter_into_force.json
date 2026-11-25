@@ -58,6 +58,33 @@
           }
         }
       }
+    },
+    {
+      "case": "under approval_record signed_pdf, a member has no signed PDF yet (O19)",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "method": "kb/review.enter_into_force",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-01a7c2",
+          "effective_at": "2000-01-05T08:00:00.000Z"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "error": {
+          "code": -32603,
+          "message": "every member needs its signed PDF before entry into force",
+          "data": {
+            "kind": "signed_pdf_required",
+            "missing": [
+              "rv-01a7c2-3"
+            ]
+          }
+        }
+      }
     }
   ]
 }

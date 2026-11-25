@@ -27,7 +27,30 @@
         "jsonrpc": "2.0",
         "id": 35,
         "result": {
-          "event_id": "ev-0000000008"
+          "event_id": "ev-0000000008",
+          "in_force_since": null
+        }
+      }
+    },
+    {
+      "name": "under signed_pdf and in_force_on_approval, this attach completes the set, which enters into force (O19)",
+      "precedes": "blob_upload.json",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "method": "kb/review.attach_signed_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-3",
+          "blob_sha256": "9e1d4c7b2a5f8e3d6c9b2a5f8e1d4c7b2a5f8e3d6c9b2a5f8e1d4c7b2a5f8e3d"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "result": {
+          "event_id": "ev-0000000009",
+          "in_force_since": "2000-01-06T09:30:00.000Z"
         }
       }
     }
