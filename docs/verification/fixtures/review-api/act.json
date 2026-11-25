@@ -1,0 +1,138 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.act",
+  "description": "Records a `reviewed` act on one revision. No state change.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "reviewed",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "kb/review.act",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "act": "reviewed",
+          "comment": "Checked against the supplier list."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "event_id": "ev-0000000004",
+          "at": "2000-01-03T09:20:00.000Z"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "not on the reviewer list",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "kb/review.act",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "act": "reviewed"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "error": {
+          "code": -32603,
+          "message": "not on this KB's reviewer list",
+          "data": {
+            "kind": "not_reviewer"
+          }
+        }
+      }
+    },
+    {
+      "case": "the caller edited this revision",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "kb/review.act",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "act": "reviewed"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "error": {
+          "code": -32603,
+          "message": "an author of a revision cannot act on it",
+          "data": {
+            "kind": "author_cannot_approve"
+          }
+        }
+      }
+    },
+    {
+      "case": "the author record is incomplete",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "kb/review.act",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "act": "reviewed"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "error": {
+          "code": -32603,
+          "message": "the authors of this revision cannot be established",
+          "data": {
+            "kind": "authors_unknown"
+          }
+        }
+      }
+    },
+    {
+      "case": "the type requires a group the token does not carry",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "kb/review.act",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "act": "reviewed"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "error": {
+          "code": -32603,
+          "message": "this act is performed by a group the caller's token does not carry",
+          "data": {
+            "kind": "performer_not_satisfied",
+            "capacity": "review",
+            "performer": {
+              "group": "quality-reviewers"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

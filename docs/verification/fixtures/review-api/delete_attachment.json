@@ -1,0 +1,63 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.delete_attachment",
+  "description": "B5: the only deletion. Owner only, one attachment, after the retention period of a superseded or derogated revision. The revision record stays, the attachment marked deleted.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "delete after the period",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "method": "kb/review.delete_attachment",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-00a001-1",
+          "kind": "signed_pdf",
+          "reason": "Retention period over."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 45,
+        "result": {
+          "event_id": "ev-0000000012"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "period not over",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 46,
+        "method": "kb/review.delete_attachment",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-00a001-1",
+          "kind": "signed_pdf",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 46,
+        "error": {
+          "code": -32603,
+          "message": "the retention period has not passed",
+          "data": {
+            "kind": "retention_not_elapsed",
+            "deletable_from": "2010-01-05T08:00:00.000Z"
+          }
+        }
+      }
+    }
+  ]
+}

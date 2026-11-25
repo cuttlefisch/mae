@@ -1,0 +1,64 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.derogate",
+  "description": "Ends a document's force with no successor: its in-force revision becomes `derogated` and the node leaves view: \"published\". The revision stays readable by revision_id.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "derogate",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "method": "kb/review.derogate",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+          "effective_at": "2000-01-05T08:00:00.000Z",
+          "reason": "Procedure withdrawn from use."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "result": {
+          "event_id": "ev-0000000010"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "nothing in force",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 34,
+        "method": "kb/review.derogate",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "node_id": "2e1d5b3f-7c80-4f29-8b4d-3a6e7f8b9ca2",
+          "effective_at": "2000-01-05T08:00:00.000Z",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 34,
+        "error": {
+          "code": -32603,
+          "message": "this node has no revision in force",
+          "data": {
+            "kind": "invalid_transition",
+            "from": null,
+            "act": "derogate"
+          }
+        }
+      }
+    }
+  ]
+}
