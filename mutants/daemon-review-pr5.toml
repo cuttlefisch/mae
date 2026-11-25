@@ -42,8 +42,8 @@ filter = "test(a_listed_approver_may_withdraw_unless_an_author)"
 ref = "D3, A1: an editor since the last approval is an author"
 [[mutant.edit]]
 file = "daemon/src/review/acts.rs"
-find = '''        Authors::Known(set) if set.contains(&who.principal) => Err(author()),'''
-replace = '''        Authors::Known(set) if set.is_empty() && set.contains(&who.principal) => Err(author()),'''
+find = '''        Authors::Known(set) if set.contains(&who.principal) => Verdict::Author,'''
+replace = '''        Authors::Known(set) if set.is_empty() && set.contains(&who.principal) => Verdict::Author,'''
 
 [[mutant]]
 id = "daemon-review-pr5/unknown-authors-allowed"
@@ -53,8 +53,8 @@ filter = "test(unknown_authors_refuse_approval)"
 ref = "A3: unknown authors refuse approval"
 [[mutant.edit]]
 file = "daemon/src/review/acts.rs"
-find = '''        Authors::Unknown(_) => Err(McpError::authors_unknown('''
-replace = '''        Authors::Unknown(_) if false => Err(McpError::authors_unknown('''
+find = '''    if !unknown.is_empty() && !acknowledged(params, "acknowledge_unknown_authors") {'''
+replace = '''    if false {'''
 
 [[mutant]]
 id = "daemon-review-pr5/required-act-skipped"
@@ -71,14 +71,12 @@ replace = '''    if let Some(missing) = awaiting(&i.required, &acts, &i.principa
 id = "daemon-review-pr5/one-person-two-acts"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(a_required_review_comes_first_and_by_someone_else)"
+filter = "test(one_reviewer_reviews_once)"
 ref = "C3: one person, one act on a revision"
 [[mutant.edit]]
 file = "daemon/src/review/acts.rs"
-find = '''    let acts = store::acts_of(c, &i.id)?;
-    if acts.iter().any(|(_, p)| *p == i.principal) {'''
-replace = '''    let acts = store::acts_of(c, &i.id)?;
-    if acts.iter().any(|(_, p)| *p == i.principal) && false {'''
+find = '''                if store::acts_of(c, &id)?.iter().any(|(_, p)| *p == principal) {'''
+replace = '''                if false {'''
 
 [[mutant]]
 id = "daemon-review-pr5/set-moves-per-member"
@@ -181,3 +179,36 @@ ref = "PR-5: a PR-4 database gains the lists"
 file = "daemon/src/review/store.rs"
 find = '''        if !has_column(conn, "kb_review_policy", col)? {'''
 replace = '''        if !has_column(conn, "kb_review_policy", col)? && false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/self-approval-unacknowledged"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(authors_agents_and_unlisted_people_are_refused)"
+ref = "D3 soft block: an author acts only by acknowledging it"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    if !authored.is_empty() && !acknowledged(params, "acknowledge_self_approval") {'''
+replace = '''    if false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/override-not-recorded"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_acknowledged_self_approval_goes_through_and_is_recorded)"
+ref = "D3 soft block: every override reaches the signed chain"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''        "self_approval": authored,'''
+replace = '''        "self_approval": Vec::<String>::new(),'''
+
+[[mutant]]
+id = "daemon-review-pr5/override-without-reason"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_acknowledged_self_approval_goes_through_and_is_recorded)"
+ref = "D3 soft block: an override needs its reason"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let reason = required_text(params, "override_reason")?.to_string();'''
+replace = '''    let reason = String::new();'''

@@ -104,7 +104,8 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      act TEXT NOT NULL,
      principal TEXT NOT NULL,
      at INTEGER NOT NULL,
-     event_seq INTEGER NOT NULL
+     event_seq INTEGER NOT NULL,
+     override_note TEXT
  );
  CREATE INDEX IF NOT EXISTS idx_review_acts_revision ON kb_review_acts(revision_id);
  CREATE TRIGGER IF NOT EXISTS kb_review_events_no_update BEFORE UPDATE ON kb_review_events
@@ -937,7 +938,9 @@ pub(crate) fn acts_of(
     Ok(out)
 }
 
-/// Record one act on a revision, with the event that recorded it.
+/// Record one act on a revision, with the event that recorded it and the
+/// acknowledged override, if any (`null` when none).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_act(
     conn: &sqlite::Connection,
     kb_id: &str,
@@ -946,10 +949,11 @@ pub(crate) fn insert_act(
     principal: &str,
     at: i64,
     event_seq: u64,
+    ovr: &serde_json::Value,
 ) -> Result<(), StorageError> {
     let mut st = conn.prepare(
-        "INSERT INTO kb_review_acts (kb_id, revision_id, act, principal, at, event_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO kb_review_acts (kb_id, revision_id, act, principal, at, event_seq, override_note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     st.bind((1, kb_id))?;
     st.bind((2, revision_id))?;
@@ -957,6 +961,8 @@ pub(crate) fn insert_act(
     st.bind((4, principal))?;
     st.bind((5, at))?;
     st.bind((6, i64::try_from(event_seq).map_err(|_| bad("event_seq"))?))?;
+    let note = (!ovr.is_null()).then(|| ovr.to_string());
+    st.bind((7, opt_text(note.as_deref())))?;
     st.next()?;
     Ok(())
 }
@@ -1060,4 +1066,31 @@ pub(crate) fn next_rev_no(
     st.bind((2, node_id))?;
     st.next()?;
     Ok(st.read::<Option<i64>, _>("m")?.map_or(0, |m| m + 1))
+}
+
+/// Every act on a revision, in order, as the revision read lists them (D5):
+/// `{act, principal, at, override}`.
+pub(crate) fn act_records(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+) -> Result<Vec<serde_json::Value>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT act, principal, at, override_note FROM kb_review_acts
+         WHERE revision_id = ?1 ORDER BY rowid",
+    )?;
+    st.bind((1, revision_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        let ovr = match st.read::<Option<String>, _>("override_note")? {
+            Some(t) => serde_json::from_str(&t).map_err(|_| bad("override_note"))?,
+            None => serde_json::Value::Null,
+        };
+        out.push(serde_json::json!({
+            "act": st.read::<String, _>("act")?,
+            "principal": st.read::<String, _>("principal")?,
+            "at": crate::rfc3339::utc_millis(st.read::<i64, _>("at")?),
+            "override": ovr,
+        }));
+    }
+    Ok(out)
 }

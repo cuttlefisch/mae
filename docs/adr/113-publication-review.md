@@ -113,7 +113,13 @@ across revisions. Each KB has a list of permitted prefixes; the number is unique
   principal not on the list cannot review, approve, put into force or withdraw an approval
   (`not_reviewer`, `not_approver`).
 - **No author acts on their own revision**: `approve`, `act` and `enter_into_force` by anyone in the
-  author set → `author_cannot_approve`.
+  author set → `author_cannot_approve`. *(Owner decision, 2026-11-25: a **soft** block. The refusal
+  stands unless the call acknowledges it, `acknowledge_self_approval: true` with an
+  `override_reason`; the act then goes ahead and its signed event and act row record the override,
+  the revisions it covers and the reason. The reason: an official document must never be stuck at an
+  important moment because the only available person wrote it; the record shows every exception.
+  Segregation of duties is then evidenced by the record, not guaranteed. Withdrawal by an author keeps
+  the requester's path. Agents and the performer lists stay hard.)*
 - **No agent acts at all**: a principal marked as an agent is refused even when listed
   (`agent_forbidden`).
 - **Policy cannot be loosened by a requester.** `in_force_on_approval` defaults from the KB policy.
@@ -296,7 +302,8 @@ for display only.
 
 `approve`, `act` and `enter_into_force` refuse with `author_cannot_approve` when the approver is a
 known author, and with **`authors_unknown`** when the set is unknown. Approval is never decided on
-an incomplete record.
+an incomplete record. *(Owner decision, 2026-11-25: both are soft blocks, D3. Unknown authors are
+acknowledged with `acknowledge_unknown_authors: true` and an `override_reason`, recorded alike.)*
 
 ### A4. Seeded content enters as an imported, in-force revision
 
@@ -1037,7 +1044,7 @@ wire (storage column names are the build's to choose):
 |---|---|---|---|
 | `kb/review.request` | `kb_id, nodes:[{node_id, version}], set_name?, in_force_on_approval?, reason` | `{request_id, event_id, state:"in_review", revisions:[{revision_id, node_id, rev, source_sha256}]}` (`event_id`: the `request` event, D7) | a member with Edit |
 | `kb/review.act` | `kb_id, revision_id, act:"reviewed", comment?` | `{event_id, at}` | a listed reviewer |
-| `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?` | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
+| `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?`; and on every act (`act`, `approve`, `reject`, `enter_into_force`, `derogate`), the soft block's `acknowledge_self_approval?, acknowledge_unknown_authors?, override_reason?` (D3, A3) | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
 | `kb/review.reject` | `kb_id, request_id, revision_id, reason` | `{event_id}` | a listed reviewer or approver |
 | `kb/review.withdraw` | `kb_id, request_id, reason` | `{event_id}` | the requester, or a listed approver |
 | `kb/review.enter_into_force` | `kb_id, request_id, effective_at` | `{event_id}` | C2's publisher |

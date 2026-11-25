@@ -447,3 +447,118 @@ async fn derogation_ends_a_document_in_force() {
     .await;
     assert_eq!(err_kind(again), "invalid_transition");
 }
+
+/// The soft block (owner decision, 2026-11-25): an author may approve their
+/// own revision only by acknowledging it with a reason, and the override is
+/// recorded in the signed event and on the revision's acts. Kills a silent
+/// override, an override without a reason, and recording one not needed.
+#[tokio::test]
+async fn an_acknowledged_self_approval_goes_through_and_is_recorded() {
+    let env = env().await;
+    policy(&env, json!({})).await;
+    let (_, revs) = requested(&env, &["n1"]).await;
+    let editor = signed_in(&env.editor, &["approvers"], PrincipalKind::Person);
+    let base = json!({"kb_id": KB, "revision_id": revs[0], "acknowledge_self_approval": true});
+    let e = as_(&env, &editor, "kb/review.approve", base.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (kind(&e), e.data.as_deref().unwrap()["param"].clone()),
+        ("invalid_params".into(), json!("override_reason"))
+    );
+    let mut ok = base;
+    ok["override_reason"] = json!("The only approver is away; signed copy follows.");
+    as_(&env, &editor, "kb/review.approve", ok).await.unwrap();
+    let ev = event_objects(&env).await;
+    let approve = ev.iter().find(|e| e["kind"] == json!("approve")).unwrap();
+    assert_eq!(
+        approve["payload"]["override"]["self_approval"],
+        json!([revs[0]])
+    );
+    assert_eq!(
+        approve["payload"]["override"]["reason"],
+        json!("The only approver is away; signed copy follows.")
+    );
+    let read = call(
+        &env,
+        &env.owner,
+        "kb/query.get",
+        json!({"kb_id": KB, "node_id": "n1", "revision": revs[0]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read["revision"]["acts"][0]["override"]["self_approval"],
+        json!([revs[0]])
+    );
+    // An acknowledgement nobody needed records no override.
+    let (_, revs2) = requested(&env, &["n2"]).await;
+    let p = json!({"kb_id": KB, "revision_id": revs2[0], "acknowledge_self_approval": true, "override_reason": "Not needed."});
+    as_(&env, &approver(&env), "kb/review.approve", p)
+        .await
+        .unwrap();
+    let ev = event_objects(&env).await;
+    let last = ev
+        .iter()
+        .rev()
+        .find(|e| e["kind"] == json!("approve"))
+        .unwrap();
+    assert_eq!(last["payload"]["override"], Value::Null);
+}
+
+/// The soft block covers unknown authors, acknowledged; agents stay hard.
+/// Kills acknowledging unknown authors silently, and an agent passing by
+/// acknowledging.
+#[tokio::test]
+async fn unknown_authors_can_be_acknowledged_but_an_agent_never_acts() {
+    let env = env().await;
+    policy(&env, json!({})).await;
+    let name = mae_sync::kb_node_doc_name(KB, "n1");
+    let state = env.store.encode_state(&name).await.unwrap();
+    let mut doc = KbNodeDoc::from_bytes_with_client_id(&state, 779).unwrap();
+    let up = doc.set_title("Seeded");
+    env.store
+        .apply_update(
+            &name,
+            &up,
+            None,
+            Attribution::Internal(InternalWriter::Seed),
+        )
+        .await
+        .unwrap();
+    let (_, revs) = requested(&env, &["n1"]).await;
+    let p = json!({"kb_id": KB, "revision_id": revs[0], "acknowledge_unknown_authors": true,
+        "acknowledge_self_approval": true, "override_reason": "Seeded from the approved source."});
+    let agent = signed_in(&env.viewer, &["approvers"], PrincipalKind::Agent);
+    assert_eq!(
+        err_kind(as_(&env, &agent, "kb/review.approve", p.clone()).await),
+        "agent_forbidden"
+    );
+    as_(&env, &approver(&env), "kb/review.approve", p)
+        .await
+        .unwrap();
+    let ev = event_objects(&env).await;
+    let approve = ev.iter().find(|e| e["kind"] == json!("approve")).unwrap();
+    assert_eq!(
+        approve["payload"]["override"]["unknown_authors"],
+        json!([revs[0]])
+    );
+    assert_eq!(approve["payload"]["override"]["self_approval"], json!([]));
+}
+
+/// C3 on `act`: the same reviewer does not review twice. Kills its check.
+#[tokio::test]
+async fn one_reviewer_reviews_once() {
+    let env = env().await;
+    policy(&env, json!({"required_acts": ["reviewed", "approved"]})).await;
+    let (_, revs) = requested(&env, &["n1"]).await;
+    let reviewer = signed_in(&env.viewer, &["reviewers"], PrincipalKind::Person);
+    let act = json!({"kb_id": KB, "revision_id": revs[0], "act": "reviewed"});
+    as_(&env, &reviewer, "kb/review.act", act.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        err_kind(as_(&env, &reviewer, "kb/review.act", act).await),
+        "invalid_transition"
+    );
+}

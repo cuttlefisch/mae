@@ -62,18 +62,26 @@ async fn revision_of(store: &DocStore, kb_id: &str, id: &str) -> Result<Revision
         .ok_or_else(|| McpError::unknown_revision("no such revision in this KB".into()))
 }
 
-/// D3, A1, A3: refuse `who` if they are an author of `rev`, or if its authors
-/// cannot be known. The requester is an author; so is everyone the editor
-/// record names since the node's last revision that reached approval.
-pub(super) async fn not_an_author(
+/// Where `who` stands against a revision's authors (D3, A1, A3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Verdict {
+    /// Not an author, and the authors are known.
+    Clear,
+    /// An author: the requester, or named by the editor record.
+    Author,
+    /// The authors cannot be established.
+    Unknown,
+}
+
+/// `who`'s verdict on `rev`. The requester is an author; so is everyone the
+/// editor record names since the node's last revision that reached approval.
+pub(super) async fn author_verdict(
     store: &DocStore,
     rev: &Revision,
     who: &ValidatedPrincipal,
-) -> Result<(), McpError> {
-    let author =
-        || McpError::author_cannot_approve("an author may not act on their own revision".into());
+) -> Result<Verdict, McpError> {
     if rev.created_by == who.principal {
-        return Err(author());
+        return Ok(Verdict::Author);
     }
     let (kb, node, ord_of) = (
         rev.kb_id.clone(),
@@ -95,17 +103,73 @@ pub(super) async fn not_an_author(
         .await
         .map_err(storage_fault)?;
     let doc = format!("kbn:{}:{}", rev.kb_id, rev.node_id);
-    match store
-        .authors_since_wal(&doc, since)
-        .await
-        .map_err(storage_fault)?
-    {
-        Authors::Unknown(_) => Err(McpError::authors_unknown(
-            "the revision's authors cannot be established, so it cannot be approved".into(),
-        )),
-        Authors::Known(set) if set.contains(&who.principal) => Err(author()),
-        Authors::Known(_) => Ok(()),
+    Ok(
+        match store
+            .authors_since_wal(&doc, since)
+            .await
+            .map_err(storage_fault)?
+        {
+            Authors::Unknown(_) => Verdict::Unknown,
+            Authors::Known(set) if set.contains(&who.principal) => Verdict::Author,
+            Authors::Known(_) => Verdict::Clear,
+        },
+    )
+}
+
+/// Whether `params` sets the boolean `name` to true.
+fn acknowledged(params: &Value, name: &str) -> bool {
+    params.get(name).and_then(Value::as_bool) == Some(true)
+}
+
+/// D3 and A3 as a soft block (owner decision, 2026-11-25). An author, or a
+/// revision whose authors are unknown, is refused (`author_cannot_approve`,
+/// `authors_unknown`) unless the call acknowledges it
+/// (`acknowledge_self_approval`, `acknowledge_unknown_authors`) and gives an
+/// `override_reason`. Then the act goes ahead and its event and act row
+/// record the override: what was acknowledged, for which revisions, and why.
+/// Returns that record, or `null` when nothing needed acknowledging.
+///
+/// @ai-caution: [security] The soft block keeps "approver is not the author"
+/// as a recorded exception, never a silent one: every override must reach the
+/// signed event chain. Agents and the performer lists stay hard.
+pub(super) async fn author_gate(
+    store: &DocStore,
+    revs: &[Revision],
+    who: &ValidatedPrincipal,
+    params: &Value,
+) -> Result<Value, McpError> {
+    let (mut authored, mut unknown) = (Vec::new(), Vec::new());
+    for r in revs {
+        match author_verdict(store, r, who).await? {
+            Verdict::Author => authored.push(r.revision_id.clone()),
+            Verdict::Unknown => unknown.push(r.revision_id.clone()),
+            Verdict::Clear => {}
+        }
     }
+    if !authored.is_empty() && !acknowledged(params, "acknowledge_self_approval") {
+        return Err(McpError::author_cannot_approve(
+            "an author acting on their own revision must acknowledge it \
+             (acknowledge_self_approval, with an override_reason)"
+                .into(),
+        ));
+    }
+    if !unknown.is_empty() && !acknowledged(params, "acknowledge_unknown_authors") {
+        return Err(McpError::authors_unknown(
+            "the revision's authors cannot be established; acting anyway must be acknowledged \
+             (acknowledge_unknown_authors, with an override_reason)"
+                .into(),
+        ));
+    }
+    if authored.is_empty() && unknown.is_empty() {
+        return Ok(Value::Null);
+    }
+    let reason = required_text(params, "override_reason")?.to_string();
+    within_bytes("override_reason", &reason, MAX_REASON_BYTES)?;
+    Ok(json!({
+        "self_approval": authored,
+        "unknown_authors": unknown,
+        "reason": reason,
+    }))
 }
 
 /// An effective time from the wire (E9): RFC 3339 UTC with milliseconds, not
@@ -162,7 +226,7 @@ pub(super) async fn act(
             "not on this KB's reviewer list".into(),
         ));
     }
-    not_an_author(store, &rev, who).await?;
+    let ovr = author_gate(store, std::slice::from_ref(&rev), who, params).await?;
     let comment = super::optional_str(params, "comment")?.map(str::to_string);
     if let Some(c) = &comment {
         within_bytes("comment", c, MAX_REASON_BYTES)?;
@@ -188,7 +252,8 @@ pub(super) async fn act(
                         None,
                     )));
                 }
-                let payload = json!({ "revision_id": id, "act": kind, "comment": comment });
+                let payload =
+                    json!({ "revision_id": id, "act": kind, "comment": comment, "override": ovr });
                 let seq = store::append_event(
                     c,
                     &signer,
@@ -200,7 +265,7 @@ pub(super) async fn act(
                         payload,
                     },
                 )?;
-                store::insert_act(c, &kb, &id, &kind, &principal, at, seq)?;
+                store::insert_act(c, &kb, &id, &kind, &principal, at, seq, &ovr)?;
                 Ok(Ok(
                     json!({ "event_id": store::event_id(seq), "at": time(at) }),
                 ))
@@ -231,6 +296,7 @@ fn enter_into_force_now(
     at: i64,
     actor: Value,
     on_approval: Option<u64>,
+    ovr: Value,
 ) -> Result<u64, crate::storage::StorageError> {
     let mut superseded = Vec::new();
     for m in members {
@@ -248,6 +314,7 @@ fn enter_into_force_now(
         "effective_at": time(since),
         "superseded": superseded,
         "on_approval": on_approval.map(store::event_id),
+        "override": ovr,
     });
     store::append_event(
         c,
@@ -269,6 +336,8 @@ struct ApproveInput {
     principal: String,
     actor: Value,
     required: Vec<String>,
+    /// The acknowledged override, `null` when none (`author_gate`).
+    ovr: Value,
 }
 
 /// The required acts other than `approved` that `acts` lacks, in order, each
@@ -297,15 +366,9 @@ fn record_approval(
     if r.state != "in_review" {
         return Ok(Err(wrong_state(&r.state, "approve")));
     }
+    // C3 needs no check of its own here: every required act must have been
+    // done by someone other than the approver (`awaiting`).
     let acts = store::acts_of(c, &i.id)?;
-    if acts.iter().any(|(_, p)| *p == i.principal) {
-        return Ok(Err(McpError::invalid_transition(
-            "one person performs one act on a revision (C3)".into(),
-            &r.state,
-            "approve",
-            None,
-        )));
-    }
     if let Some(missing) = awaiting(&i.required, &acts, &i.principal) {
         return Ok(Err(McpError::invalid_transition(
             format!("this revision is waiting for its {missing} act first"),
@@ -316,7 +379,8 @@ fn record_approval(
     }
     let rev_no = store::next_rev_no(c, &i.kb, &r.node_id)?;
     store::approve_revision(c, &i.id, rev_no, at)?;
-    let payload = json!({ "revision_id": i.id, "rev": rev_no, "request_id": r.request_id });
+    let payload = json!({ "revision_id": i.id, "rev": rev_no, "request_id": r.request_id,
+        "override": i.ovr });
     let seq = store::append_event(
         c,
         signer,
@@ -328,7 +392,7 @@ fn record_approval(
             payload,
         },
     )?;
-    store::insert_act(c, &i.kb, &i.id, "approved", &i.principal, at, seq)?;
+    store::insert_act(c, &i.kb, &i.id, "approved", &i.principal, at, seq, &i.ovr)?;
     let req = store::request(c, &i.kb, &r.request_id)?;
     let members = store::request_revisions(c, &r.request_id)?;
     let all_approved = members.iter().all(|m| m.state == "approved");
@@ -345,6 +409,7 @@ fn record_approval(
             at,
             i.actor,
             Some(seq),
+            Value::Null,
         )?;
         Some(time(at))
     } else {
@@ -378,9 +443,10 @@ pub(super) async fn approve(
             "not on this KB's approver list".into(),
         ));
     }
-    not_an_author(store, &rev, who).await?;
+    let ovr = author_gate(store, std::slice::from_ref(&rev), who, params).await?;
     let signer = signer(store)?;
     let input = ApproveInput {
+        ovr,
         kb: kb_id.to_string(),
         id: rev.revision_id,
         principal: who.principal.clone(),
@@ -393,19 +459,6 @@ pub(super) async fn approve(
             .review_write(move |c| record_approval(c, &signer, input, at))
             .await,
     )
-}
-
-/// Refuse `who` unless they may end or force every member of a request: a
-/// listed approver, a person, and an author of none of them.
-async fn may_act_on_all(
-    store: &DocStore,
-    members: &[Revision],
-    who: &ValidatedPrincipal,
-) -> Result<(), McpError> {
-    for m in members {
-        not_an_author(store, m, who).await?;
-    }
-    Ok(())
 }
 
 /// A request's members, read outside the write (for the author checks).
@@ -452,7 +505,7 @@ pub(super) async fn enter_into_force(
     }
     let now = store.now_ms() as i64;
     let since = effective_at(params, now)?;
-    may_act_on_all(store, &members, who).await?;
+    let ovr = author_gate(store, &members, who, params).await?;
     let signer = signer(store)?;
     let (kb, actor) = (kb_id.to_string(), actor(who));
     flatten(
@@ -490,6 +543,7 @@ pub(super) async fn enter_into_force(
                     now,
                     actor,
                     None,
+                    ovr,
                 )?;
                 Ok(Ok(json!({ "event_id": store::event_id(seq) })))
             })
@@ -523,7 +577,7 @@ pub(super) async fn reject(
             "not on this KB's reviewer or approver list".into(),
         ));
     }
-    not_an_author(store, named, who).await?;
+    let ovr = author_gate(store, std::slice::from_ref(named), who, params).await?;
     let signer = signer(store)?;
     let (kb, actor) = (kb_id.to_string(), actor(who));
     let at = store.now_ms() as i64;
@@ -549,6 +603,7 @@ pub(super) async fn reject(
                     "revision_id": revision_id,
                     "reason": reason,
                     "revisions": ids(&members, |_| true),
+                    "override": ovr,
                 });
                 let seq = store::append_event(
                     c,
@@ -597,7 +652,7 @@ pub(super) async fn derogate(
         let last = all.last().map_or("none", |r| r.state.as_str()).to_string();
         return Err(wrong_state(&last, "derogate"));
     };
-    not_an_author(store, &current, who).await?;
+    let ovr = author_gate(store, std::slice::from_ref(&current), who, params).await?;
     let signer = signer(store)?;
     let (kb, actor) = (kb_id.to_string(), actor(who));
     flatten(
@@ -615,6 +670,7 @@ pub(super) async fn derogate(
                     "revision_id": r.revision_id,
                     "effective_at": time(at),
                     "reason": reason,
+                    "override": ovr,
                 });
                 let seq = store::append_event(
                     c,
@@ -653,8 +709,12 @@ pub(super) async fn approver_may_withdraw(
         // Refused by the state check inside the write, as for the requester.
         return Ok(true);
     }
-    match may_act_on_all(store, &members, who).await {
-        Ok(()) => Ok(true),
-        Err(_) => Ok(false),
+    // Withdrawal keeps the hard rule: an author has the requester's path, and
+    // a withdrawal never blocks an official document.
+    for m in &members {
+        if author_verdict(store, m, who).await? != Verdict::Clear {
+            return Ok(false);
+        }
     }
+    Ok(true)
 }

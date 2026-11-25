@@ -478,12 +478,13 @@ pub(super) async fn get_revision(
                 return Ok(None);
             };
             let src = store::source(c, &kb, &r.source_sha256)?;
-            Ok(Some((r, src)))
+            let acts = store::act_records(c, &r.revision_id)?;
+            Ok(Some((r, src, acts)))
         })
         .await
         .map_err(storage_fault)?;
     let unknown = || McpError::unknown_revision("no such revision in this KB".into());
-    let (r, src) = found.ok_or_else(unknown)?;
+    let (r, src, acts) = found.ok_or_else(unknown)?;
     if named_node.is_some_and(|n| n != r.node_id) {
         return Err(unknown());
     }
@@ -527,7 +528,7 @@ pub(super) async fn get_revision(
                 "approved_at": t(r.approved_at),
                 "in_force_at": t(r.in_force_since),
                 "superseded_at": t(ended("superseded")),
-                "acts": [],
+                "acts": acts,
                 "attachments": [],
             },
         })
