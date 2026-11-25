@@ -921,7 +921,7 @@ page is an operator-declared node per KB; ADR-073's view is retired.
 `docs/research/119-spike-results.md`, and the prior art is
 `docs/research/119-kb-site-engine-prior-art.md`.
 
-**ADR-120** (*proposed, design; phased P1a–P5*): **the daemon's activity record.**
+**ADR-120** (*accepted, design; phased P1a–P5*): **the daemon's activity record.**
 
 - **What:** one event per authenticated request, reads included, in its own `activity.db`, with one
   writer.

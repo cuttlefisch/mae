@@ -1,6 +1,6 @@
 # ADR-120: The daemon's activity record
 
-**Status:** Proposed (design). Nothing here is built. Phased (P1a, P1b, P2–P5, below).
+**Status:** Accepted (design), 2026-11-25: the owner decided O1, O3 and O5 and the fail-closed rule with its alert. Nothing here is built. Phased (P1a, P1b, P2–P5, below); P1a, P1b and P2 come first.
 **Amends:** ADR-117 D7 (its operator log becomes this record's administrative events; its binding
 log stays, and its head is attested here) and D9 (each auditor call is an event here), and ADR-118
 D7 (its "read requests are logged" is this record).
@@ -193,7 +193,19 @@ and cannot be reversed to it.
 - a **socket renewal** (ADR-099 B3) keeps the connection's id. The renewal is an event of its own.
 
 **Every authenticated response carries `Mae-Activity-Session: <id>`.** This is the join key D1
-promises. It does not depend on the IdP sending `sid`, which is optional in the OpenID logout specs,
+promises.
+- **Format.** The id is 26 characters: the 128 bits in RFC 4648 base32, lowercase, unpadded
+  (`^[a-z2-7]{26}$`).
+- **Where.** Every response of the HTTPS listener once the bearer token has been validated: `kb/query.*`,
+  `kb/review.*`, the blob routes, the site, the `/ws` ticket mint, and the `/ws` upgrade (which then
+  carries the connection's id, the one its events use). It is on refusals too, whenever a principal was
+  established: a `403`, a `404` from an access gate, and every JSON-RPC error. A request whose token
+  does not validate (`401`) has no session and carries no header. Its refusal event records the
+  address instead (D2), so a relaying server joins it by time and address.
+- **It is an identifier, never a credential.** No route, method or socket accepts it as
+  authentication, or resumes anything by it, and it cannot be turned back into the token. A relaying
+  server may log it as it is. A test scans every entry point's authentication for any read of the
+  header or the id. It does not depend on the IdP sending `sid`, which is optional in the OpenID logout specs,
 undefined in OIDC Core, and unspecified on refresh (research).
 
 **A session start** is the first event the writer sees with a given id. The writer inserts into
@@ -230,6 +242,11 @@ read whose event was lost in a power cut would be a gap.
   resends.
 - The daemon logs an error, raises the ADR-027 counters (`activity_unavailable_total`, queue depth,
   commit latency, age of the last head), and fails its health check until a commit succeeds.
+- **The unhealthy state must reach a person** (owner decision, 2026-11-25). A deployment wires the
+  health check and `activity_unavailable_total` into its monitoring with an alert. A fail-closed stop
+  that nobody hears about is not acceptable. The deployment guide states this as a requirement of
+  enabling the record, and `activity status` prints whether the last commit is older than the
+  alert threshold.
 
 **Why refuse rather than count drops.**
 - The requirement makes a dropped read a gap. Counting proves the gap afterwards and does not close
@@ -305,8 +322,12 @@ one chain, by a fixed function of its kind and outcome:
 
 | Chain | Events | Retention (D9) |
 |---|---|---|
-| `long` | every refused outcome; `sign_in`; write spans and reconciled writes; `upload_intent`, `upload` and `download`; `review_act`; `admin`; `disposal`, `daemon_start`, `daemon_stop`, `record_disabled`, `config_changed`, `clock_step`, `head_attest` | 2 years |
-| `short` | successful `request`, `read` and `subscribe`; `session_start` and `session_end` | 12 months |
+| `long` | every refused outcome; `sign_in`; `session_start` and `session_end`; write spans and reconciled writes; `upload_intent`, `upload` and `download`; `review_act`; `admin`; `disposal`, `daemon_start`, `daemon_stop`, `record_disabled`, `config_changed`, `clock_step`, `head_attest` | 2 years |
+| `short` | successful `request`, `read` and `subscribe` | 12 months |
+
+Session starts and ends are in the long chain (owner decision, 2026-11-25, closing O1): a write is kept
+for 2 years, and its session must resolve to an address for as long as the write is kept. The
+retention record states this reason.
 
 The function is an exhaustive `match` with no default arm, so a new kind does not compile until it is
 classed. Downloads are in the long chain because the requirement lists them with writes.
@@ -652,8 +673,10 @@ access-controlled, classed for retention, and exported with filters.
 
 ### P2. Signed heads (M)
 
-**Builds:** heads at the interval, at shutdown and at export; `activity head`; `verify --key` and
-`--against`; heads in backups; `head_attest` for ADR-117's binding log when that is built. It reuses
+**Builds:** heads at the interval, at shutdown and at export; each head also written to the daemon's
+log as one structured line (`activity_head`, the signed head as JSON) for the deployment's collector
+(O3); `activity head`; `verify --key` and `--against`, which accepts a head taken from that log;
+heads in backups; `head_attest` for ADR-117's binding log when that is built. It reuses
 ADR-116's signing code.
 
 **Tests:**
@@ -661,6 +684,8 @@ ADR-116's signing code.
 - A record rewritten and re-signed with the right key passes `--key` and fails `--against` an older
   external head.
 - A restored older backup fails `--against` the latest external head.
+- A head copied from the daemon's log line verifies with `--against`, and one with a byte changed does
+  not.
 
 **Mutants:** the domain prefix dropped; the head not naming `short`; `--against` reading the file's
 header key.
@@ -716,21 +741,21 @@ recorded.
 
 ## Open items
 
-- **O1. Session starts outlive their twelve months?** As written, a `session_start` and its address
-  are disposed after 12 months, while that session's writes are kept for 2 years. After a year, a
-  write's session no longer resolves to an address. The design follows the requirement as stated.
-  Whether a session that carried writes should keep its start for 2 years is the owner's call.
+- **Decided 2026-11-25 (O1):** session starts and ends are kept 2 years, in the long chain, so every
+  kept write resolves to an address (D7's class table).
 - **O2. KB owners reading their KB's activity.** Not designed. It is accountability against the
   readers' privacy, and needs its own decision.
-- **O3. Shipping heads off the host automatically** (a remote syslog, an object store). P2 prints the
-  head. Pushing it is left to the operator until a sink is chosen.
+- **Decided 2026-11-25 (O3):** every signed head is also written to the daemon's log as one
+  structured line (P2). The deployment's log collector carries it to its log host, which keeps it with
+  the same restricted access and retention as the record. The external head that `verify --against`
+  checks is the one on that host.
 - **O4. Filtered exports grow with the range**, at one stub per omitted event: about 200 bytes each,
   or about 1.4 GB for a year at the storage estimate. A Merkle tree per batch (Crosby and Wallach's
   history tree) would replace stubs with logarithmic inclusion proofs. Adopt it if the size proves to
   matter.
-- **O5. `FULL` against latency.** If P1a's benchmark puts the added p99 beyond what the deployment
-  accepts, the alternative is `NORMAL`, which is safe against a crash and loses the last commits on a
-  power cut. That is a gap the owner must accept explicitly.
+- **Decided 2026-11-25 (O5):** `FULL` stays, and P1a measures the added latency. Relaxing it to
+  `NORMAL` (safe against a crash, but losing the last commits on a power cut) is the owner's decision,
+  brought back with the measurement.
 - **O6. A hold on disposal**, for an investigation. Not designed. It would suspend D9 for a chain or
   range, and be recorded like any act.
 - **O7. Unverified claims in refusals.** D2 records a refused token's claimed `iss` and `sub`,
