@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.199] - 2026-11-25
+
+
+
+
+### Documentation
+
+- *(adr)* ADR-113, the revision read with its attachments, and O13 decided ([e2b5f4f](https://github.com/cuttlefisch/mae/commit/e2b5f4f2ab94f0a5afba7e3df7ce741e45b6abc8))
+
 ## [0.14.198] - 2026-11-25
 
 
@@ -20,6 +29,10 @@ All notable changes to this project will be documented in this file.
 
 - *(release)* Name the faulting function in the baseline check; temporary compiler diagnostics ([526f16b](https://github.com/cuttlefisch/mae/commit/526f16b3ed8be1aa6fe838949b2436b7554dd067))
 - *(release)* Temporary: keep binaries that fail the baseline check ([bc59481](https://github.com/cuttlefisch/mae/commit/bc5948156e2769a31dd0a9e862bedafc702e4c5d))
+
+### Miscellaneous
+
+- Bump version to 0.14.198 ([b12d929](https://github.com/cuttlefisch/mae/commit/b12d92992d5b008935b2c3f131c7187b74960b03))
 
 ## [0.14.197] - 2026-11-25
 
