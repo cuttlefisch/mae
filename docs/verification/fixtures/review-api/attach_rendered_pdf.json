@@ -1,0 +1,63 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.attach_rendered_pdf",
+  "description": "Binds the client's rendering of the frozen source. `source_sha256` is what the client declares it rendered; it must be the revision's.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "attach",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "kb/review.attach_rendered_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "ef6335dd6440d50a83b0584e57b04fdf6b564fc52d20adfa23bf5ecc336de3f3",
+          "source_sha256": "63336ef5cf257aa058193f8d3051add9f587bd16da33292e48d66c7e15cb4185"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "result": {
+          "event_id": "ev-0000000003"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "declared source is another revision's",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "kb/review.attach_rendered_pdf",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "ef6335dd6440d50a83b0584e57b04fdf6b564fc52d20adfa23bf5ecc336de3f3",
+          "source_sha256": "83857a79e442416bfe785d39d105cf239cbd453c2d321fdd8f3c1fc942ec881f"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "error": {
+          "code": -32603,
+          "message": "that is not this revision's frozen source",
+          "data": {
+            "kind": "source_mismatch",
+            "expected": "63336ef5cf257aa058193f8d3051add9f587bd16da33292e48d66c7e15cb4185"
+          }
+        }
+      }
+    }
+  ]
+}

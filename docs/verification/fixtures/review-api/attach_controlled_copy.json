@@ -1,0 +1,60 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.attach_controlled_copy",
+  "description": "C6: the approved rendered PDF with an approval sheet appended as an incremental update. In force only.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "attach",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 43,
+        "method": "kb/review.attach_controlled_copy",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "355b1bbfc96725cdce8f4a2708fda310a80e6d13315aec4e5eed2a75fe8032ce"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 43,
+        "result": {
+          "event_id": "ev-0000000011"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "does not begin with the rendered PDF",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 44,
+        "method": "kb/review.attach_controlled_copy",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "blob_sha256": "d3bb6701daa20f5d2a90d78449d588fa9c39031e3fe3185d3ced71f3f0d76e46"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 44,
+        "error": {
+          "code": -32603,
+          "message": "the rendered PDF is not a byte prefix of this file",
+          "data": {
+            "kind": "controlled_copy_mismatch"
+          }
+        }
+      }
+    }
+  ]
+}

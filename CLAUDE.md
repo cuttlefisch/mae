@@ -815,7 +815,11 @@ event log, in daemon tables outside the CRDT (ADR-106's placement). The daemon e
 author (authors counted since the last approved revision, which needs `apply_update` to record its
 principal) and refuses agent principals; named sets publish atomically; entry into force and
 derogation are recorded acts; revisions survive purge as the document-control record. Folds in
-ADR-101/103's agent-edits-pending-review.
+ADR-101/103's agent-edits-pending-review. Amendment 4 settles its open decisions: seven revision states
+(`superseded` and `derogated` replace `historical`), a rejection or withdrawal ends the whole request, a
+per-KB policy can make the signed PDF the interim record of approval, signed originals enter by `mae-daemon kb import` under a required
+SHA256SUMS manifest, and revisions are never deleted; it pins the second-factor check, every method's
+shape, the event-log export and all refusal kinds, with fixtures in `docs/verification/fixtures/review-api/`.
 
 **ADR-114** (*accepted, design*) — **node kinds are an open, declared, multilingual vocabulary.** A
 node's `kind` is stored as written and never coerced to `note`; a KB may declare its kinds (immutable
@@ -920,6 +924,22 @@ page is an operator-declared node per KB; ADR-073's view is retired.
 **Documents:** the parity spec is `docs/verification/kb-site-parity.md`, the evidence is
 `docs/research/119-spike-results.md`, and the prior art is
 `docs/research/119-kb-site-engine-prior-art.md`.
+
+**ADR-120** (*accepted, design; phased P1a–P5*): **the daemon's activity record.**
+
+- **What:** one event per authenticated request, reads included, in its own `activity.db`, with one
+  writer.
+- **No unrecorded answer:** the answer waits for the event's group commit (`synchronous=FULL`), and
+  a request whose event cannot be recorded is refused (`503 activity_record_unavailable`). A write
+  whose effect commits first is reconciled from its own attributed record.
+- **Tamper evidence:** two hash chains, one per retention class (2 years / 12 months), each disposed
+  of only from the front, behind a signed anchor. The body enters the chain through a salted hash,
+  so filtered exports verify. Heads are signed at an interval with the daemon key.
+- **Correlation:** the daemon mints a session id and returns it in a response header, as the join
+  key with a relaying server's log.
+- **Readers:** the operator's export and ADR-117 D9's auditor; never an agent.
+- **Replaces and amends:** replaces ADR-117 D7's operator log, and amends ADR-118 D7.
+- **Evidence:** `docs/research/120-activity-record-prior-art.md`.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole

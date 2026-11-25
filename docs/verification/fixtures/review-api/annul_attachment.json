@@ -1,0 +1,64 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.annul_attachment",
+  "description": "B1: a wrong file is annulled, never replaced. By the owner or the uploader, with a reason. The bytes stay readable, marked annulled, and the kind takes one new attach.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "annul",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 47,
+        "method": "kb/review.annul_attachment",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "kind": "signed_pdf",
+          "reason": "Wrong file: the scan of another procedure."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 47,
+        "result": {
+          "event_id": "ev-0000000014"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "annul the rendered PDF an approval bound",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 48,
+        "method": "kb/review.annul_attachment",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "revision_id": "rv-01a7c2-1",
+          "kind": "rendered_pdf",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 48,
+        "error": {
+          "code": -32603,
+          "message": "an approval's rendered PDF cannot be annulled",
+          "data": {
+            "kind": "invalid_transition",
+            "from": "approved",
+            "act": "annul_attachment"
+          }
+        }
+      }
+    }
+  ]
+}
