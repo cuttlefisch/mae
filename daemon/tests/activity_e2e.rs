@@ -130,16 +130,13 @@ fn log_has(d: &Daemon, level: &str, message: &str) -> bool {
         .any(|l| l.contains(level) && l.contains(message))
 }
 
-#[tokio::test]
-async fn the_operator_contract_from_a_blocked_start_to_recovery() {
-    let mut d = spawn_with_blocked_record().await;
-
-    // Unhealthy from the first request, with nothing recorded first.
+/// Unhealthy from the first request, with nothing recorded first.
+async fn assert_unhealthy(d: &Daemon) {
     assert_eq!(
-        health(&d).await,
+        health(d).await,
         (503, serde_json::json!({"status": "unavailable"}))
     );
-    let (code, s) = status_json(&d);
+    let (code, s) = status_json(d);
     assert_eq!(code, 1, "unhealthy: {s}");
     assert_eq!(s["healthy"], false);
     for k in [
@@ -154,24 +151,26 @@ async fn the_operator_contract_from_a_blocked_start_to_recovery() {
         assert!(s["chains"][c].get("seq").is_some() && s["chains"][c].get("entry_hash").is_some());
     }
     assert!(
-        log_has(&d, "ERROR", "activity_record_unavailable"),
+        log_has(d, "ERROR", "activity_record_unavailable"),
         "{}",
         d.proc.log_tail()
     );
+}
 
-    // Cleared, it recovers by itself: no restart, no request.
+/// Cleared, it recovers by itself: no restart, no request.
+async fn assert_recovers(d: &Daemon) {
     std::fs::remove_dir(d.collab_dir.join("activity.db")).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while health(&d).await.0 != 200 && Instant::now() < deadline {
+    while health(d).await.0 != 200 && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(health(&d).await, (200, serde_json::json!({"status": "ok"})));
+    assert_eq!(health(d).await, (200, serde_json::json!({"status": "ok"})));
     assert!(
-        log_has(&d, "INFO", "activity_record_recovered"),
+        log_has(d, "INFO", "activity_record_recovered"),
         "{}",
         d.proc.log_tail()
     );
-    let (code, s) = status_json(&d);
+    let (code, s) = status_json(d);
     assert_eq!(code, 0, "{s}");
     assert_eq!(s["healthy"], true);
     assert!(
@@ -182,9 +181,11 @@ async fn the_operator_contract_from_a_blocked_start_to_recovery() {
         s["chains"]["long"]["entry_hash"].as_str().unwrap().len(),
         64
     );
+}
 
-    // The export of what it wrote verifies, offline and in place; a
-    // `--no-proof` export does not.
+/// The export of what it wrote verifies, offline and in place; a
+/// `--no-proof` export does not.
+fn assert_export_verifies(d: &Daemon) {
     let out_file = d.collab_dir.join("export.jsonl");
     let out = cli(
         Some(&d.config),
@@ -231,7 +232,14 @@ async fn the_operator_contract_from_a_blocked_start_to_recovery() {
     assert!(out.status.success());
     let verify = cli(None, &["activity", "verify", "--in", np.to_str().unwrap()]);
     assert_eq!(verify.status.code(), Some(1));
+}
 
+#[tokio::test]
+async fn the_operator_contract_from_a_blocked_start_to_recovery() {
+    let mut d = spawn_with_blocked_record().await;
+    assert_unhealthy(&d).await;
+    assert_recovers(&d).await;
+    assert_export_verifies(&d);
     // A daemon that is not running: exit 2.
     d.proc.stop().await;
     assert_eq!(status_json(&d).0, 2);

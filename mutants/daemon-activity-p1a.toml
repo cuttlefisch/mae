@@ -13,7 +13,7 @@ ref = "ADR-120 D5: no answer before its event commits"
 file = "daemon/src/activity/writer.rs"
 find = '''                Ok(true) => Ok(()),
                 _ => Err(Unavailable),'''
-replace = '''                _ => Ok(()),'''
+replace = '''                _ => Ok::<(), Unavailable>(()),'''
 
 [[mutant]]
 id = "daemon-activity-p1a/ack-await-removed-on-the-listener"
@@ -25,7 +25,7 @@ ref = "ADR-120 D5: no answer before its event commits"
 file = "daemon/src/activity/writer.rs"
 find = '''                Ok(true) => Ok(()),
                 _ => Err(Unavailable),'''
-replace = '''                _ => Ok(()),'''
+replace = '''                _ => Ok::<(), Unavailable>(()),'''
 
 [[mutant]]
 id = "daemon-activity-p1a/address-rule-skipped-for-reads"

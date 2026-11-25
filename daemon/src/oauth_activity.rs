@@ -251,11 +251,11 @@ pub(crate) fn rpc_answer(answer: &Value) {
             let returned = returned_node_ids(result);
             if !returned.is_empty() {
                 let mut ids = d.node_ids.take().unwrap_or_default();
-                for r in returned {
-                    if !ids_contains(&ids, &r) {
-                        ids.push(r);
-                    }
-                }
+                let fresh: Vec<String> = returned
+                    .into_iter()
+                    .filter(|r| !ids_contains(&ids, r))
+                    .collect();
+                ids.extend(fresh);
                 d.node_ids = Some(bound_ids(ids));
             }
         }

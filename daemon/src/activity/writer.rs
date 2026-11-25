@@ -407,31 +407,28 @@ fn commit_batch(
                     *shared.tips.lock().unwrap_or_else(|e| e.into_inner()) = db.tips().ok();
                 }
                 shared.recover();
-                let n: usize = batch.iter().map(|p| p.events).sum();
-                shared.queue_depth.fetch_sub(n, Ordering::SeqCst);
-                for p in batch {
-                    if let Some(ack) = p.ack {
-                        let _ = ack.send(true);
-                    }
-                }
+                answer(shared, batch, true);
                 return;
             }
             Err(e) => {
                 shared.fail(&e);
                 if stopping && tries >= 3 {
-                    let n: usize = batch.iter().map(|p| p.events).sum();
-                    shared.queue_depth.fetch_sub(n, Ordering::SeqCst);
-                    for p in batch {
-                        if let Some(ack) = p.ack {
-                            let _ = ack.send(false);
-                        }
-                    }
+                    answer(shared, batch, false);
                     return;
                 }
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(Duration::from_secs(1));
             }
         }
+    }
+}
+
+/// Take `batch` out of the queue's depth and tell each waiter how it went.
+fn answer(shared: &Shared, batch: Vec<Pending>, committed: bool) {
+    let n: usize = batch.iter().map(|p| p.events).sum();
+    shared.queue_depth.fetch_sub(n, Ordering::SeqCst);
+    for ack in batch.into_iter().filter_map(|p| p.ack) {
+        let _ = ack.send(committed);
     }
 }
 

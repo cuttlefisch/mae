@@ -872,6 +872,98 @@ ss -tln | grep 9473               # is the collab port listening?  (lsof/netstat
 fingerprint or KB names. Only `GET`/`HEAD` on that exact path are exempt from authentication; every
 other request to the listener still needs a bearer token.
 
+With the activity record on (`[activity] enabled`, below), the health check also answers for the
+record: `503 {"status":"unavailable"}` while its writer has failed or an event has waited past
+`activity.commit_timeout_ms` without a commit since, and `200` again on the first commit that
+succeeds, with no restart. A daemon that cannot open `activity.db` at start-up answers `503` from its
+first request. With the record off, it is `200` whenever the listener is up, as before.
+
+### The activity record (`[activity]`, ADR-120)
+
+A record of who did what through the HTTPS listener: one event per request (JSON-RPC, the live
+site, blobs, `/ws/ticket` and the `/ws` upgrade, the binding routes), with the principal, the KB and
+nodes, the route's template, the outcome, and the time. Discovery metadata, `/api/health` and the
+site's static assets are not recorded. **Off by default**; a daemon serving one editor has no reason
+to keep a record of its user. `--check-config` warns when the HTTPS listener is on and the record is
+off. This release records the HTTPS listener only: collab sessions (mTLS, the `/ws` session itself,
+the mesh) and the KB socket are not recorded yet, and the record's heads are not signed yet.
+
+```toml
+[activity]
+enabled = false            # off by default (D11)
+queue_capacity = 4096      # events waiting for the writer
+commit_timeout_ms = 2000   # longest a request waits for space and for its event's commit
+refusal_window_secs = 60   # repeated refusals are coalesced per window (below)
+retention_long_days = 730  # floor 730: may be lengthened, never shortened
+retention_short_days = 365 # floor 365
+trusted_proxies = []       # peers whose X-Forwarded-For is recorded, e.g. ["10.0.0.5"]
+# head_interval_secs = 10, span_close_secs = 60: accepted, used by later phases
+```
+
+A period under its floor stops the daemon at start-up, and so does `--check-config`.
+
+**Fail closed.** No response leaves the daemon until its request's event has committed
+(`synchronous=FULL`). If the record cannot take it within `commit_timeout_ms` (a full disk, an I/O
+error, a held lock), the request is refused `503`, kind `activity_record_unavailable`, with
+`Retry-After`, and nothing of its answer is sent. When the record's disk fails, the daemon stops
+serving: that is the requirement working as intended.
+
+**A deployment that enables the record MUST alert on it.** Wire `GET /api/health` (or `mae-daemon
+activity status`, exit 1) into monitoring with an alert that reaches a person; a fail-closed stop
+that nobody hears about is not acceptable. The log carries two stable lines a collector may also
+alert on: `ERROR … activity_record_unavailable` on the transition to unhealthy and
+`INFO … activity_record_recovered` on recovery. The health check is the authoritative signal.
+
+```bash
+mae-daemon activity status          # exit 0 healthy, 1 unhealthy, 2 the daemon is not answering
+mae-daemon activity status --json   # {"healthy", "unavailable_total", "queue_depth",
+                                    #  "last_commit_age_ms", "last_head_age_s" (null until signed
+                                    #  heads), "chains": {"long": {"seq", "entry_hash"}, "short": …}}
+```
+
+`unavailable_total` counts requests refused because the record could not take them. An idle daemon
+writes nothing, so a growing `last_commit_age_ms` is not an alarm by itself.
+
+**Where it lives.** `<collab data_dir>/activity.db`, mode `0600`, beside `state.db`, one file per
+daemon; `activity-session.key` (32 random bytes, mode `0600`) beside it derives the session ids.
+Triggers refuse every `UPDATE` and every `DELETE`; two hash chains (`long`: refusals, sign-ins,
+sessions, writes, administrative and daemon events, kept 2 years; `short`: successful reads and
+requests, 12 months) make an edited, removed or reordered row visible to `verify`. Disposal at the
+end of retention is not built yet; start-up logs an error once the oldest event is 330 days old.
+`mae-daemon backup` includes the file.
+
+**Addresses.** A client's address is recorded only on a sign-in, a session start and a refusal; any
+other event carries the session id instead. `X-Forwarded-For` is recorded, apart from the peer's
+own address, only from a peer listed in `trusted_proxies`.
+
+**The session header.** Every response to a request whose bearer token validated carries
+`Mae-Activity-Session: <id>` (26 characters, `[a-z2-7]`), the id the record uses for that token (a
+new token, a new id); the `/ws` upgrade carries its connection's id. A `401` carries none. A relaying
+server may log it beside its own session to join the two records. It is an identifier, never a
+credential: nothing accepts it.
+
+**Refusals are coalesced, never dropped.** The first refusal of a `(principal or address, route,
+kind)` in each `refusal_window_secs` is recorded before it is answered; the rest are counted and
+recorded as one event with `count`, `first_at` and `last_at` when the window ends (and at a clean
+shutdown). Past half the queue, refusals made before authentication are counted per kind without
+addresses.
+
+**Reading it.** Only on the host, as the operator; no agent, editor tool or MCP method reads it.
+
+```bash
+mae-daemon activity export [--principal ID] [--kb ID] [--kind K] [--outcome ok|refused|error|KIND]
+                           [--session ID] [--since T] [--until T] [--no-proof] --out FILE
+mae-daemon activity verify --in FILE   # an export, offline: no config or database needed
+mae-daemon activity verify             # the stored record itself, indexed columns included
+```
+
+An export records its own run first, then writes JSON Lines covering the whole record: the events
+that match, and a stub (the link only) for each that does not, so `verify` can see that nothing is
+missing. `--no-proof` leaves the stubs out, for a person reviewing patterns; `verify` refuses it as
+unverifiable. Times are RFC 3339 UTC (`2026-11-25`, `2026-11-25T10:30:00Z`). Until signed heads
+exist, `verify` checks the chains only: it does not detect a record rewritten by someone able to
+recompute its hashes, nor a chain's last rows removed from the database.
+
 ### `doctor`'s exit code is a readiness verdict, not a liveness probe
 
 `doctor` ends with `verdict: OK` (exit 0) or `verdict: N problem(s) — this instance
@@ -976,6 +1068,7 @@ silently re-applying writes the backup did not contain):
 | `kb-registry.toml` | `<data_dir>/kb-registry.toml` |
 | `collab/state.db` | `<collab data_dir>/state.db` |
 | `collab/identity-bindings.db` | `<collab data_dir>/identity-bindings.db` (ADR-098 bindings) |
+| `collab/activity.db` | `<collab data_dir>/activity.db` (ADR-120 activity record) |
 | `collab/blobs/` | `<collab data_dir>/blobs/` (ADR-115 attachments: `blobs.db` and the files its rows name) |
 | `identity/*` | the identity dir / `authorized_keys` / `keystore` paths from `daemon.toml` |
 

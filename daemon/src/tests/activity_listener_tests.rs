@@ -600,6 +600,12 @@ async fn the_session_header_is_the_recorded_id_and_follows_the_token() {
         .await;
     assert_eq!(r.status, 401);
     assert!(r.header(session::HEADER).is_none());
+    // A token that validated (within the JWT leeway) and was then refused as
+    // expired by the route: a principal exists, and a 401 still has no id.
+    let stale = h.token(0);
+    let r = h.send("POST", "/ws/ticket", Some(&stale), "", "").await;
+    assert_eq!(r.status, 401);
+    assert!(r.header(session::HEADER).is_none());
     // A refusal behind an established principal carries the id.
     let r = h
         .rpc(
@@ -710,22 +716,11 @@ async fn the_listener_records_the_address_only_where_the_rule_allows() {
 async fn no_entry_point_reads_the_session_header() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut uses = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let p = entry.unwrap().path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|e| e == "rs")
-                && !p.ends_with("activity_listener_tests.rs")
-            {
-                let text = std::fs::read_to_string(&p).unwrap().to_ascii_lowercase();
-                for needle in ["mae-activity-session", "session::header"] {
-                    for _ in text.matches(needle) {
-                        uses.push(p.strip_prefix(&root).unwrap().display().to_string());
-                    }
-                }
-            }
+    for p in rust_sources(&root) {
+        let text = std::fs::read_to_string(&p).unwrap().to_ascii_lowercase();
+        for needle in ["mae-activity-session", "session::header"] {
+            let rel = p.strip_prefix(&root).unwrap().display().to_string();
+            uses.extend(std::iter::repeat_n(rel, text.matches(needle).count()));
         }
     }
     uses.sort();
@@ -754,6 +749,24 @@ async fn no_entry_point_reads_the_session_header() {
             assert!(r.header(session::HEADER).is_none());
         }
     }
+}
+
+/// Every `.rs` file under `root` but this one.
+fn rust_sources(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for p in std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()) {
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|e| e == "rs")
+                && !p.ends_with("activity_listener_tests.rs")
+            {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// With the record off, no response carries a session id and nothing is
@@ -816,4 +829,81 @@ async fn a_bad_token_flood_is_coalesced_and_its_first_waits_for_the_commit() {
     assert!(refusals.len() <= 3, "{} rows", refusals.len());
     let total: u64 = refusals.iter().map(|e| e["count"].as_u64().unwrap()).sum();
     assert_eq!(total, n);
+}
+
+// --- the /ws upgrade -----------------------------------------------------------
+
+/// Send a WebSocket upgrade with `credential` (header lines) and return the
+/// response head, without waiting for the socket to close.
+async fn upgrade(h: &Harness, credential: &str) -> Reply {
+    let mut s = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+    let req = format!(
+        "GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{credential}\r\n"
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !out.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = s.read(&mut buf).await.unwrap();
+        assert!(n > 0, "closed before a response");
+        out.extend_from_slice(&buf[..n]);
+    }
+    Reply::parse(&out)
+}
+
+/// D4: the `/ws` upgrade carries its connection's own id, not the bearer
+/// token's, and that connection's start is recorded with the address; a
+/// redeemed ticket is recorded as a sign-in the daemon performed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_upgrade_carries_the_connections_id_and_a_ticket_is_a_sign_in() {
+    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let token = h.token(3600);
+    let bearer_id = h
+        .rpc(Some(&token), "kb/query.my_kbs", json!({}))
+        .await
+        .header(session::HEADER)
+        .unwrap()
+        .to_string();
+    let r = upgrade(
+        &h,
+        &format!("Authorization: Bearer {token}\r\nSec-WebSocket-Protocol: mae.v1\r\n"),
+    )
+    .await;
+    assert_eq!(r.status, 101);
+    let conn_id = r.header(session::HEADER).unwrap().to_string();
+    assert!(session::is_session_id(&conn_id));
+    assert_ne!(conn_id, bearer_id, "a connection is its own session");
+    let all = h.bodies();
+    let start = all
+        .iter()
+        .find(|e| e["kind"] == "session_start" && e["session"] == conn_id.as_str())
+        .expect("the connection's start");
+    assert_eq!(start["detail"]["credential"], "connection");
+    assert!(!start["peer"].is_null());
+    assert_eq!(own(&all).last().unwrap()["session"], conn_id.as_str());
+
+    let ticket = h
+        .send("POST", "/ws/ticket", Some(&token), "", "")
+        .await
+        .json()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = h.bodies().len();
+    let r = upgrade(
+        &h,
+        &format!("Sec-WebSocket-Protocol: mae.v1, mae.ticket.{ticket}\r\n"),
+    )
+    .await;
+    assert_eq!(r.status, 101);
+    let all = h.bodies();
+    let new = &all[before..];
+    let sign_in = new
+        .iter()
+        .find(|e| e["kind"] == "sign_in")
+        .expect("a sign-in");
+    assert_eq!(sign_in["detail"]["method"], "ws_ticket");
+    assert_eq!(sign_in["principal"]["id"], h.member.fingerprint());
+    assert_eq!(sign_in["principal"]["kind"], "service");
 }

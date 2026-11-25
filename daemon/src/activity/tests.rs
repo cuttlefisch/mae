@@ -509,6 +509,22 @@ fn a_filtered_export_verifies_and_holds_only_what_matched() {
 }
 
 /// Every filter narrows to what it names, on the body, not the columns.
+/// A filter on one field.
+fn filter(field: &str, v: &str) -> Filter {
+    let mut f = Filter::default();
+    let slot = match field {
+        "principal" => &mut f.principal,
+        "kb" => &mut f.kb,
+        "kind" => &mut f.kind,
+        "outcome" => &mut f.outcome,
+        "session" => &mut f.session,
+        "since" => &mut f.since,
+        _ => &mut f.until,
+    };
+    *slot = Some(v.to_string());
+    f
+}
+
 #[test]
 fn each_filter_matches_only_its_own_events() {
     let mut ev = Event::new(EventKind::Read, T0, Transport::Https);
@@ -519,70 +535,26 @@ fn each_filter_matches_only_its_own_events() {
     ev.outcome_kind = Some("not_member".into());
     let b = ev.body(&[0; 16]);
     let at = super::at_string(T0);
+    let mut both = filter("since", &at);
+    both.until = Some(at.clone());
     let yes = [
-        Filter {
-            principal: Some("p".into()),
-            ..Filter::default()
-        },
-        Filter {
-            kb: Some("kb".into()),
-            ..Filter::default()
-        },
-        Filter {
-            kind: Some("read".into()),
-            ..Filter::default()
-        },
-        Filter {
-            outcome: Some("refused".into()),
-            ..Filter::default()
-        },
-        Filter {
-            outcome: Some("not_member".into()),
-            ..Filter::default()
-        },
-        Filter {
-            session: Some("s".into()),
-            ..Filter::default()
-        },
-        Filter {
-            since: Some(at.clone()),
-            until: Some(at.clone()),
-            ..Filter::default()
-        },
+        filter("principal", "p"),
+        filter("kb", "kb"),
+        filter("kind", "read"),
+        filter("outcome", "refused"),
+        filter("outcome", "not_member"),
+        filter("session", "s"),
+        both,
     ];
     let no = [
-        Filter {
-            principal: Some("q".into()),
-            ..Filter::default()
-        },
-        Filter {
-            kb: Some("other".into()),
-            ..Filter::default()
-        },
-        Filter {
-            kind: Some("request".into()),
-            ..Filter::default()
-        },
-        Filter {
-            outcome: Some("ok".into()),
-            ..Filter::default()
-        },
-        Filter {
-            outcome: Some("role_forbidden".into()),
-            ..Filter::default()
-        },
-        Filter {
-            session: Some("t".into()),
-            ..Filter::default()
-        },
-        Filter {
-            since: Some(super::at_string(T0 + 1)),
-            ..Filter::default()
-        },
-        Filter {
-            until: Some(super::at_string(T0 - 1)),
-            ..Filter::default()
-        },
+        filter("principal", "q"),
+        filter("kb", "other"),
+        filter("kind", "request"),
+        filter("outcome", "ok"),
+        filter("outcome", "role_forbidden"),
+        filter("session", "t"),
+        filter("since", &super::at_string(T0 + 1)),
+        filter("until", &super::at_string(T0 - 1)),
     ];
     for f in yes {
         assert!(f.matches(&b), "{f:?}");
