@@ -89,14 +89,14 @@ id = "daemon-review-pr4/freeze-releases-the-lock-before-the-high-water"
 runner = "daemon"
 targets = ["--lib"]
 filter = "test(a_writer_cannot_land_inside_a_paused_freeze)"
-ref = "A2: content and cutoff are read under one hold of the document's lock"
+ref = "A2: content and cutoff are read under one hold of the document's lock (the pause marks the window between the two reads)"
 [[mutant.edit]]
 file = "daemon/src/doc_store_review.rs"
-find = '''        Self::pause_at(&self.pauses.freeze).await;
-        let cutoff_wal'''
-replace = '''        Self::pause_at(&self.pauses.freeze).await;
-        drop(doc);
-        let cutoff_wal'''
+find = '''        #[cfg(test)]
+        Self::pause_at(&self.pauses.freeze).await;'''
+replace = '''        drop(doc);
+        #[cfg(test)]
+        Self::pause_at(&self.pauses.freeze).await;'''
 [[mutant.edit]]
 file = "daemon/src/doc_store_review.rs"
 find = '''        drop(doc);
