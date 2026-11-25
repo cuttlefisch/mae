@@ -38,6 +38,8 @@ for bin in "$@"; do
         "$qemu" -cpu qemu64 -d in_asm,nochain -D "$log" "$bin" --version >/dev/null 2>&1
         echo "  last functions entered before the fault:" >&2
         grep '^IN: ' "$log" | uniq | tail -n 6 | sed 's/^/    /' >&2
+        echo "  the last instructions translated:" >&2
+        tail -n 12 "$log" | sed 's/^/    /' >&2
         rm -f "$log"
         failed=1
     fi
