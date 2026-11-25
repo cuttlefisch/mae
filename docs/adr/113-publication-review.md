@@ -8,7 +8,8 @@ states with `superseded` and `derogated` in place of `historical`; a rejection o
 whole request; a per-KB policy makes the signed PDF the interim record of approval; signed originals enter through
 `mae-daemon kb import` under a required manifest; browser and native sign-in from the start; review
 acts before #727; revisions never deleted; the second-factor check, the method shapes, the event-log
-export and every refusal kind pinned, with fixtures. Still proposed: nothing here is built.
+export and every refusal kind pinned, with fixtures. Built so far (2026-11-25): PR-4 of the build
+sequence, the revision record, the request and the event chain; everything else is still proposed.
 **Relates to:** ADR-106 (node version history is a local audit trail — revisions follow the same
 placement), ADR-101 / ADR-103 (agent-made links held for human review — becomes a case of this
 ADR), ADR-098 (durable identity; its service-account binding is where an agent principal is
@@ -1073,6 +1074,19 @@ Field notes:
 - **`set_policy`.** It is an administrative act (E8). It refuses a named performer who is not a
   person (`performer_not_person`, ADR-117 D8) and a retention period below the floor
   (`retention_below_floor`).
+- **Caps** *(PR-4's review)*. Every member of a request is frozen for good: a history version no
+  retention prunes (ADR-116 D5), a source copy that is never deleted (O8, E7) and an entry in the
+  request's event. So one call is bounded by more than the scan limit:
+  - a request names at most **50** members (never more than `[kb_query] max_scan_nodes`): a
+    procedure family revised together, while a larger set is several requests;
+  - `reason`, on every method that takes one, is at most **2,048** bytes of UTF-8, and `set_name`
+    at most **200** (a title, as long as a version name);
+  - `set_policy`'s `code_prefixes` holds at most **32** prefixes.
+
+  These are constants, not operator settings: no setting exists for a cap of this kind. Over a cap
+  is `invalid_params` with the cap in `data.limit`, and nothing is written. A request/withdraw loop
+  is otherwise bounded only by the per-tenant cost class (both are `Mutation`, #456): each round
+  leaves its frozen sources, history versions and two events for good.
 
 ### E10. The event chain, and its export
 
@@ -1140,7 +1154,7 @@ other route kinds (`attachment_unsupported`, `attachment_too_many_pixels`, `atta
 
 | Kind | Extra `data` | Raised by | Defined in |
 |---|---|---|---|
-| `invalid_params` | `param` | any method | D8 |
+| `invalid_params` | `param`, and `limit` when over a cap (E9) | any method | D8 |
 | `not_member` | — | any method, the blob route; also for an unknown KB | D8, ADR-115 B5 |
 | `role_forbidden` | — | `set_policy`/`set_code` by a non-owner, `events` by a non-auditor, loosening `in_force_on_approval` | D3 |
 | `review_not_enabled` | — | every method but `set_policy`, with review off | D3 |
@@ -1457,7 +1471,10 @@ review requests (name, mode, reason, requester, state); revisions (`rev_id`, KB,
 document type, template id and sha256, creator, time, `replaces`); frozen sources, where O8 decides;
 document codes, unique per `(kb, prefix, number)`; the event log (per KB: sequence, kind, actor and
 kind of actor, time, payload, `prev_hash`, `entry_hash`, daemon signature, `member_sig`). No
-migration.
+migration. *(As built.)* Each revision's `approval_record` is stamped at the freeze with the policy
+in force when it was requested (E3), and PR-5 re-stamps it at approval. The column is NOT NULL, and
+a reader never substitutes the live policy, so a later `set_policy` cannot rewrite what an existing
+revision says.
 
 **Methods and errors:** `kb/review.request`, `kb/review.withdraw` (by the requester, before
 approval), `kb/review.status`, `kb/review.pending`, `kb/review.set_policy` (switch, mode,
@@ -1726,9 +1743,22 @@ named.
   `remove_node` on the collection. A design, or a mapping onto what exists, is needed.
 - **O6. Holds (PR-3).** ADR-115 D5 and ADR-116 D5 each name operator holds; neither is built.
   Decide that they are one table and one CLI, and which PR builds it (this sequence assumes PR-3).
+- **Decided 2026-11-25 by the build lead (O7):** dropped. ADR-115 P1 deduplicates per KB only, so
+  there is no cross-KB binding path for the test to exercise.
 - **O7. The ADR-115 test on cross-KB bytes (PR-1).** "An upload of bytes another KB holds is read
   and verified in full before binding" describes a cross-KB deduplication path that ADR-115 D1
   rejects. Restate or drop it.
+- **Decided 2026-11-25 by the build lead (O8):** both. A revision holds its own copy of the frozen
+  source (hub-local, plaintext; review refuses E2E), with D2's unkeyed `source_sha256`, and it
+  references the ADR-116 history version cut at the freeze, `(node, seq)`. That version has a new
+  kind, `review_freeze`, which is always written (even when its content repeats the previous
+  version's) and never pruned (ADR-116 D5). Reason: revisions survive purge and are the
+  document-control record, while history may be pruned and its content hash is keyed. As built
+  (PR-4): the frozen source is ADR-116's canonical `maenode/v1` encoding of the materialized node,
+  the fields `KbNodeDoc::version` digests, stored once per KB under its sha256 in
+  `kb_review_sources`; the freeze reads the content, checks the version, reads the WAL high-water
+  mark and cuts the history version under the document's replace gate and entry lock, so all four
+  describe one state (A2).
 - **O8. Where the frozen source lives, and its hash (PR-4).** ADR-116 D2.3 cuts a history version at
   a freeze but defines no version kind for it, and its content hash is keyed while D2's
   `source_sha256` is not. Decide whether a revision references the history entry `(node, seq)` or
@@ -1787,10 +1817,42 @@ named.
   hub-local check on a CRDT update is acceptable for a map mesh peers also replicate (ADR-115 D8).
 - **O16. One agent or all of P's agents (PR-10).** An agent signs with P's key, so the daemon cannot
   tell one of P's agents from another: a C9 grant can only be per `(KB, P)`. Confirm.
-- **O17. A review-enabled KB switched to E2E.** Revisions and their frozen sources are plaintext,
-  and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
-  refused while revisions exist, as it is while history holds plaintext. No PR here builds the
-  switch, but the first revision makes the question live, so it blocks PR-4.
+- **Decided by the owner 2026-11-25 (O17): the switch stays refused.** A KB that holds any
+  publication-review revision, in any state, cannot be switched to E2E (`revisions_hold_plaintext`);
+  ADR-116 Amendment 1's history refusal (`history_holds_plaintext`) stands beside it. Revisions are
+  never deleted (E7), so for such a KB the refusal is permanent. A KB that needs E2E is created
+  encrypted from the start. Re-encrypting revisions at the switch is not designed.
+  - **Where it is enforced.** In the write itself: `DocStore::apply_update` and `replace_doc`
+    (`share_doc`, `restore_doc`) check every write to a `kbc:` document on the state it would leave,
+    under the document's locks (`daemon/src/doc_store_e2e_switch.rs`). Every path that writes a
+    collection goes through them: `kb/collection_op` and the other methods that persist a
+    collection, `sync/update`, `sync/share`, `kb/share`, a mesh peer's update (the dialer), the
+    legacy-collection migration, seeding, a checkpoint import, the control socket and `anchor_cli`.
+    PR-4 first built it on `kb/collection_op` alone; its review found the dialer applying a peer's
+    flip with no check. A write is checked in full only when it changes what the reading depends on
+    (the op-log, the display flag, the owner), which a deep observer on the collection reports,
+    including blocks a later update integrates from pending; any other collection write cannot switch
+    the KB and is not decoded.
+  - **The anchor.** The signed op-log reads as E2E only under the KB's content anchor, which is
+    stored outside the collection. While it is unknown, an owner-signed `SetEncryption` without the
+    display flag reads as plaintext and is admitted; recording the anchor afterwards would switch the
+    KB at no write. So both registrations, a mesh join's (`set_kb_anchor`) and an owner's or the
+    operator's (`record_kb_anchor_if_absent`), meet the same check under the same switch gate: an
+    anchor that would make a KB holding revisions or history read as E2E is refused, and the KB
+    stays unanchored and plaintext until its plaintext is dealt with.
+  - **A refused peer update.** A mesh peer's update that would switch the KB is refused whole: none
+    of it is logged or applied, including any other change it carries, and the refusal is logged and
+    counted (`DocStore::e2e_switches_refused`; the warning is rate-limited to one a minute per KB).
+    The replica's collection then stops converging with that peer's until the KB is dealt with. That
+    is the price of not leaving plaintext readable on a daemon that must hold none (ADR-037);
+    half-applying the update would break the CRDT instead. E2E latches in the signed log, so the peer
+    never offers anything else: the dialer ends that session terminally at the first refusal, on a
+    live push or a join's pull, rather than re-pulling and re-refusing it on every reconnect.
+  - **A request racing a switch.** `kb/review.request` takes the KB's switch gate, the one every
+    collection write takes, from a re-check that the KB is still plaintext through its freezes and its
+    commit. A switch therefore either lands first, and the request is refused `e2e_unsupported`, or
+    waits and then sees the request's revisions and is refused.
+- **O17. A review-enabled KB switched to E2E.** *Decided above (2026-11-25).*
 - **Decided 2026-11-25 (O19):** under `approval_record: signed_pdf`, entry into force waits for the
   signed PDF of every member (Amendment 4, E3; refusal `signed_pdf_required`).
 - **O20. Scheduled entry into force (Amendment 4, E9).** `effective_at` may not be in the future.

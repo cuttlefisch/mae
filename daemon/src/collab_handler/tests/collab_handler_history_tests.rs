@@ -361,22 +361,26 @@ async fn a_named_version_is_refused_where_it_must_be() {
         error_kind(&checkpoint(&mut env, "alice", "missing", "n").await),
         "doc_not_found"
     );
-    let kbc = format!("kbc:{KB}");
-    let state = env.store.encode_state(&kbc).await.unwrap();
-    let mut coll = KbCollectionDoc::from_bytes(&state).unwrap();
-    let up = coll.set_encryption(mae_sync::kb::Encryption::E2e);
-    let by =
-        crate::doc_editors::Attribution::Internal(crate::doc_editors::InternalWriter::Scheduler);
-    env.store.apply_update(&kbc, &up, None, by).await.unwrap();
-    assert_eq!(
-        error_kind(&checkpoint(&mut env, "alice", NODE, "n").await),
-        "e2e_unsupported"
-    );
     assert_eq!(
         history(&env).await.len(),
         1,
         "only the one valid name was written"
     );
+    // An E2E KB: switched before it held any history, as a switch must be.
+    let mut e2e = shared_kb().await;
+    retitle(&mut e2e, "alice", "A").await;
+    let kbc = format!("kbc:{KB}");
+    let state = e2e.store.encode_state(&kbc).await.unwrap();
+    let mut coll = KbCollectionDoc::from_bytes(&state).unwrap();
+    let up = coll.set_encryption(mae_sync::kb::Encryption::E2e);
+    let by =
+        crate::doc_editors::Attribution::Internal(crate::doc_editors::InternalWriter::Scheduler);
+    e2e.store.apply_update(&kbc, &up, None, by).await.unwrap();
+    assert_eq!(
+        error_kind(&checkpoint(&mut e2e, "alice", NODE, "n").await),
+        "e2e_unsupported"
+    );
+    assert!(history(&e2e).await.is_empty(), "nothing was written");
 }
 
 /// The owner's `kb/collection_op` with a collection update made by `edit`.
@@ -451,17 +455,8 @@ async fn switching_to_e2e_is_refused_while_history_holds_plaintext() {
         "an op that does not switch is not refused: {:?}",
         r.error
     );
-    // Already E2E (as a flip relayed from a mesh peer leaves it): later
-    // collection ops are not switches, and are not refused.
-    let kbc = format!("kbc:{KB}");
-    let state = env.store.encode_state(&kbc).await.unwrap();
-    let up = KbCollectionDoc::from_bytes(&state)
-        .unwrap()
-        .set_encryption(mae_sync::kb::Encryption::E2e);
-    let by =
-        crate::doc_editors::Attribution::Internal(crate::doc_editors::InternalWriter::Scheduler);
-    env.store.apply_update(&kbc, &up, None, by).await.unwrap();
-    let r = collection_op(&mut env, |c| {
+    // Already E2E: later collection ops are not switches, and are not refused.
+    let r = collection_op(&mut fresh, |c| {
         c.upsert_member(&fp("finn"), "finn", SyncRole::Viewer)
     })
     .await;
@@ -470,4 +465,95 @@ async fn switching_to_e2e_is_refused_while_history_holds_plaintext() {
         "an already-E2E KB is not refused: {:?}",
         r.error
     );
+}
+
+/// The switch guard is in the write itself, so no path around
+/// `kb/collection_op` reaches it: a peer's `apply_update`, a `share_doc` and a
+/// `restore_doc` of the whole E2E collection are each refused over plaintext
+/// history with the collection left as it was; an update that carries the
+/// switch together with a member is refused whole, the member included; each
+/// refusal is counted. Kills a guard on one method only, and one that applies
+/// the rest of a mixed update.
+#[tokio::test]
+async fn every_write_path_refuses_a_switch_over_plaintext_whole() {
+    let mut env = shared_kb().await;
+    retitle(&mut env, "alice", "A").await;
+    retitle(&mut env, "bob", "B").await;
+    let kbc = format!("kbc:{KB}");
+    let state = env.store.encode_state(&kbc).await.unwrap();
+    let flipped = |extra: bool| {
+        let mut c = KbCollectionDoc::from_bytes(&state).unwrap();
+        if extra {
+            let _ = c.upsert_member(&fp("gus"), "gus", SyncRole::Viewer);
+        }
+        let _ = c.set_encryption(mae_sync::kb::Encryption::E2e);
+        c.encode_state()
+    };
+    let peer = crate::doc_editors::Attribution::MeshPeer("peer");
+    let by = crate::doc_editors::Attribution::Principal("alice");
+    let results = [
+        env.store
+            .apply_update(&kbc, &flipped(true), None, peer)
+            .await,
+        env.store.share_doc(&kbc, &flipped(false), by).await,
+        env.store.restore_doc(&kbc, &flipped(false), by).await,
+    ];
+    for (i, r) in results.into_iter().enumerate() {
+        let e = r
+            .err()
+            .unwrap_or_else(|| panic!("path {i} applied the switch"));
+        let kind = storage_error(e).data.unwrap()["kind"].clone();
+        assert_eq!(kind, "history_holds_plaintext", "path {i}");
+    }
+    assert!(!is_e2e(&env).await);
+    let now = KbCollectionDoc::from_bytes(&env.store.encode_state(&kbc).await.unwrap()).unwrap();
+    assert!(now.role_of(&fp("gus")).is_none(), "half-applied");
+    assert_eq!(env.store.e2e_switches_refused(), 3);
+}
+
+/// ADR-113 O17 (decided provisionally in PR-4): switching a KB to E2E is
+/// refused while it holds any publication-review revision, even with no
+/// history at all, and the collection is left as it was; a KB of the same
+/// shape without one switches. A revision in any state counts: they are never
+/// deleted (E7). Kills a switch guard that reads history alone.
+#[tokio::test]
+async fn switching_to_e2e_is_refused_while_the_kb_holds_review_revisions() {
+    for state in ["in_review", "withdrawn"] {
+        let mut env = shared_kb().await;
+        let rev = crate::review::store::Revision {
+            revision_id: "rv-1".into(),
+            kb_id: KB.into(),
+            node_id: NODE.into(),
+            request_id: "rq-1".into(),
+            doc_code: None,
+            rev_no: None,
+            source_sha256: "00".repeat(32),
+            version: "00".repeat(16),
+            cutoff_wal: 0,
+            history_seq: 1,
+            state: state.into(),
+            doc_type: None,
+            template_id: None,
+            template_sha256: None,
+            approval_record: "act".into(),
+            replaces: None,
+            created_by: fp("bob"),
+            created_by_kind: "person".into(),
+            created_at: 0,
+            approved_at: None,
+            in_force_since: None,
+            ended_at: None,
+        };
+        env.store
+            .review_write(move |c| crate::review::store::insert_revision(c, &rev))
+            .await
+            .unwrap();
+        assert!(history(&env).await.is_empty(), "precondition: no history");
+        let r = collection_op(&mut env, |c| {
+            c.set_encryption(mae_sync::kb::Encryption::E2e)
+        })
+        .await;
+        assert_eq!(error_kind(&r), "revisions_hold_plaintext", "{state}");
+        assert!(!is_e2e(&env).await, "the refused switch was not applied");
+    }
 }

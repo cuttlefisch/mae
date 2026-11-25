@@ -306,6 +306,70 @@
           }
         }
       }
+    },
+    {
+      "case": "more members than a request may name",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "error": {
+          "code": -32602,
+          "message": "a request names at most 50 nodes",
+          "data": {
+            "kind": "invalid_params",
+            "param": "nodes",
+            "limit": 50
+          }
+        }
+      },
+      "$comment": "Shortened here: `nodes` holds 51 entries. The cap is 50, and never more than the daemon's max_scan_nodes."
+    },
+    {
+      "case": "reason over its byte limit",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "kb/review.request",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "nodes": [
+            {
+              "node_id": "1d0c4a2e-6b7f-4e18-9a3c-2f5d6e7a8b91",
+              "version": "9a1f0c3e5b7d2e4f6a8c0b1d3e5f7a9c"
+            }
+          ],
+          "reason": "…"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "error": {
+          "code": -32602,
+          "message": "reason is at most 2048 bytes",
+          "data": {
+            "kind": "invalid_params",
+            "param": "reason",
+            "limit": 2048
+          }
+        }
+      },
+      "$comment": "`reason` holds 2,049 bytes of UTF-8. Caps, in bytes: reason 2048 (every review method), set_name 200; set_policy's code_prefixes at most 32 entries."
     }
   ]
 }

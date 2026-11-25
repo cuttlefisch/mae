@@ -99,12 +99,18 @@ pub enum VersionKind {
     Seed,
     Rebirth,
     Delete,
+    /// Cut when an ADR-113 review request freezes the node (ADR-116 D2.3).
+    /// Always written, even when the content repeats the previous version,
+    /// and never pruned (ADR-116 D5): the revision it records is the
+    /// document-control record.
+    ReviewFreeze,
     /// An audit entry recording a pruning pass. It carries no content.
     Pruned,
 }
 
 impl VersionKind {
-    pub const ALL: [VersionKind; 8] = [
+    /// Every kind, with `Pruned` last.
+    pub const ALL: [VersionKind; 9] = [
         Self::Edit,
         Self::Named,
         Self::Rollback,
@@ -112,6 +118,7 @@ impl VersionKind {
         Self::Seed,
         Self::Rebirth,
         Self::Delete,
+        Self::ReviewFreeze,
         Self::Pruned,
     ];
 
@@ -124,12 +131,26 @@ impl VersionKind {
             Self::Seed => "seed",
             Self::Rebirth => "rebirth",
             Self::Delete => "delete",
+            Self::ReviewFreeze => "review_freeze",
             Self::Pruned => "pruned",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
+    /// Whether a version of this kind is written even when its content
+    /// repeats the previous version's: a name, or a review freeze, is a
+    /// reference someone holds, not a change of content.
+    pub fn always_cut(self) -> bool {
+        matches!(self, Self::Named | Self::ReviewFreeze)
+    }
+
+    /// Whether retention may never prune a version of this kind (ADR-116 D5):
+    /// a named version, and one a review request froze (ADR-113 O8).
+    pub fn never_pruned(self) -> bool {
+        matches!(self, Self::Named | Self::ReviewFreeze)
     }
 }
 

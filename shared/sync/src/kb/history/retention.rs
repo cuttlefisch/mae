@@ -111,7 +111,7 @@ pub struct Exemptions {
 
 /// The `seq`s of `entries` (one node's chain, in order) whose content
 /// `policy` lets a pass prune at `now` (unix seconds), ascending. Never: a
-/// version under a hold, a named version, one a revision references, the
+/// version under a hold, a named or review-freeze version, one a revision references, the
 /// node's latest version, one younger than `min_days`, or one already pruned.
 /// An invalid policy prunes nothing: it is refused.
 pub fn prune_candidates(
@@ -145,7 +145,7 @@ pub fn prune_candidates(
         .filter(|&(i, e)| {
             i != latest
                 && !e.is_pruned()
-                && e.kind != VersionKind::Named
+                && !e.kind.never_pruned()
                 && !exempt.revision_refs.contains(&e.seq)
                 && older_than(e, policy.min_days)
                 && (i < excess || max_days.is_some_and(|d| older_than(e, d)))

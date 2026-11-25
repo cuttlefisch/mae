@@ -33,6 +33,8 @@ const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag
      \x20      mae-daemon kb member add|remove|list --kb-id <id> [--member <SHA256:…>] [--role viewer|editor]\n\
      \x20      mae-daemon kb anchor --kb-id <id> [--public-key <base64>]\n\
      \x20      mae-daemon kb history head|verify --kb-id <id> [--out <file>] [--against <head-file>]\n\
+     \x20      mae-daemon kb review export --kb-id <id> --out <file>\n\
+     \x20      mae-daemon kb review verify --in <file> --key <base64> [--against <head-file>]\n\
      \x20   [--include <glob>]... [--exclude <path>]... [--require-canonical]\n\
      \x20   [--max-body-bytes <n>] [--code-property <KEY>]\n\
      \x20   [--allow-received-times] [--json]\n\
@@ -54,6 +56,7 @@ pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
         Some("member") => crate::member_cli::run(config, &rest[1..]).await,
         Some("anchor") => crate::anchor_cli::run(config, &rest[1..]).await,
         Some("history") => crate::history_cli::run(config, &rest[1..]).await,
+        Some("review") => crate::review_cli::run(Some(config), &rest[1..]).await,
         _ => {
             eprintln!("{USAGE}");
             2

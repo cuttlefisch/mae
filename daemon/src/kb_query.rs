@@ -97,6 +97,20 @@ pub async fn dispatch(
 
     match method {
         "kb/query.capabilities" => capabilities(doc_store, &kb_id, principal).await,
+        // ADR-113 D5: a revision, whatever its state, by its id.
+        "kb/query.get" if params.get("revision").is_some_and(|v| !v.is_null()) => {
+            crate::review::query_get_revision(
+                doc_store,
+                &kb_id,
+                principal,
+                params,
+                limits.max_body_bytes,
+            )
+            .await
+        }
+        "kb/query.revisions" => {
+            crate::review::query_revisions(doc_store, &kb_id, principal, params).await
+        }
         "kb/query.get" => {
             let node_id = required_node_id(params)?;
             get(

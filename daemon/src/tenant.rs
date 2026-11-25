@@ -115,7 +115,14 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         | "kb/reimport"
         | "kb/query.self_token"
         // ADR-115: an upload is received, decoded and written.
-        | "kb/blobs.upload" => RequestCost::Mutation,
+        | "kb/blobs.upload"
+        // ADR-113: a request freezes nodes and cuts history; each is signed.
+        | "kb/review.request"
+        | "kb/review.withdraw"
+        | "kb/review.set_policy"
+        | "kb/review.set_code" => RequestCost::Mutation,
+        // ADR-113: pages over a KB's requests and its event chain.
+        "kb/review.pending" | "kb/review.events" => RequestCost::Scan,
 
         // Everything else — bounded lookups (`sync/state_vector`, `sync/diff`,
         // `kb/node_fetch`, `docs/metadata`, `docs/stats`, `kb/list_pending`,

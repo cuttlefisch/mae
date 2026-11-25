@@ -39,6 +39,7 @@ mod oauth_config;
 mod oauth_tls;
 mod p2p;
 mod projection_stores;
+mod review_cli;
 mod scheduler;
 mod seed_apply_cli;
 mod seed_cli;
@@ -112,6 +113,12 @@ async fn main() {
     if cli.help {
         print!("{}", cli::USAGE);
         return;
+    }
+
+    // ADR-113 E10: the chain verifier needs no daemon configuration or
+    // database, so it runs before either is looked for.
+    if review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {
+        std::process::exit(review_cli::run(None, &cli.rest[1..]).await);
     }
 
     let config = match cli.resolve_config() {
@@ -482,6 +489,18 @@ async fn main() {
             count = unsigned,
             "collab: accepted unsigned content ops this run (ADR-036 hub migration) — \
              a client is still sending them; do not enable require_signed_content_ops yet"
+        );
+    }
+
+    // ADR-113 O17: switches to E2E refused over plaintext, a mesh peer's
+    // included (each also logged when it happened).
+    let refused = doc_store_for_query
+        .as_deref()
+        .map_or(0, |d| d.e2e_switches_refused());
+    if refused > 0 {
+        tracing::warn!(
+            count = refused,
+            "collab: refused writes that would switch a KB to E2E over plaintext this run"
         );
     }
 

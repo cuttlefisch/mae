@@ -1,0 +1,419 @@
+# ADR-113 PR-4: the revision record, the request and the event chain. One
+# mutant per guard. Tests: daemon/src/review/tests/ and
+# daemon/src/review/chain_tests.rs (--lib), the history tests for the E2E
+# switch, the dialer's (--bin), and mae-sync's retention and encryption-watch tests. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "daemon-review-pr4/stale-version-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_request_naming_a_superseded_version_is_refused_with_the_current_one)"
+ref = "D2: a requester freezes what they saw"
+[[mutant.edit]]
+file = "daemon/src/doc_store_review.rs"
+find = '''        if current != version {'''
+replace = '''        if false && current != version {'''
+
+[[mutant]]
+id = "daemon-review-pr4/prev-hash-left-out-of-entry-hash"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_stored_chain_verifies_and_every_altered_column_of_every_row_fails)"
+ref = "E10: prev_hash is inside the canonical bytes the entry hash covers"
+[[mutant.edit]]
+file = "daemon/src/review/chain.rs"
+find = '''            "prev_hash": self.prev_hash,'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-review-pr4/signature-skipped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_forged_signature_fails)"
+ref = "E10 step 5: every event's signature is verified under the given key"
+[[mutant.edit]]
+file = "daemon/src/review/chain.rs"
+find = '''    if !key.verify(&sig_message(&raw), &sig) {'''
+replace = '''    if false && !key.verify(&sig_message(&raw), &sig) {'''
+
+[[mutant]]
+id = "daemon-review-pr4/owner-check-removed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(only_the_owner_turns_review_on_or_off_and_each_change_is_an_event)"
+ref = "D3: the review switch is the owner's"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if g.role != SyncRole::Owner {
+        return Err(McpError::role_forbidden(
+            "only the KB owner may change the review policy".into(),'''
+replace = '''    if false {
+        return Err(McpError::role_forbidden(
+            "only the KB owner may change the review policy".into(),'''
+
+[[mutant]]
+id = "daemon-review-pr4/tighten-only-reversed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_requester_cannot_loosen_in_force_on_approval)"
+ref = "D3: a request may override in_force_on_approval only toward false"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if asked == Some(true) && !g.policy.in_force_on_approval && g.role != SyncRole::Owner {'''
+replace = '''    if asked == Some(false) && !g.policy.in_force_on_approval && g.role != SyncRole::Owner {'''
+
+[[mutant]]
+id = "daemon-review-pr4/revision-holder-left-out-of-sweep"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_blob_held_only_by_a_withdrawn_revisions_frozen_map_stays_live)"
+ref = "ADR-115 D5: every revision's frozen attachments map, in every state, is a holder"
+[[mutant.edit]]
+file = "daemon/src/attachment_refs.rs"
+find = '''        for (sha, content) in sources {'''
+replace = '''        for (sha, content) in sources.into_iter().take(0) {'''
+
+[[mutant]]
+id = "daemon-review-pr4/approval-record-reason-not-required"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(changing_the_record_of_approval_needs_a_reason_and_records_it)"
+ref = "E3: a change of approval_record needs a reason"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if p.approval_record != current.approval_record && reason.is_none() {'''
+replace = '''    if false && p.approval_record != current.approval_record && reason.is_none() {'''
+
+[[mutant]]
+id = "daemon-review-pr4/freeze-releases-the-lock-before-the-high-water"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_writer_cannot_land_inside_a_paused_freeze)"
+ref = "A2: content and cutoff are read under one hold of the document's lock (the pause marks the window between the two reads)"
+[[mutant.edit]]
+file = "daemon/src/doc_store_review.rs"
+find = '''        #[cfg(test)]
+        Self::pause_at(&self.pauses.freeze).await;'''
+replace = '''        drop(doc);
+        #[cfg(test)]
+        Self::pause_at(&self.pauses.freeze).await;'''
+[[mutant.edit]]
+file = "daemon/src/doc_store_review.rs"
+find = '''        drop(doc);
+        let content'''
+replace = '''        let content'''
+
+[[mutant]]
+id = "daemon-review-pr4/request-not-rechecked-under-the-writer"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(two_requests_racing_for_one_node_open_one)"
+ref = "a node has one open revision; two requests racing past the first check are decided under the writer"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if let Some((n, s)) = first_open(c, &req.kb_id, &ids)? {'''
+replace = '''    if let Some((n, s)) = None::<(String, String)> {'''
+
+[[mutant]]
+id = "daemon-review-pr4/unknown-kb-told-apart"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_non_member_and_an_unknown_kb_get_one_identical_refusal_from_every_method)"
+ref = "E9: an unknown KB and a non-member get one identical not_member"
+[[mutant.edit]]
+file = "daemon/src/review/mod.rs"
+find = '''        Err(r) if r.kind == collab_handler::RefusalKind::KbNotFound => return Err(not_admitted()),'''
+replace = '''        Err(r) if r.kind == collab_handler::RefusalKind::KbNotFound => {
+            return Err(McpError::not_member(format!("no KB {kb_id}")))
+        }'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_method_refuses_an_e2e_kb)"
+ref = "D1: review serves plaintext KBs only"
+[[mutant.edit]]
+file = "daemon/src/review/mod.rs"
+find = '''    if collab_handler::kb_is_e2e(store, kb_id, &coll).await {'''
+replace = '''    if false && collab_handler::kb_is_e2e(store, kb_id, &coll).await {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-ignores-revisions"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(switching_to_e2e_is_refused_while_the_kb_holds_review_revisions)"
+ref = "O17: a KB holding revisions cannot switch to E2E"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''            .review_read(move |c| crate::review::store::has_revisions(c, &kb))'''
+replace = '''            .review_read(move |c| crate::review::store::has_revisions(c, &kb).map(|_| false))'''
+
+[[mutant]]
+id = "daemon-review-pr4/review-freeze-prunable"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(a_review_freeze_version_is_never_a_pruning_candidate)"
+ref = "ADR-116 D5 / ADR-113 O8: the version a freeze cut is never pruned"
+[[mutant.edit]]
+file = "shared/sync/src/kb/history/retention.rs"
+find = '''                && !e.kind.never_pruned()'''
+replace = '''                && e.kind != VersionKind::Named'''
+
+[[mutant]]
+id = "daemon-review-pr4/revision-get-serves-the-working-copy"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_revisions_body_and_version_are_unchanged_after_the_working_copy_is_edited)"
+ref = "D5: a revision is served from its frozen source"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''        "kb/query.get" if params.get("revision").is_some_and(|v| !v.is_null()) => {'''
+replace = '''        "kb/query.get" if false => {'''
+
+[[mutant]]
+id = "daemon-review-pr4/freeze-cuts-an-ordinary-version"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_freeze_cuts_a_review_freeze_version_the_revision_references)"
+ref = "O8: the version cut at the freeze is a review_freeze version"
+[[mutant.edit]]
+file = "daemon/src/doc_store_review.rs"
+find = '''            kind: VersionKind::ReviewFreeze,'''
+replace = '''            kind: VersionKind::Edit,'''
+
+[[mutant]]
+id = "daemon-review-pr4/switch-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_review_off_a_request_is_refused_and_readers_see_what_they_saw) | test(with_review_off_every_review_method_but_set_policy_is_refused)"
+ref = "D3: with review off, kb/review.* refuses review_not_enabled"
+[[mutant.edit]]
+file = "daemon/src/review/mod.rs"
+find = '''    if need_enabled && !policy.review_enabled {'''
+replace = '''    if false && need_enabled && !policy.review_enabled {'''
+
+[[mutant]]
+id = "daemon-review-pr4/code-holder-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(two_concurrent_set_codes_for_one_number_one_wins)"
+ref = "D2: a code is unique per (KB, prefix, number)"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''                    if holder != node_id {'''
+replace = '''                    if false && holder != node_id {'''
+
+[[mutant]]
+id = "daemon-review-pr4/anyone-withdraws"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_withdrawal_by_the_requester_ends_the_whole_request)"
+ref = "E2 as PR-4 builds it: the requester withdraws"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if req.requester != principal {'''
+replace = '''    if false && req.requester != principal {'''
+
+[[mutant]]
+id = "daemon-review-pr4/never-a-draft"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(status_is_draft_exactly_when_the_working_copy_differs_from_the_latest_revision)"
+ref = "D8: draft is exactly the working version differing from the latest revision's"
+[[mutant.edit]]
+file = "daemon/src/review/reads.rs"
+find = '''        .is_none_or(|r| Some(&r.version) != working.as_ref());'''
+replace = '''        .is_none_or(|_| false);'''
+
+[[mutant]]
+id = "daemon-review-pr4/export-claiming-another-key-accepted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_change_in_any_field_of_any_line_fails)"
+ref = "E10: an export claiming another key than the trusted one is not this daemon's"
+[[mutant.edit]]
+file = "daemon/src/review/chain.rs"
+find = '''    if parse_key(str_field(header, "daemon_key", 1)?) != Some(key.to_bytes()) {'''
+replace = '''    if false && parse_key(str_field(header, "daemon_key", 1)?) != Some(key.to_bytes()) {'''
+
+[[mutant]]
+id = "daemon-review-pr4/a-viewer-requests"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_viewer_reads_but_does_not_request)"
+ref = "E1: a request is by a member with Edit"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    require_role(&g, SyncRole::Editor, "a member with Edit")?;'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-review-pr4/request-answer-renames-a-field"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_pr4_method_answers_in_its_fixtures_shape)"
+ref = "E12: answers carry the fixtures' field names"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''            "rev": null,
+            "source_sha256": rev.source_sha256,'''
+replace = '''            "rev": null,
+            "sha256": rev.source_sha256,'''
+
+[[mutant]]
+id = "daemon-review-pr4/offline-verify-needs-the-configuration"
+runner = "daemon"
+targets = ["--test", "review_chain_cli_e2e"]
+filter = "test(an_exported_chain_verifies_in_another_process_with_no_configuration)"
+ref = "E10: verify needs no daemon configuration or database"
+[[mutant.edit]]
+file = "daemon/src/main.rs"
+find = '''    if review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {'''
+replace = '''    if false && review_cli::is_offline_verify(cli.subcommand.as_deref(), &cli.rest) {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-unguarded-on-apply"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_mesh_peers_switch_to_e2e_is_refused_over_plaintext_and_accepted_without)"
+ref = "ADR-116 Amendment 1, O17: the switch guard is in apply_update, so a mesh peer's flip meets it"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''            refused = self.applied_switch_refusal(kb, doc_name, &doc.sync).await;'''
+replace = '''            refused = None.filter(|_: &StorageError| kb.len() + doc_name.len() > 0);'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-unguarded-on-replace"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_write_path_refuses_a_switch_over_plaintext_whole)"
+ref = "ADR-116 Amendment 1, O17: share_doc and restore_doc meet the same guard"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''        let Some(kb) = kb else { return Ok(()) };'''
+replace = '''        let Some(kb) = kb.filter(|_| false) else { return Ok(()) };'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-refused-but-kept-in-memory"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_write_path_refuses_a_switch_over_plaintext_whole)"
+ref = "ADR-113 O17: a refused peer update is refused whole, never half-applied"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''            Some(refused) => {
+                self.restore_from_storage(doc_name, doc).await?;
+                Err(refused)'''
+replace = '''            Some(refused) => {
+                Err(refused)'''
+
+[[mutant]]
+id = "daemon-review-pr4/request-not-serialized-with-a-switch"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_switch_racing_a_paused_request_waits_and_is_refused) | test(a_request_racing_a_paused_switch_waits_and_is_refused)"
+ref = "O17: a request and a switch to E2E serialize on the KB's switch gate"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    let _switch = store.e2e_switch_gate(kb_id).await;'''
+replace = '''    let _switch = ();'''
+
+[[mutant]]
+id = "daemon-review-pr4/request-member-cap-is-the-scan-limit"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_request_names_at_most_fifty_members)"
+ref = "E9: a request names at most 50 members, below the scan limit"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''parse_nodes(params, MAX_REQUEST_NODES.min(limits.max_scan_nodes).max(1))'''
+replace = '''parse_nodes(params, limits.max_scan_nodes.max(1 + MAX_REQUEST_NODES * 0))'''
+
+[[mutant]]
+id = "daemon-review-pr4/text-caps-count-characters"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_free_text_parameter_is_capped_in_bytes)"
+ref = "E9: free-text caps are in UTF-8 bytes"
+[[mutant.edit]]
+file = "daemon/src/review/mod.rs"
+find = '''    if s.len() > max {'''
+replace = '''    if s.chars().count() > max {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-anchor-unguarded"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_anchor_that_would_switch_a_kb_holding_plaintext_to_e2e_is_refused)"
+ref = "O17: recording a KB's anchor can switch it to E2E, so both registrations meet the guard"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''        if !is_e2e_under(&coll, Some(anchor)) || self.collection_is_e2e(kb_id, &coll).await {'''
+replace = '''        if true || !is_e2e_under(&coll, Some(anchor)) || self.collection_is_e2e(kb_id, &coll).await {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-mesh-refusal-retried"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_peer_offering_a_refused_switch_repeatedly_is_refused_once_and_the_session_ends)"
+ref = "O17: a mesh peer's refused switch ends the session; it is never re-pulled and re-refused"
+[[mutant.edit]]
+file = "daemon/src/dialer.rs"
+find = '''            return Err(Diverged(e.to_string()))'''
+replace = '''            drop(e)'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-refusal-log-unlimited"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(refusals_are_all_counted_and_their_warnings_rate_limited_per_kb)"
+ref = "O17: a refusal's warning is rate-limited per KB"
+[[mutant.edit]]
+file = "daemon/src/doc_store_e2e_switch.rs"
+find = '''            if now.duration_since(*at) < REFUSAL_LOG_INTERVAL {'''
+replace = '''            if false && now.duration_since(*at) < REFUSAL_LOG_INTERVAL {'''
+
+[[mutant]]
+id = "daemon-review-pr4/e2e-switch-prefilter-never-touched"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_write_that_integrates_a_pending_switch_is_checked)"
+ref = "O17: the pre-filter skips the check only for a write that changed no encryption input"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''    Ok(watch.is_some_and(|w| w.touched()))'''
+replace = '''    Ok(watch.is_some_and(|w| w.touched() && false))'''
+
+[[mutant]]
+id = "daemon-review-pr4/encryption-watch-ignores-owner"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(every_change_to_an_encryption_input_touches_the_watch)"
+ref = "O17: the owner is an encryption input (its key anchors a KB the store owns)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_watch.rs"
+find = '''const ENCRYPTION_INPUT_KEYS: [&str; 3] = [COLL_OPLOG_KEY, COLL_ENCRYPTION_KEY, COLL_OWNER_KEY];'''
+replace = '''const ENCRYPTION_INPUT_KEYS: [&str; 2] = [COLL_OPLOG_KEY, COLL_ENCRYPTION_KEY];'''
+
+[[mutant]]
+id = "daemon-review-pr4/encryption-watch-ignores-nested"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(every_change_to_an_encryption_input_touches_the_watch) | test(a_pending_change_is_reported_by_the_write_that_integrates_it)"
+ref = "O17: a change inside the op-log or an op's record is an encryption input"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_watch.rs"
+find = '''        Some(PathSegment::Key(key)) => is_input(key),'''
+replace = '''        Some(PathSegment::Key(key)) => is_input(key) && false,'''
+
+[[mutant]]
+id = "daemon-review-pr4/mesh-applies-another-kbs-document"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_session_ignores_updates_for_another_kbs_documents)"
+ref = "a mesh session applies only its ticket's KB's documents (ADR-105 D1 kb-scoping)"
+[[mutant.edit]]
+file = "daemon/src/dialer.rs"
+find = '''    if !doc_is_for_kb(&doc, &ticket.kb_id) {'''
+replace = '''    if false && !doc_is_for_kb(&doc, &ticket.kb_id) {'''

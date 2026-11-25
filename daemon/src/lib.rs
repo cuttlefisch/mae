@@ -21,6 +21,7 @@ pub mod message_limits;
 pub mod oauth_self_issue;
 pub mod projector;
 pub mod quota;
+pub mod review;
 pub mod rfc3339;
 pub mod seed;
 pub mod sign_in;

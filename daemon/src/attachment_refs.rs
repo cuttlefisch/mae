@@ -9,9 +9,14 @@
 //! - every ADR-116 history version that still holds content. A pruned version
 //!   has dropped its content, map included, so it holds nothing.
 //!
-//! Not covered, because they are not built: ADR-113 revisions and operator
-//! holds. Their builders must add them here before a sweep runs against a KB
-//! that has them. The grace period for unbound uploads is the sweep's own
+//! - every ADR-113 revision's frozen source, in every state: its own copy of
+//!   the node holds the `attachments` map it was frozen with (PR-4). A
+//!   withdrawn or rejected revision still holds it: revisions are never
+//!   deleted (E7).
+//!
+//! Not covered, because they are not built: revision attachments (PR-6) and
+//! operator holds. Their builders must add them here before a sweep runs
+//! against a KB that has them. The grace period for unbound uploads is the sweep's own
 //! (it reads the store's upload times, P1).
 //!
 //! A node document is read by the sweep's own reader
@@ -91,6 +96,18 @@ impl DocStore {
                         .unreadable
                         .push(format!("history {node_id} #{}", entry.seq)),
                 }
+            }
+        }
+        let kb = kb_id.to_string();
+        let sources = self
+            .review_read(move |c| crate::review::store::sources(c, &kb))
+            .await?;
+        for (sha, content) in sources {
+            match mae_sync::kb::history::decode_content(&content) {
+                Ok(node) => out
+                    .hashes
+                    .extend(node.attachments.into_values().map(|a| a.sha256)),
+                Err(_) => out.unreadable.push(format!("revision source {sha}")),
             }
         }
         Ok(out)

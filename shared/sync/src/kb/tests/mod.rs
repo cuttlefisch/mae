@@ -25,6 +25,7 @@ mod collection_format_tests;
 mod collection_lease_tests;
 mod collection_oplog_tests;
 mod collection_roles_tests;
+mod collection_watch_tests;
 mod history_chain_tests;
 mod history_head_tests;
 mod history_retention_tests;

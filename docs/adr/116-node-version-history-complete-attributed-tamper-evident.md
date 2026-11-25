@@ -67,8 +67,10 @@ saves add nothing (ADR-106's bound, kept).
 
 Each version carries:
 - `kb_id`, `node_id`, and `seq` (per node, gapless, starting at 1);
-- `kind`: one of `edit`, `named`, `rollback`, `import`, `seed`, `rebirth`, `delete` or `pruned`
-  (D5);
+- `kind`: one of `edit`, `named`, `rollback`, `import`, `seed`, `rebirth`, `delete`,
+  `review_freeze` or `pruned` (D5). `review_freeze` is the version an ADR-113 review request cuts
+  (D2.3; ADR-113 O8, decided 2026-11-25): like a named version it is written even when its content
+  repeats the previous version's;
 - `created_at`, from the daemon clock: the record holds unix seconds (UTC), which have one
   encoding; surfaces render it as RFC 3339;
 - `editors`: each principal with its attribution kind (Principal, SignedRelay, MeshPeer,
@@ -122,7 +124,7 @@ Each KB has a policy, set by its owner or the daemon operator, and never by an a
   `max_days`.
 
 **Exempt from pruning, whatever the policy:**
-- named versions;
+- named versions, and `review_freeze` versions (ADR-113 O8);
 - versions that an ADR-113 revision references;
 - versions under a hold. An operator places a hold on a KB or a node, and the hold is recorded;
 - the latest version of each node.
