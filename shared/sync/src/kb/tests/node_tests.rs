@@ -216,8 +216,10 @@ fn content_hash_changes_on_edit() {
 
 #[test]
 fn content_hash_stable_for_same_content() {
-    let node1 = KbNodeDoc::new("n1", "T", "hello", &["a".to_string()]);
-    let node2 = KbNodeDoc::new("n1", "T", "hello", &["a".to_string()]);
+    // A fixed creation time: `new` reads the clock, so two nodes built a
+    // second apart would differ by `created_at` alone.
+    let node1 = KbNodeDoc::new_created_at("n1", "T", "hello", &["a".to_string()], 1_700_000_000);
+    let node2 = KbNodeDoc::new_created_at("n1", "T", "hello", &["a".to_string()], 1_700_000_000);
     assert_eq!(node1.content_hash(), node2.content_hash());
 }
 
