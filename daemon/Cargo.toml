@@ -193,3 +193,15 @@ harness = false
 # REMOVE THIS BLOCK (both workspaces) when #644 lands upstream and yrs releases it.
 [patch.crates-io]
 yrs = { git = "https://github.com/cuttlefisch/y-crdt", rev = "40a08982b4e95fe8d06c84e4df5a5713eca11c25" }
+
+# The listener tests mint a fresh 2048-bit RSA identity-provider key per test
+# (never a shared one: principle #14), and unoptimised prime generation takes
+# from one to more than ten seconds a key, so a single test could spend most of
+# ten seconds building its harness. Only these two crates, which only
+# dev-dependencies use, are optimised in dev/test builds (the root workspace
+# does the same for argon2 and blake2).
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

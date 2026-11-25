@@ -230,6 +230,23 @@ committed. The same applies to the first frame of a document sent to a session.
   handed to another thread (a blob commit) would then land with no event. The task holds the
   connection's slot until its commit is done, so requests whose clients have gone stay bounded by
   the connection cap.
+- **One connection holds at most 100 such requests** (`MAX_REQUESTS_PER_CONNECTION`). A request
+  runs on to its commit after its HTTP/2 stream is reset, so without a limit of its own a client
+  could open a stream, reset it and repeat, piling up commit waits on one connection. The same
+  number is the listener's advertised `SETTINGS_MAX_CONCURRENT_STREAMS`, so a client that keeps to
+  the stream limit never meets this one: only a client resetting streams does. Past it a request is
+  refused `429 too_many_requests_on_connection` at once and counted into that kind's aggregate
+  (D6). 100 is the smallest value RFC 9113 §6.5.2 recommends advertising.
+- **A clean stop drains them first.** It stops taking requests, then waits for those in flight to
+  commit their events, then flushes the coalesced windows and commits `daemon_stop` (D10). A request
+  arriving once the stop has begun is refused `503 activity_record_unavailable` and counted into an
+  aggregate that lands before `daemon_stop`. The wait is bounded by `STOP_DRAIN_TIMEOUT`, 10 s: each
+  request's commit is already bounded by the commit timeout once its dispatch ends, so this bounds
+  only a dispatch that does not end (a stalled upload), and ten seconds plus the writer's own stop
+  stays well inside systemd's default 90-second stop timeout. A stuck request therefore cannot turn
+  a clean stop into a kill that loses `daemon_stop`. If the wait runs out, the daemon logs
+  `activity_record_stop_drain_timeout` (D13) and stops anyway: those requests' events may land after
+  `daemon_stop`, or not at all.
 - One writer task drains the queue. Each batch is everything waiting, up to 512 events, in one
   `BEGIN IMMEDIATE` transaction. While one commit is in flight, the next batch gathers, which is
   group commit with no timer.
@@ -320,6 +337,14 @@ limits:
   source began;
 - under a spread flood, the addresses beyond that half of the queue are not recorded, only their
   number.
+
+**During an outage, refusals are not queued.** While the record is unhealthy (D5), a refusal is
+answered `503 activity_record_unavailable` at once and counted, as that answer, into the aggregate
+of that kind for the window. Queued instead, each would wait out the commit timeout and then land as
+its own row once the writer recovers, so a bad-token flood during an outage would hold the queue and
+leave a row per request. Counted, it is still never dropped: after recovery the aggregate's count
+includes every one. A request refused at its connection's limit (D5) and one arriving during a clean
+stop are counted the same way.
 
 ### D7. Tamper evidence: two chains, a hiding body hash, and signed heads at an interval
 
@@ -553,7 +578,8 @@ metrics endpoint; this command is where the counters are read.
 **Log lines.** Through the daemon's ordinary log (stdout): one `ERROR` line with the stable message
 `activity_record_unavailable` on the transition to unhealthy, and one `INFO` line
 `activity_record_recovered` on recovery. A collector may alert on either signal; the health check is
-the authoritative one.
+the authoritative one. One `ERROR` line `activity_record_stop_drain_timeout`, with the number still
+in flight, when a clean stop's wait for requests in flight (D5) runs out.
 
 **The head line.** Each signed head is written to **stdout** as one line holding one JSON object,
 outside the log formatter, so it is never wrapped in a log prefix. The line begins with exactly
@@ -684,6 +710,11 @@ the auditor (P4).
   clean shutdown their counts sum to 10,000, and the first of each window is committed before its
   answer.
 - **Clock.** An injected backward step records `clock_step`, and `gseq` order holds.
+- **Detached requests stay bounded.** Over one HTTP/2 connection, requests reset after they began
+  never hold more than the connection's limit, and the next are refused `429` and counted. A clean
+  stop with an upload paused after its effect waits for it, and its event commits before
+  `daemon_stop`. A bad-token flood during an outage queues nothing past the first refusal, and its
+  counts sum to the flood.
 
 **Mutants:**
 - the acknowledgement await removed, so the answer goes before the commit;
@@ -695,7 +726,10 @@ the auditor (P4).
 - the session-start insert inverted;
 - the 503 path sending the prepared body;
 - a read classed into `long`;
-- the tip read from a cache.
+- the tip read from a cache;
+- the per-connection limit ignored, or its refusals not counted;
+- a clean stop not waiting for requests in flight, or still taking new ones;
+- refusals queued, or not counted, during an outage.
 
 **Benchmark** (`#[ignore]`): added latency p50 and p99 at 50, 200 and 1,000 events per second, bytes
 per event, and batch sizes. Budgets are set from the first run (O5).

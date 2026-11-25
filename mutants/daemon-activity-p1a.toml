@@ -510,3 +510,112 @@ ref = "ADR-120 D2: the cap is the encoder's"
 file = "daemon/src/activity/event.rs"
 find = '''            .map(|ids| &ids[..ids.len().min(NODE_IDS_MAX)]);'''
 replace = '''            .map(|ids| &ids[..]);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/per-connection-limit-ignored"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(resetting_streams_never_holds_more_than_the_connection_limit)"
+ref = "ADR-120 D5: a connection holds at most MAX_REQUESTS_PER_CONNECTION detached requests"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    let slot = match req.extensions().get::<ConnRequests>() {'''
+replace = '''    let slot = match None::<&ConnRequests> {'''
+
+[[mutant]]
+id = "daemon-activity-p1a/over-the-connection-limit-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(resetting_streams_never_holds_more_than_the_connection_limit)"
+ref = "ADR-120 D6: a refusal at the connection limit is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''                over_connection_limit(&req, &record, &class);
+'''
+replace = '''
+'''
+
+[[mutant]]
+id = "daemon-activity-p1a/connection-admission-check-then-act"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(concurrent_acquirers_never_pass_the_cap)"
+ref = "ADR-120 D5: concurrent streams of one connection never together pass its limit"
+[[mutant.edit]]
+file = "daemon/src/conn_limit.rs"
+find = '''        let max = self.max;
+        self.active
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                (max == 0 || n < max).then_some(n + 1)
+            })
+            .ok()?;'''
+replace = '''        if self.max > 0 && self.active.load(Ordering::Relaxed) >= self.max {
+            return None;
+        }
+        std::thread::yield_now();
+        self.active.fetch_add(1, Ordering::Relaxed);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/stop-does-not-wait-for-requests-in-flight"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D5/D10: a clean stop waits for requests in flight before daemon_stop"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        if tokio::time::timeout(STOP_DRAIN_TIMEOUT, self.until_idle())'''
+replace = '''        if tokio::time::timeout(Duration::ZERO, self.until_idle())'''
+
+[[mutant]]
+id = "daemon-activity-p1a/stop-keeps-taking-requests"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D5/D10: nothing new is taken once a clean stop has begun"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        if self.shared.closing.load(Ordering::SeqCst) {
+            return None;
+        }'''
+replace = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+id = "daemon-activity-p1a/refusal-during-a-stop-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_stop_waits_for_a_request_in_flight_to_record_its_event)"
+ref = "ADR-120 D6: a refusal made while a stop waits is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''        record.shed_refusal(&refused_on_arrival(&req, &record, &class, now), now);
+'''
+replace = '''        let _ = (&req, &class, now);
+'''
+
+[[mutant]]
+id = "daemon-activity-p1a/refusals-queued-during-an-outage"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_bad_token_flood_during_an_outage_queues_a_bounded_number)"
+ref = "ADR-120 D6: during an outage a refusal is counted into its aggregate, not queued"
+[[mutant.edit]]
+file = "daemon/src/oauth_activity.rs"
+find = '''    if !record.healthy() {
+        record.shed_refusal(ev, now);'''
+replace = '''    if false {
+        record.shed_refusal(ev, now);'''
+
+[[mutant]]
+id = "daemon-activity-p1a/outage-refusal-not-counted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_bad_token_flood_during_an_outage_queues_a_bounded_number)"
+ref = "ADR-120 D6: an outage refusal is coalesced, never dropped"
+[[mutant.edit]]
+file = "daemon/src/activity/writer.rs"
+find = '''        self.coalescer.aggregate(&ev, now_us);
+        self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);'''
+replace = '''        let _ = (&ev, now_us);
+        self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);'''

@@ -189,8 +189,9 @@ impl ActivityRecord {
 
     /// Begin a recorded request: a ticket held until its event's commit is
     /// done, which a clean stop waits for. `None` once the stop has begun: the
-    /// request is refused `503` and nothing of it is recorded (counted in
-    /// `unavailable_total`).
+    /// caller refuses the request `503` and counts it with
+    /// [`Self::shed_refusal`], so a refusal made while the stop waits lands in
+    /// an aggregate before `daemon_stop` (D6: never dropped).
     ///
     /// The count is raised before `closing` is read, and the stop sets
     /// `closing` before it reads the count (both `SeqCst`), so a request
@@ -201,7 +202,6 @@ impl ActivityRecord {
             .fetch_add(1, Ordering::SeqCst);
         let ticket = InFlight(Arc::clone(&self.shared));
         if self.shared.closing.load(Ordering::SeqCst) {
-            self.shared.unavailable_total.fetch_add(1, Ordering::SeqCst);
             return None;
         }
         Some(ticket)
@@ -212,11 +212,13 @@ impl ActivityRecord {
         self.shared.requests_in_flight.load(Ordering::SeqCst)
     }
 
-    /// D6 during an outage: a refusal made while the record is unhealthy is
-    /// not queued (each would wait out the commit timeout and land later as a
-    /// duplicate). It is answered `503 activity_record_unavailable` and
-    /// counted, as that answer, into its kind's aggregate: coalesced, never
-    /// dropped. Counted in `unavailable_total` like any `503` of the record.
+    /// D6 during an outage or a stop: a refusal made while the record is
+    /// unhealthy is not queued (each would wait out the commit timeout and
+    /// land later as a duplicate), and a request arriving once a clean stop
+    /// has begun is not taken on. Either is answered
+    /// `503 activity_record_unavailable` and counted, as that answer, into its
+    /// kind's aggregate: coalesced, never dropped. Counted in
+    /// `unavailable_total` like any `503` of the record.
     pub fn shed_refusal(&self, ev: &Event, now_us: i64) {
         let mut ev = ev.clone();
         ev.result = OutcomeResult::Refused;

@@ -439,8 +439,10 @@ pub(crate) async fn recorded(
 ) -> Response<ResponseBody> {
     let timeout_ms = record.settings().commit_timeout_ms;
     let cors = crate::ws::cors_origin(&req, &listener);
-    // A clean stop has begun: nothing new is taken.
+    // A clean stop has begun: nothing new is taken, and the refusal is counted.
     let Some(in_flight) = record.begin() else {
+        let now = now_us();
+        record.shed_refusal(&refused_on_arrival(&req, &record, &class, now), now);
         return oauth::boxed(unavailable(timeout_ms, cors));
     };
     let slot = match req.extensions().get::<ConnRequests>() {
@@ -479,15 +481,27 @@ pub(crate) async fn recorded(
 fn over_connection_limit(
     req: &Request<Incoming>,
     record: &ActivityRecord,
-    (template, kind): &(String, EventKind),
+    class: &(String, EventKind),
 ) {
     let now = now_us();
+    let mut ev = refused_on_arrival(req, record, class, now);
+    ev.outcome_kind = Some(TOO_MANY_ON_CONNECTION.to_string());
+    record.coalescer().aggregate(&ev, now);
+}
+
+/// The event of a request refused as it arrives, before any dispatch: its
+/// route and peer, and no principal (nothing was authenticated).
+fn refused_on_arrival(
+    req: &Request<Incoming>,
+    record: &ActivityRecord,
+    (template, kind): &(String, EventKind),
+    now: i64,
+) -> Event {
     let mut ev = Event::new(*kind, now, Transport::Https);
     ev.route = Some(template.clone());
     ev.peer = peer_of(req, record.settings());
     ev.result = OutcomeResult::Refused;
-    ev.outcome_kind = Some(TOO_MANY_ON_CONNECTION.to_string());
-    record.coalescer().aggregate(&ev, now);
+    ev
 }
 
 /// The refusal kind of a request past its connection's limit.

@@ -1165,6 +1165,9 @@ async fn resetting_streams_never_holds_more_than_the_connection_limit() {
     let token = h.token(3600);
     let held = Held::new(&h.db);
     let tcp = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+    // Without it, each request's HEADERS and DATA frames meet Nagle's
+    // algorithm and a delayed ACK, tens of milliseconds a request.
+    tcp.set_nodelay(true).unwrap();
     let (sender, conn) = hyper::client::conn::http2::handshake(
         hyper_util::rt::TokioExecutor::new(),
         hyper_util::rt::TokioIo::new(tcp),
@@ -1229,9 +1232,10 @@ async fn resetting_streams_never_holds_more_than_the_connection_limit() {
 }
 
 /// A clean stop with an upload paused after its effect (the blob's row is in):
-/// a request arriving meanwhile is refused `503` with nothing recorded, the
-/// stop waits, and once the upload goes on its event is committed before
-/// `daemon_stop`, as the success it was.
+/// a request arriving meanwhile is refused `503` and counted into an
+/// aggregate, the stop waits, and once the upload goes on its event is
+/// committed before `daemon_stop`, as the success it was, and so is the
+/// refusal's count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_waits_for_a_request_in_flight_to_record_its_event() {
     let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
@@ -1298,9 +1302,19 @@ async fn a_stop_waits_for_a_request_in_flight_to_record_its_event() {
     let stop_at = at("daemon_stop").expect("daemon_stop");
     assert!(upload_at < stop_at, "the upload's event comes first");
     assert_eq!(all[upload_at]["outcome"]["result"], "ok");
+    let late_at = all
+        .iter()
+        .position(|e| {
+            e["outcome"]["result"] == "refused"
+                && e["outcome"]["kind"] == "activity_record_unavailable"
+        })
+        .expect("the refused late request is counted, never dropped");
+    assert_eq!(all[late_at]["count"], 1);
+    assert!(late_at < stop_at, "and counted before daemon_stop");
     assert!(
-        !all.iter().any(|e| e["route"] == "kb/query.my_kbs"),
-        "the refused late request is not recorded"
+        !all.iter()
+            .any(|e| e["route"] == "kb/query.my_kbs" && e["outcome"]["result"] == "ok"),
+        "the late request was not taken on"
     );
 }
 
