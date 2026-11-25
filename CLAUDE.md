@@ -925,6 +925,22 @@ page is an operator-declared node per KB; ADR-073's view is retired.
 `docs/research/119-spike-results.md`, and the prior art is
 `docs/research/119-kb-site-engine-prior-art.md`.
 
+**ADR-120** (*accepted, design; phased P1a–P5*): **the daemon's activity record.**
+
+- **What:** one event per authenticated request, reads included, in its own `activity.db`, with one
+  writer.
+- **No unrecorded answer:** the answer waits for the event's group commit (`synchronous=FULL`), and
+  a request whose event cannot be recorded is refused (`503 activity_record_unavailable`). A write
+  whose effect commits first is reconciled from its own attributed record.
+- **Tamper evidence:** two hash chains, one per retention class (2 years / 12 months), each disposed
+  of only from the front, behind a signed anchor. The body enters the chain through a salted hash,
+  so filtered exports verify. Heads are signed at an interval with the daemon key.
+- **Correlation:** the daemon mints a session id and returns it in a response header, as the join
+  key with a relaying server's log.
+- **Readers:** the operator's export and ADR-117 D9's auditor; never an agent.
+- **Replaces and amends:** replaces ADR-117 D7's operator log, and amends ADR-118 D7.
+- **Evidence:** `docs/research/120-activity-record-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
