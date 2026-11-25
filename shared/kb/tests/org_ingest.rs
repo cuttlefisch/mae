@@ -393,6 +393,21 @@ fn a_refusal_outside_every_node_leaves_each_node_body_in_store_form() {
     }
 }
 
+/// A node under an excluded ancestor (`:noexport:`, COMMENT) is stored in its
+/// store form read alone. A regression pin: it held before the per-node
+/// `store_body` too, and must keep holding.
+#[test]
+fn a_node_under_an_excluded_ancestor_is_stored_as_it_reads_alone() {
+    for b in [
+        "* P :noexport:\n** C\n:PROPERTIES:\n:ID: c1\n:END:\n[[https://x.org][D]]\n",
+        "* COMMENT P\n** C\n:PROPERTIES:\n:ID: c1\n:END:\n[[https://x.org][D]]\n",
+    ] {
+        for n in parse_file(b).nodes {
+            assert_eq!(store_body(&n.body), n.body, "{}: not in store form", n.id);
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 

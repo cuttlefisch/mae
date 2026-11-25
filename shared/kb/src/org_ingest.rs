@@ -265,10 +265,11 @@ fn node_of(text: &str, sem: &Semantics, n: &SemanticNode, edits: &[Edit]) -> Nod
         _ => n.id.clone(),
     });
     let kind = NodeKind::from_str_lossy(n.kind.as_deref().unwrap_or(""));
-    // The file's edits are all or nothing ([`checked_edits`]), so text
-    // outside this node can refuse them; the body is then put in store form
-    // on its own, which is what reading it alone later does. Where the
-    // file's edits applied this changes nothing: `store_body` is idempotent.
+    // A node's stored body is its store form read alone, which is how every
+    // later reader re-derives it. The file's edits are all or nothing
+    // ([`checked_edits`]), so text outside this node can refuse them and
+    // leave the body's links as written; `store_body` puts the body in store
+    // form on its own. It is idempotent per body.
     let body = store_body(&apply_edits(text, n.body_span.range(), edits));
     let mut node = Node::new(n.id.clone(), title, kind, body).with_tags(sem.tags_of(n));
     node.aliases = n.aliases.clone();
