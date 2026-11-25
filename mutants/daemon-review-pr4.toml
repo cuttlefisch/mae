@@ -406,3 +406,14 @@ ref = "O17: a change inside the op-log or an op's record is an encryption input"
 file = "shared/sync/src/kb/collection_watch.rs"
 find = '''        Some(PathSegment::Key(key)) => is_input(key),'''
 replace = '''        Some(PathSegment::Key(key)) => is_input(key) && false,'''
+
+[[mutant]]
+id = "daemon-review-pr4/mesh-applies-another-kbs-document"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_session_ignores_updates_for_another_kbs_documents)"
+ref = "a mesh session applies only its ticket's KB's documents (ADR-105 D1 kb-scoping)"
+[[mutant.edit]]
+file = "daemon/src/dialer.rs"
+find = '''    if !doc_is_for_kb(&doc, &ticket.kb_id) {'''
+replace = '''    if false && !doc_is_for_kb(&doc, &ticket.kb_id) {'''
