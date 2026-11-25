@@ -39,19 +39,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # TEMPORARY diagnostic (remove before merge): what the runner's C
-      # compiler enables by default, and the exact command aws-lc's build
-      # uses for its FIPS module.
-      - name: "TEMP: C compiler defaults and aws-lc flags"
-        run: |
-          cc --version | head -1
-          cc -Q --help=target | grep -E '^\s+-m(arch|tune|avx|avx2)[= ]' || true
-          printf 'AVX macros by default: '; echo | cc -dM -E - | grep -cE '__AVX__|__AVX2__' || true
-          printf 'AVX macros with -march=x86-64: '; echo | cc -march=x86-64 -dM -E - | grep -cE '__AVX__|__AVX2__' || true
-          env | grep -E '^(CC|CFLAGS|CXXFLAGS|TARGET_CFLAGS|HOST_CFLAGS|RUSTFLAGS|CC_|CFLAGS_)[A-Za-z0-9_-]*=' | sed 's/=.*/=<set>/' || true
-          cargo build --release -p aws-lc-sys -vv 2>&1 | grep -E 'running:.*(bcm|cpucap)' | head -3 | cut -c1-1500 || true
-          cargo build --release -p aws-lc-sys -vv 2>&1 | grep -E 'CFLAGS' | sort -u | head -20 || true
-
       - name: Build GUI binary (glibc) + services (musl) + ADR KB + daemon
         run: |
           cargo build --release --features gui --package mae
@@ -84,22 +71,11 @@ jobs:
 
       # Every Linux binary must start on a CPU with nothing past the x86-64
       # baseline: a toolchain that defaulted to AVX shipped v0.14.191-193
-      # binaries that died with SIGILL on such CPUs.
+      # binaries (up to v0.14.195) that died with SIGILL on such CPUs.
       - name: Check the binaries run on a baseline x86-64 CPU
         run: |
           sudo apt-get install -y qemu-user-static || sudo apt-get install -y qemu-user
           scripts/check-baseline-cpu.sh dist/mae-pkg/mae dist/mae-pkg/mae-daemon dist/mae-pkg/mae-mcp-shim
-
-      # TEMPORARY (remove before merge): keep the failing binaries for analysis.
-      - name: "TEMP: upload binaries that failed the baseline check"
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: baseline-failures
-          path: |
-            dist/mae-pkg/mae
-            dist/mae-pkg/mae-daemon
-          retention-days: 3
 
       # The ADR KB ships as its OWN asset, not inside the user packages. It is
       # ~57 MB of MAE's own decision history — useful to contributors querying
@@ -149,7 +125,7 @@ jobs:
 
       # Every Linux binary must start on a CPU with nothing past the x86-64
       # baseline: a toolchain that defaulted to AVX shipped v0.14.191-193
-      # binaries that died with SIGILL on such CPUs.
+      # binaries (up to v0.14.195) that died with SIGILL on such CPUs.
       - name: Check the binaries run on a baseline x86-64 CPU
         run: |
           sudo apt-get install -y qemu-user-static || sudo apt-get install -y qemu-user

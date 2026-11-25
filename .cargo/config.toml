@@ -41,3 +41,13 @@ CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
 CXXFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
 CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
 CXXFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
+# aws-lc-sys resolves its C flags itself and then OVERWRITES CFLAGS_<target>
+# in its build process with what it found. For a cross build (the musl daemon)
+# it looks at TARGET_CFLAGS first, and for a native one at HOST_CFLAGS, each
+# before CFLAGS_<target>: daemon/.cargo/config.toml sets both, for SQLite, so
+# without these keys aws-lc alone was built for the runner's AVX default.
+# Its own crate-prefixed keys come first in that lookup.
+AWS_LC_SYS_HOST_CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_HOST_CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_TARGET_CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64 -mtune=generic"
+AWS_LC_SYS_TARGET_CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64 -mtune=generic"
