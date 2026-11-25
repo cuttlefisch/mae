@@ -305,6 +305,26 @@ known author, and with **`authors_unknown`** when the set is unknown. Approval i
 an incomplete record. *(Owner decision, 2026-11-25: both are soft blocks, D3. Unknown authors are
 acknowledged with `acknowledge_unknown_authors: true` and an `override_reason`, recorded alike.)*
 
+**Attested seed authorship** *(owner decision, 2026-11-25: new documents enter either through the
+browser or through a seed, and both must record who wrote them)*. A seed writes as the daemon, so on
+its own seeded content has unknown authors. `kb seed --author <fingerprint>` lets the operator
+attest who wrote it. Every seed write to a node is logged (outside the CRDT and the editor record,
+which keep their formats) with its WAL id and the attested author, or none, and an attested write
+appends an `authorship_attested` event (actor `{principal: "operator:local", kind: "operator",
+os_user}`, as E4's `import`; payload `node_id, author, commit, wal_id`) to the KB's signed chain. `authors_since` then counts the seed's writes
+in the window as the attested members', on three conditions, each failing to **unknown**:
+
+- the log accounts for every seed write: as many entries as the editor record's seed row counts
+  updates. The log is written after the document, so a crash between the two leaves a write
+  unlogged, and a seed's re-run skips the node it already wrote; a seed from before the log fails
+  the same way;
+- every seed write in the window is attested;
+- when the seed's first write (a whole-document restore) reset the record's origin, the logged,
+  attested write at the origin stands for the content before it, which it replaced.
+
+An `--update` therefore adds its author to the window since the last approval; it never restarts
+the window, and an unattested update makes the authors unknown again.
+
 ### A4. Seeded content enters as an imported, in-force revision
 
 A KB created by seeding from org files (the operator's `mae-daemon kb seed`) is published at seed:
@@ -1108,7 +1128,8 @@ D7's chain, made precise enough that a third party can verify it without MAE.
 - `member_sig` is `null` until #727.
 
 **Kinds.** `import`, `policy_changed`, `code_set`, `request`, `act`, `approve`, `reject`, `withdraw`,
-`enter_into_force`, `derogate`, `attach`, `annul_attachment`, `delete_attachment`. C9's agent kinds
+`enter_into_force`, `derogate`, `attach`, `annul_attachment`, `delete_attachment`,
+`authorship_attested` (A3). C9's agent kinds
 are ADR-118's. A verifier needs no payload semantics, and carries an unknown kind through.
 
 **Canonical bytes** are the event's RFC 8785 (JSON Canonicalization Scheme) serialization. The values

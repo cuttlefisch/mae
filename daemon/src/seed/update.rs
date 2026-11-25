@@ -533,7 +533,7 @@ async fn write(
         crash::at(crash::Step::BeforeNode(i))?;
         let u = by_id[p.file.id.as_str()];
         if !u.done {
-            write_node(store, t, p, u, i, &mut count).await?;
+            write_node(store, t, &plan.source.commit, p, u, i, &mut count).await?;
         }
     }
     for u in nodes.iter().filter(|n| n.remove && !n.done) {
@@ -567,6 +567,7 @@ struct Counts {
 async fn write_node(
     store: &DocStore,
     t: &ApplyTarget<'_>,
+    rev: &str,
     p: &PlannedNode,
     u: &SeedUpdateNode,
     i: usize,
@@ -578,7 +579,9 @@ async fn write_node(
         None => {
             count.created += 1;
             let r = store.restore_doc(&name, &target.encode(), BY).await;
-            (r.map_err(storage)?.wal_seq, target.version())
+            let wal = r.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
+            (wal, target.version())
         }
         Some(doc) if same_content(&doc, &target) => {
             count.present += 1;
@@ -590,7 +593,9 @@ async fn write_node(
             cut(store, t.kb_id, &p.file.id, VersionKind::Seed).await?;
             let update = doc.assign(&target.materialize());
             let r = store.apply_update(&name, &update, None, BY).await;
-            (r.map_err(storage)?.wal_seq, doc.version())
+            let wal = r.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
+            (wal, doc.version())
         }
     };
     crash::at(crash::Step::AfterWrite(i))?;

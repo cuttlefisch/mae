@@ -23,7 +23,7 @@ pub(super) const ALPHA: &str = "0a000000-0000-4000-8000-000000000001";
 pub(super) const B: &str = "0a000000-0000-4000-8000-000000000002";
 const EMPTY: &str = "0a000000-0000-4000-8000-000000000003";
 const UNICODE: &str = "0a000000-0000-4000-8000-000000000004";
-const NEW: &str = "0a000000-0000-4000-8000-0000000000f1";
+pub(super) const NEW: &str = "0a000000-0000-4000-8000-0000000000f1";
 /// A `--discard-edits` value for refusals that come before the edit check.
 const ANY_TOKEN: &str = "any";
 

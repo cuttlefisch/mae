@@ -101,6 +101,8 @@ async fn apply(config: &DaemonConfig, args: &SeedArgs) -> Result<ApplyOutcome, S
         plan_hash: args.plan_hash.as_deref().unwrap_or_default(),
         owner: &identity,
         now: now(),
+        author: args.author.as_deref(),
+        operator: &operator(),
     };
     seed::apply(&store.doc_store, &plan, &target)
         .await
@@ -186,6 +188,8 @@ async fn update(config: &DaemonConfig, args: &SeedArgs) -> Result<UpdateOutcome,
         plan_hash: args.plan_hash.as_deref().unwrap_or_default(),
         owner: &identity,
         now: now(),
+        author: args.author.as_deref(),
+        operator: &operator(),
     };
     seed::update(
         &store.doc_store,
@@ -278,6 +282,14 @@ fn print_export(report: &seed::ExportReport) -> i32 {
         report.refused.len()
     );
     i32::from(!report.refused.is_empty())
+}
+
+/// Who ran the seed: the OS user, recorded with each seed write (ADR-113 A3).
+fn operator() -> String {
+    std::env::var("USER")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "operator".into())
 }
 
 #[cfg(test)]

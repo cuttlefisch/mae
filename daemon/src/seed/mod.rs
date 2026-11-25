@@ -59,6 +59,7 @@
 //! case either fits the contract or becomes a named refusal; never a default.
 
 mod apply;
+mod attest;
 mod export;
 mod git;
 mod glob;

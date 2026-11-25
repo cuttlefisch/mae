@@ -14,6 +14,8 @@
 //! now: an approver who edited the node after the freeze also counts as an
 //! author. That over-counts (it can only refuse), never under-counts.
 
+use std::collections::BTreeSet;
+
 use mae_mcp::protocol::McpError;
 use serde_json::{json, Value};
 
@@ -23,7 +25,7 @@ use super::{
     actor, gate, required_str, required_text, signer, storage_fault, time, within_bytes,
     MAX_REASON_BYTES,
 };
-use crate::doc_editors::Authors;
+use crate::doc_editors::{EditorKind, EditorsSince, InternalWriter};
 use crate::doc_store::DocStore;
 use crate::oauth_self_issue::{PrincipalKind, ValidatedPrincipal};
 
@@ -102,18 +104,95 @@ pub(super) async fn author_verdict(
         })
         .await
         .map_err(storage_fault)?;
+    let Some(authors) = authors_since(store, rev, since).await? else {
+        return Ok(Verdict::Unknown);
+    };
+    Ok(if authors.contains(&who.principal) {
+        Verdict::Author
+    } else {
+        Verdict::Clear
+    })
+}
+
+/// The authors of a node since WAL id `since`, or `None` when they cannot be
+/// known (A3). The editor record decides, with one addition: the seed's own
+/// writes, which name no author, count as authored by the member the operator
+/// attested (`kb seed --author`), when the seed write log accounts for every
+/// seed write and each one in the window was attested.
+///
+/// A seed's first write to a node replaces the document (`restore_doc`), which
+/// resets the editor record's origin to its own WAL id, so a window opening
+/// before it is `Incomplete`. Only such a replacement sets the origin to its
+/// own WAL id, so when the origin is a logged, attested seed write, that write
+/// replaced everything before it: the window starts there, with its author.
+///
+/// @ai-caution: [security] The log is written after the document, so a crash
+/// between them leaves a seed write unlogged, and a seed's re-run skips the
+/// node it already wrote. The seed row's `updates` count must therefore equal
+/// the number of logged writes: a seed write the log missed, or one from
+/// before the log, leaves the authors unknown, never attested by a later write.
+async fn authors_since(
+    store: &DocStore,
+    rev: &Revision,
+    since: u64,
+) -> Result<Option<BTreeSet<String>>, McpError> {
     let doc = format!("kbn:{}:{}", rev.kb_id, rev.node_id);
-    Ok(
-        match store
-            .authors_since_wal(&doc, since)
-            .await
-            .map_err(storage_fault)?
-        {
-            Authors::Unknown(_) => Verdict::Unknown,
-            Authors::Known(set) if set.contains(&who.principal) => Verdict::Author,
-            Authors::Known(_) => Verdict::Clear,
-        },
-    )
+    let (kb, node) = (rev.kb_id.clone(), rev.node_id.clone());
+    let log = store
+        .review_read(move |c| store::seed_writes(c, &kb, &node))
+        .await
+        .map_err(storage_fault)?;
+    let mut authors = BTreeSet::new();
+    let (start, rows) = match store
+        .editors_since_wal(&doc, since)
+        .await
+        .map_err(storage_fault)?
+    {
+        EditorsSince::Known(rows) => (since, rows),
+        EditorsSince::CutoffAhead { .. } => return Ok(None),
+        EditorsSince::Incomplete {
+            recorded_after_wal_id: origin,
+        } => {
+            let Some(author) = log
+                .iter()
+                .find(|w| w.wal_id == origin)
+                .and_then(|w| w.author.clone())
+            else {
+                return Ok(None);
+            };
+            authors.insert(author);
+            match store
+                .editors_since_wal(&doc, origin)
+                .await
+                .map_err(storage_fault)?
+            {
+                EditorsSince::Known(rows) => (origin, rows),
+                _ => return Ok(None),
+            }
+        }
+    };
+    let seed = InternalWriter::Seed.as_str();
+    authors.extend(
+        rows.iter()
+            .filter(|r| r.kind == EditorKind::Principal)
+            .map(|r| r.editor.clone()),
+    );
+    let hidden: Vec<_> = rows.iter().filter(|r| r.kind.hides_an_author()).collect();
+    let seed_row = match hidden.as_slice() {
+        [] => return Ok(Some(authors)),
+        [r] if r.kind == EditorKind::Internal && r.editor == seed => r,
+        _ => return Ok(None),
+    };
+    if usize::try_from(seed_row.updates).ok() != Some(log.len()) {
+        return Ok(None);
+    }
+    for w in log.iter().filter(|w| w.wal_id > start) {
+        match &w.author {
+            Some(a) => authors.insert(a.clone()),
+            None => return Ok(None),
+        };
+    }
+    Ok(Some(authors))
 }
 
 /// Whether `params` sets the boolean `name` to true.

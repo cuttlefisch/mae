@@ -178,5 +178,33 @@
       "canonical": "eyJlbnRyeV9oYXNoIjoiNTZmNzM3YzM3YmNlN2RiYmY2OTYxZjQxNDliYWYzNjFjYmJiYzM5NmZmOTNmNWEyYzAyOGM5MjViMGIyNzY0MyIsImZvcm1hdCI6Im1hZXJldmlldy1oZWFkL3YxIiwia2JfaWQiOiIwYjhjNWQwZS0zZjRhLTRjNjEtOWQyZS01YTdiOGM5ZDBlMWYiLCJzZXEiOjQsInNpZ25lZF9hdCI6IjIwMDAtMDEtMDNUMDk6MjA6MDAuMDAwWiJ9",
       "sig": "oUOAqjKN3BbLHdlq0JEty5GhcInCRin9AXwAt+q2iY2ng2iggXEJUeVzLOJKWIKFVyWZXCIEB7uiJOjzJSxWDg=="
     }
+  ],
+  "decoded_examples": [
+    {
+      "name": "authorship_attested (A3): an operator's `kb seed --author` attests who wrote a seeded node. One event per attested seed write; not part of the signed chain above, which predates it. A verifier carries the kind through like any other.",
+      "event": {
+        "v": 1,
+        "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+        "seq": 7,
+        "prev_hash": "<the previous event's entry_hash>",
+        "kind": "authorship_attested",
+        "at": "2000-01-02T12:00:00.000Z",
+        "actor": {
+          "principal": "operator:local",
+          "kind": "operator",
+          "os_user": "maeadmin",
+          "iss": null,
+          "sub": null,
+          "sign_in": null
+        },
+        "payload": {
+          "node_id": "0a000000-0000-4000-8000-000000000001",
+          "author": "SHA256:Qm9vZXhhbXBsZWF1dGhvcjAwMQ",
+          "commit": "4f1c2a9d8e7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d",
+          "wal_id": 412
+        },
+        "member_sig": null
+      }
+    }
   ]
 }

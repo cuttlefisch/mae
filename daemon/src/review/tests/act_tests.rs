@@ -11,7 +11,7 @@ use crate::oauth_self_issue::PrincipalKind;
 use crate::sign_in::SignIn;
 
 /// `p` as a person whose sign-in carries `groups`.
-fn signed_in(p: &str, groups: &[&str], kind: PrincipalKind) -> ValidatedPrincipal {
+pub(super) fn signed_in(p: &str, groups: &[&str], kind: PrincipalKind) -> ValidatedPrincipal {
     let mut v = person(p);
     v.kind = kind;
     v.sign_in = Some(SignIn {
@@ -21,7 +21,7 @@ fn signed_in(p: &str, groups: &[&str], kind: PrincipalKind) -> ValidatedPrincipa
     v
 }
 
-async fn as_(
+pub(super) async fn as_(
     env: &Env,
     who: &ValidatedPrincipal,
     method: &str,
@@ -30,12 +30,12 @@ async fn as_(
     crate::review::dispatch(method, &params, &env.store, who, limits()).await
 }
 
-fn approver(env: &Env) -> ValidatedPrincipal {
+pub(super) fn approver(env: &Env) -> ValidatedPrincipal {
     signed_in(&env.viewer, &["approvers"], PrincipalKind::Person)
 }
 
 /// Review on, with group lists, and the given policy fields on top.
-async fn policy(env: &Env, extra: Value) {
+pub(super) async fn policy(env: &Env, extra: Value) {
     let mut p = json!({"kb_id": KB, "review_enabled": true, "code_prefixes": ["PRO"],
         "reviewers": [{"group": "reviewers"}], "approvers": [{"group": "approvers"}]});
     p.as_object_mut()
@@ -61,7 +61,7 @@ async fn requested(env: &Env, nodes: &[&str]) -> (String, Vec<String>) {
     (r["request_id"].as_str().unwrap().to_string(), ids)
 }
 
-async fn status(env: &Env, node: &str) -> Value {
+pub(super) async fn status(env: &Env, node: &str) -> Value {
     call(
         env,
         &env.owner,
@@ -72,7 +72,7 @@ async fn status(env: &Env, node: &str) -> Value {
     .unwrap()
 }
 
-const NOW: &str = "2000-01-01T00:00:00.000Z";
+pub(super) const NOW: &str = "2000-01-01T00:00:00.000Z";
 
 /// Approve then enter into force; a second revision supersedes the first.
 /// Kills: the pointer not moving, the previous revision left in force, the

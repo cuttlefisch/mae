@@ -42,8 +42,8 @@ filter = "test(a_listed_approver_may_withdraw_unless_an_author)"
 ref = "D3, A1: an editor since the last approval is an author"
 [[mutant.edit]]
 file = "daemon/src/review/acts.rs"
-find = '''        Authors::Known(set) if set.contains(&who.principal) => Verdict::Author,'''
-replace = '''        Authors::Known(set) if set.is_empty() && set.contains(&who.principal) => Verdict::Author,'''
+find = '''    Ok(if authors.contains(&who.principal) {'''
+replace = '''    Ok(if authors.is_empty() && authors.contains(&who.principal) {'''
 
 [[mutant]]
 id = "daemon-review-pr5/unknown-authors-allowed"
@@ -212,3 +212,92 @@ ref = "D3 soft block: an override needs its reason"
 file = "daemon/src/review/acts.rs"
 find = '''    let reason = required_text(params, "override_reason")?.to_string();'''
 replace = '''    let reason = String::new();'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-origin-attestation-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_attested_seed_restore_names_its_author)"
+ref = "A3: an attested seed restore at the origin names its author"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                .and_then(|w| w.author.clone())'''
+replace = '''                .and_then(|_| None::<String>)'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-log-count-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_seed_write_the_log_missed_or_did_not_attest_leaves_the_authors_unknown)"
+ref = "A3: a seed write the log missed leaves the authors unknown"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    if usize::try_from(seed_row.updates).ok() != Some(log.len()) {'''
+replace = '''    if false {'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-older-write-at-origin"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_seed_write_the_log_missed_or_did_not_attest_leaves_the_authors_unknown)"
+ref = "A3: only the write at the origin stands for it"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''                .find(|w| w.wal_id == origin)'''
+replace = '''                .find(|w| w.wal_id <= origin)'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-unattested-write-counted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_seed_write_the_log_missed_or_did_not_attest_leaves_the_authors_unknown)"
+ref = "A3: one unattested seed write leaves the authors unknown"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''            None => return Ok(None),'''
+replace = '''            None => false,'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-window-not-filtered"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(after_an_approval_only_later_seed_writes_count)"
+ref = "A3: the seed log is read from the last approval on"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    for w in log.iter().filter(|w| w.wal_id > start) {'''
+replace = '''    for w in log.iter() {'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-write-not-logged"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_attested_apply_logs_and_signs_every_write)"
+ref = "A3: every seed write is logged"
+[[mutant.edit]]
+file = "daemon/src/seed/attest.rs"
+find = '''            store::log_seed_write(c, &write)?;'''
+replace = '''            let _ = &write;'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-author-dropped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_attested_apply_logs_and_signs_every_write)"
+ref = "A3: the attested author is logged"
+[[mutant.edit]]
+file = "daemon/src/seed/attest.rs"
+find = '''                author: author.as_deref(),'''
+replace = '''                author: None,'''
+
+[[mutant]]
+id = "daemon-review-pr5/seed-update-write-not-logged"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_update_logs_the_writes_it_makes_and_only_those)"
+ref = "A3: an update logs the nodes it rewrites"
+[[mutant.edit]]
+file = "daemon/src/seed/update.rs"
+find = '''            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
+            (wal, doc.version())'''
+replace = '''            (wal, doc.version())'''

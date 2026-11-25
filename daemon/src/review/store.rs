@@ -108,6 +108,20 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      override_note TEXT
  );
  CREATE INDEX IF NOT EXISTS idx_review_acts_revision ON kb_review_acts(revision_id);
+ CREATE TABLE IF NOT EXISTS kb_review_seed_writes (
+     kb_id TEXT NOT NULL,
+     node_id TEXT NOT NULL,
+     wal_id INTEGER NOT NULL,
+     author TEXT,
+     operator TEXT NOT NULL,
+     rev TEXT NOT NULL,
+     at INTEGER NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_review_seed_writes ON kb_review_seed_writes(kb_id, node_id, wal_id);
+ CREATE TRIGGER IF NOT EXISTS kb_review_seed_writes_no_update BEFORE UPDATE ON kb_review_seed_writes
+ BEGIN SELECT RAISE(ABORT, 'the seed write log is append-only'); END;
+ CREATE TRIGGER IF NOT EXISTS kb_review_seed_writes_no_delete BEFORE DELETE ON kb_review_seed_writes
+ BEGIN SELECT RAISE(ABORT, 'the seed write log is append-only'); END;
  CREATE TRIGGER IF NOT EXISTS kb_review_events_no_update BEFORE UPDATE ON kb_review_events
  BEGIN SELECT RAISE(ABORT, 'the review event log is append-only'); END;
  CREATE TRIGGER IF NOT EXISTS kb_review_events_no_delete BEFORE DELETE ON kb_review_events
@@ -1091,6 +1105,69 @@ pub(crate) fn act_records(
             "at": crate::rfc3339::utc_millis(st.read::<i64, _>("at")?),
             "override": ovr,
         }));
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------- seed writes
+
+/// One seed write to a node: its WAL id, the member the operator attested as
+/// the content's author (`kb seed --author`), or none, who ran it, and from
+/// which revision of the source.
+pub struct SeedWrite<'a> {
+    pub kb_id: &'a str,
+    pub node_id: &'a str,
+    pub wal_id: u64,
+    pub author: Option<&'a str>,
+    pub operator: &'a str,
+    pub rev: &'a str,
+    pub at: i64,
+}
+
+/// Log one seed write (append-only).
+pub fn log_seed_write(conn: &sqlite::Connection, w: &SeedWrite<'_>) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "INSERT INTO kb_review_seed_writes
+             (kb_id, node_id, wal_id, author, operator, rev, at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    st.bind((1, w.kb_id))?;
+    st.bind((2, w.node_id))?;
+    st.bind((3, i64::try_from(w.wal_id).map_err(|_| bad("wal_id"))?))?;
+    st.bind((4, opt_text(w.author)))?;
+    st.bind((5, w.operator))?;
+    st.bind((6, w.rev))?;
+    st.bind((7, w.at))?;
+    st.next()?;
+    Ok(())
+}
+
+/// One logged seed write to a node: its WAL id and its attested author
+/// (`None` when no one attested it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoggedSeedWrite {
+    pub wal_id: u64,
+    pub author: Option<String>,
+}
+
+/// Every logged seed write to a node, oldest first.
+pub(crate) fn seed_writes(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+) -> Result<Vec<LoggedSeedWrite>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT wal_id, author FROM kb_review_seed_writes
+         WHERE kb_id = ?1 AND node_id = ?2 ORDER BY wal_id",
+    )?;
+    st.bind((1, kb_id))?;
+    st.bind((2, node_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        out.push(LoggedSeedWrite {
+            wal_id: u64::try_from(st.read::<i64, _>("wal_id")?).map_err(|_| bad("wal_id"))?,
+            author: st.read::<Option<String>, _>("author")?,
+        });
     }
     Ok(out)
 }

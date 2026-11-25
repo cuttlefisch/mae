@@ -63,6 +63,11 @@ pub struct ApplyTarget<'a> {
     pub owner: &'a Identity,
     /// Unix seconds, recorded as the apply's start and finish.
     pub now: i64,
+    /// The member the operator attests wrote the seeded content (ADR-113 A3,
+    /// `kb seed --author`), or none: the seed's writes then have no author.
+    pub author: Option<&'a str>,
+    /// Who ran the seed (the OS user), recorded with every seed write.
+    pub operator: &'a str,
 }
 
 /// What an apply did.
@@ -156,7 +161,7 @@ pub async fn apply(
         Some((_, rows)) => rows_for_plan(plan, rows)?,
         None => begin(store, plan, &hash, t).await?,
     };
-    let (created, present) = write_nodes(store, t.kb_id, plan, &rows).await?;
+    let (created, present) = write_nodes(store, t, plan, &rows).await?;
     #[cfg(test)]
     crash::at(plan.nodes.len())?;
     write_collection(store, plan, t).await?;
@@ -326,10 +331,11 @@ pub(super) async fn existing_state(
 /// Write every absent node; keep every equal one. Returns (created, present).
 async fn write_nodes(
     store: &DocStore,
-    kb_id: &str,
+    t: &ApplyTarget<'_>,
     plan: &SeedPlan,
     rows: &HashMap<String, SeedNodeRow>,
 ) -> Result<(usize, usize), ApplyError> {
+    let kb_id = t.kb_id;
     let (mut created, mut present) = (0, 0);
     for (i, n) in plan.nodes.iter().enumerate() {
         #[cfg(test)]
@@ -348,7 +354,9 @@ async fn write_nodes(
         } else {
             created += 1;
             let result = store.restore_doc(&name, &doc.encode(), BY).await;
-            result.map_err(storage)?.wal_seq
+            let wal = result.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, &plan.source.commit, &n.file.id, wal).await?;
+            wal
         };
         let version = doc.version();
         let set = store.seed_set_node_wal(kb_id, &n.file.id, wal, &version);

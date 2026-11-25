@@ -1148,6 +1148,20 @@ set to the new one in one step. Until the update finishes, another plan is refus
 `kb export`. After it finishes, a re-run writes nothing (`already at this plan`). An end-to-end
 encrypted KB, a KB no seed made and a seed whose first apply never finished are refused.
 
+### Who wrote the seeded content: `--author`
+
+A seed writes as the daemon, which names no person, so a publication review (ADR-113) cannot tell
+who wrote seeded content: approving it then needs the approver to acknowledge unknown authors. When
+you know who wrote it, give `--author <SHA256:…>` (the member's key fingerprint) to the apply or the
+update. Each node the seed writes is recorded with that author, and the KB's review log gains an
+`authorship_attested` event naming the node, the author, the commit and you (the operator, from
+`$USER`). The review then counts that member as an author of the seeded content, so their own
+approval is a self-approval and anyone else's is not.
+
+The attestation covers only the writes it was given on. An `--update` without `--author` makes the
+authors of every node it writes unknown again, until the next approval. Attest only what you know:
+the record says who attested it, and it cannot be withdrawn.
+
 ### Members of a seeded KB: `mae-daemon kb member`
 
 ```bash

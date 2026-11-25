@@ -26,9 +26,9 @@ use mae_daemon::seed::{self, PlanOptions};
 use crate::config::DaemonConfig;
 
 const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag-or-commit>\n\
-     \x20      mae-daemon kb seed --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash>\n\
+     \x20      mae-daemon kb seed --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash> [--author <SHA256:…>]\n\
      \x20      mae-daemon kb seed --update --dry-run --git <repo> --rev <tag-or-commit> --kb-id <id>\n\
-     \x20      mae-daemon kb seed --update --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash> [--discard-edits <edits_hash>]\n\
+     \x20      mae-daemon kb seed --update --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash> [--discard-edits <edits_hash>] [--author <SHA256:…>]\n\
      \x20      mae-daemon kb export --kb-id <id> --out <dir> [--force]\n\
      \x20      mae-daemon kb member add|remove|list --kb-id <id> [--member <SHA256:…>] [--role viewer|editor]\n\
      \x20      mae-daemon kb anchor --kb-id <id> [--public-key <base64>]\n\
@@ -43,7 +43,9 @@ const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag
      \x20            (default: **/*.org)\n\
      \x20 --exclude: an exact selected path to leave out, repeatable; always reported\n\
      \x20 --discard-edits: the edits_hash an --update dry run printed; the update overwrites\n\
-     \x20            exactly those edits outside the seed, and refuses if they changed";
+     \x20            exactly those edits outside the seed, and refuses if they changed\n\
+     \x20 --author: the member who wrote the seeded content, attested by the operator; recorded\n\
+     \x20            per write and in the review log, so a publication review knows its authors";
 
 /// `mae-daemon kb <action> …`. Exit code: 0 OK, 1 refused or failed, 2 usage.
 pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
@@ -95,6 +97,9 @@ pub(crate) struct SeedArgs {
     code_property: Option<String>,
     /// The `plan_hash` reviewed in the dry run; required to apply.
     pub(crate) plan_hash: Option<String>,
+    /// The member the operator attests wrote the seeded content (ADR-113 A3):
+    /// a key fingerprint.
+    pub(crate) author: Option<String>,
 }
 
 fn run_seed(args: &[String]) -> Step {
@@ -230,6 +235,12 @@ fn set_value(a: &mut SeedArgs, flag: &str, value: String) -> Result<(), String> 
         "--kb-id" => a.kb_id = Some(value),
         "--code-property" => a.code_property = Some(value),
         "--plan-hash" => a.plan_hash = Some(value),
+        "--author" if !mae_daemon::identity_binding::is_fingerprint(&value) => {
+            return Err(format!(
+                "--author {value:?} is not a key fingerprint (SHA256:…)"
+            ))
+        }
+        "--author" => a.author = Some(value),
         "--discard-edits" if value.is_empty() => {
             return Err("--discard-edits needs the dry run's edits_hash".into())
         }
@@ -247,6 +258,9 @@ fn validate_mode(a: SeedArgs) -> Result<SeedArgs, String> {
     }
     if a.update && a.kb_id.is_none() {
         return Err("--update needs --kb-id <id>: the KB to update".into());
+    }
+    if a.dry_run && a.author.is_some() {
+        return Err("--author applies to an apply, not a dry run: a dry run writes nothing".into());
     }
     if a.dry_run {
         return Ok(a);
@@ -407,7 +421,27 @@ mod tests {
             Step::Store(a) if a.update && a.discard_edits.as_deref() == Some("e1") && !a.dry_run
         ));
         let plain = run_seed(&args(&up));
-        assert!(matches!(plain, Step::Store(a) if a.discard_edits.is_none()));
+        assert!(matches!(plain, Step::Store(a) if a.discard_edits.is_none() && a.author.is_none()));
+    }
+
+    /// `--author` takes a key fingerprint, on an apply or an update only.
+    #[test]
+    fn author_is_a_fingerprint_on_a_write() {
+        let fp = mae_mcp::identity::Identity::generate("author").fingerprint();
+        let apply = ["--git=/r", "--rev=v1", "--kb-id=k", "--plan-hash=h"];
+        for extra in [&["--update"][..], &[]] {
+            let a = [extra, &apply[..], &["--author", fp.as_str()]].concat();
+            let ok = run_seed(&args(&a));
+            assert!(matches!(ok, Step::Store(s) if s.author.as_deref() == Some(fp.as_str())));
+        }
+        for bad in [
+            [&apply[..], &["--author", "alice"]].concat(),
+            [&apply[..], &["--author", "SHA256:"]].concat(),
+            [&apply[..], &["--author"]].concat(),
+            vec!["--dry-run", "--git=/r", "--rev=v1", "--author", fp.as_str()],
+        ] {
+            assert_eq!(exit(run_seed(&args(&bad))), 2, "{bad:?}");
+        }
     }
 
     #[test]
