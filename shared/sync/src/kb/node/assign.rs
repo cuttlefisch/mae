@@ -134,7 +134,7 @@ mod tests {
             has_title_line: true,
             has_filetags_line: false,
         });
-        t.attachments = [("new.png", 'b'), ("kept.png", 'k')]
+        t.attachments = [("new.png", 'b'), ("kept.png", 'd')]
             .into_iter()
             .map(|(n, c)| (n.to_string(), entry(c)))
             .collect();

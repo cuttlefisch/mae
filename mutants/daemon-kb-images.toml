@@ -1,0 +1,55 @@
+# ADR-115 P4: attachment files through seed, export, the read path and the
+# live site. Each mutant removes one guard; the named test must catch it.
+
+[[mutant]]
+id = "daemon-kb-images/symlink-followed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_hostile_repository_is_refused_by_name_and_nothing_is_written)"
+[[mutant.edit]]
+file = "daemon/src/seed/plan.rs"
+find = '''            .is_some_and(|e| e.mode == "120000")'''
+replace = '''            .is_some_and(|e| e.mode == "120000" && e.path.is_err())'''
+
+[[mutant]]
+id = "daemon-kb-images/plan-hash-skips-bytes"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(plan_hash_covers_the_processed_bytes_of_every_attachment)"
+[[mutant.edit]]
+file = "daemon/src/seed/plan.rs"
+find = '''                field(&mut h, a.sha256.as_bytes());'''
+replace = ''''''
+
+[[mutant]]
+id = "daemon-kb-images/percent-accepted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--lib"]
+filter = "test(the_name_rule_on_named_cases)"
+[[mutant.edit]]
+file = "shared/sync/src/kb/node/attachments.rs"
+find = '''    if name.contains('%') {'''
+replace = '''    if name.contains('%') && name.is_empty() {'''
+
+[[mutant]]
+id = "daemon-kb-images/read-url-wrong"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(kb_query_get_lists_each_attachment_with_its_blob_url)"
+[[mutant.edit]]
+file = "daemon/src/kb_query_node_fields.rs"
+find = '''    format!("/kb/{kb_id}/blobs/{sha256}")'''
+replace = '''    format!("/kb/{kb_id}/blob/{sha256}")'''
+
+[[mutant]]
+id = "daemon-kb-images/site-resolves-unheld"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_attachment_the_store_holds_is_an_image_and_one_it_lacks_is_a_placeholder)"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''                        None => AttachmentState::Missing,'''
+replace = '''                        None => AttachmentState::Resolved(ResolvedAttachment::new(
+                            kb_query::blob_url(kb_id, &a.sha256),
+                            a.media_type.clone(),
+                        )),'''
