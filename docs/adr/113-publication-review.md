@@ -3,7 +3,12 @@
 **Status:** Proposed (design). Nothing here is built. Amendment 2 (2026-11-15): attachments are
 write-once and retained; deletion only under a retention policy; an approval can require the
 rendered PDF's hash and a second factor. Amendment 3 (2026-11-15): approval policy per document
-type, separate approve and publish acts, and what the record shows.
+type, separate approve and publish acts, and what the record shows. Amendment 4 (2026-11-25): seven
+states with `superseded` and `derogated` in place of `historical`; a rejection or withdrawal ends the
+whole request; a per-KB policy makes the signed PDF the interim record of approval; signed originals enter through
+`mae-daemon kb import` under a required manifest; browser and native sign-in from the start; review
+acts before #727; revisions never deleted; the second-factor check, the method shapes, the event-log
+export and every refusal kind pinned, with fixtures. Still proposed: nothing here is built.
 **Relates to:** ADR-106 (node version history is a local audit trail — revisions follow the same
 placement), ADR-101 / ADR-103 (agent-made links held for human review — becomes a case of this
 ADR), ADR-098 (durable identity; its service-account binding is where an agent principal is
@@ -83,8 +88,8 @@ version, the request is refused (`stale_version`, with `data.current`), so a req
 what they saw. The approver approves exactly what was submitted; the working copy keeps moving.
 
 A revision is `(kb, node, rev_no, doc_code, source_sha256, version, state, created_by,
-created_at)`, never edited. Its states are in_review → approved → in_force → historical, or
-in_review → rejected | withdrawn. **Editing an in-force document only changes the working copy**,
+created_at)`, never edited. Its states are in_review → approved → in_force → superseded |
+derogated, or rejected | withdrawn, which end the whole request *(Amendment 4, E1–E2)*. **Editing an in-force document only changes the working copy**,
 which is the next draft (V6).
 
 The **document code** (PRO-n, IT-n, REG…) belongs to the node, not the revision, and is stable
@@ -124,22 +129,22 @@ A review request is the approval unit: one or more revisions, a name, and its
 **every** member of a request in **one SQLite transaction**, and only when the whole set
 qualifies: under publish-on-approval, when the last member is approved; otherwise when the set's
 entry into force is recorded, which requires every member approved (`set_incomplete`). The
-previous in-force revision of each node becomes historical, keeping its dates.
+previous in-force revision of each node becomes `superseded`, keeping its dates *(Amendment 4, E1)*.
 
 **Entry into force** is its own act (principal, time, `effective_at`), by an approver who is not
 an author. **Derogation** ends a document's force without a replacement — an obsolete procedure:
-an approver who is not an author records it as an act, the in-force revision becomes historical,
-and the node leaves `view: "published"`. **Withdrawal**: the requester may withdraw a request before approval (the revision becomes
-`withdrawn`). Before entry into force, any listed approver who is not an author — not only the one
-who approved — may withdraw an approval, and the revision returns to `in_review`. After entry into
-force only a new revision supersedes (`invalid_transition`).
+an approver who is not an author records it as an act, the in-force revision becomes `derogated`,
+and the node leaves `view: "published"`. **Withdrawal** ends the whole request: every member becomes
+`withdrawn`. The requester, or any listed approver who is not an author, may withdraw until entry
+into force; a withdrawn approval no longer returns a revision to `in_review` *(Amendment 4, E2)*.
+After entry into force only a new revision supersedes (`invalid_transition`).
 
 ### D5. The read path
 
 - `kb/query.get` gains `view`: `"working"` (the default — today's behaviour, unchanged) or
   `"published"` (the in-force revision, or the approved one under publish-on-approval); or
-  `revision: "<rev_id>"` for any revision, historical included. A revision response adds
-  `revision: {rev_id, doc_code, rev_no, state, approved_at, in_force_at, superseded_at,
+  `revision: "<revision_id>"` for any revision, superseded and derogated included. A revision
+  response adds `revision: {revision_id, doc_code, rev, state, approved_at, in_force_at, superseded_at,
   acts: [{act, principal, at}], attachments: [{kind, sha256, size, content_type, url}]}` — V5's
   five items from one call.
 - `version` keeps its meaning: a digest of the fields returned. For a revision it is the frozen
@@ -149,21 +154,20 @@ force only a new revision supersedes (`invalid_transition`).
   revision, its `version`, and its revision summary, with the same paging, byte order and parameter
   rules. A reader builds its structure from published revisions alone.
 - `kb/query.revisions {kb_id, node_id}` lists a node's revisions with their dates.
-- **Deleting** a node (to the trash) is refused while it has a published revision — in force, or
-  approved under publish-on-approval — with `invalid_transition` (`data.act: "delete"`) until it is
-  derogated; otherwise deletion would let an editor who is not an approver end a document's force.
-  A node with only historical revisions, or none, is deleted as usual and leaves
-  `view: "published"`; its revisions stay readable by `rev_id`, for the record. **Purging** a node removes its working copy and leaves its revisions — approved, in force
-  or historical — with their attachments and events: they are the document-control record, and the
-  event chain (D7) could not verify without them. A node with an in-force revision cannot be
-  purged (`invalid_transition`) until it is derogated, so ending a document's force stays an
-  approver's recorded act and never a side effect of deletion.
+- **Deleting** a node that holds any revision, in any state, is refused on every delete path with
+  `invalid_transition` (`data.act: "delete"`, `reason: "has_revisions"`), and such a node is never
+  purged: a document leaves force only by derogation or a successor, and its revisions, attachments
+  and events stay the document-control record *(Amendment 4, E7; this replaces the earlier rule
+  that let a node with only ended revisions be deleted or purged)*. A node with no revision is
+  deleted as usual.
 
 ### D6. Attachments
 
 A revision holds content-addressed attachments: `rendered_pdf` and `signed_pdf`. They are uploaded
 and downloaded over HTTPS on the OAuth listener (`PUT`/`GET
-/kb/<kb>/revisions/<rev_id>/attachments/<kind>`), not as base64 in JSON-RPC, under their own cap,
+/kb/<kb>/revisions/<rev_id>/attachments/<kind>` *(superseded by O3's decision of 2026-11-16 and
+Amendment 4, E9: the bytes are uploaded through ADR-115's `POST /kb/<kb>/blobs` and bound to the
+revision by hash)*), not as base64 in JSON-RPC, under their own cap,
 `max_attachment_bytes`, separate from ADR-109 D6's node cap (`quota_exceeded`). The client renders
 the PDF from the frozen source and uploads it with the `source_sha256` it declares it rendered; the
 daemon refuses a declared source that is not the revision's, records the declaration for audit, and
@@ -217,13 +221,13 @@ Each fails without the rule it guards:
   after; `status` turns to draft.
 - A requester sets `in_force_on_approval: true` against a KB default of false → `role_forbidden`.
 - A rendered PDF whose `source_sha256` is another revision's → refused.
-- Withdraw after entry into force → `invalid_transition`; an approval withdrawn before it, by a
-  different listed approver, returns the revision to `in_review`.
+- Withdraw after entry into force → `invalid_transition`; a withdrawal before it, by a different
+  listed approver, ends the request with every member `withdrawn` *(Amendment 4, E2)*.
 - Turning review on or off by a non-owner → `role_forbidden`; by the owner, an event in the chain.
-- Derogation: the node leaves `view: "published"` and its revision stays readable by `rev_id`.
-- Deleting an in-force node → `invalid_transition` with `act: "delete"`, and it stays in
-  `view: "published"`; after derogation the delete succeeds.
-- Purging a node with historical revisions leaves every revision and the event chain verifiable.
+- Derogation: the node leaves `view: "published"` and its revision stays readable by `revision_id`.
+- Deleting a node with any revision → `invalid_transition` with `act: "delete"`, before and after
+  derogation, and it stays readable by `revision_id` *(Amendment 4, E7)*.
+- The event chain stays verifiable after a derogation.
 - With review off, `view: "published"` is the working copy and `kb/review.request` →
   `review_not_enabled`.
 - The event chain verifies end to end, and fails to verify after any row is altered.
@@ -303,7 +307,8 @@ distinct from approval, because no approver acts. It is recorded in the chain wi
 - `effective_at` = the source revision's commit time.
 
 Only an operator can perform it, through the CLI; it is not a `kb/review.*` method, and no agent
-principal can reach it. Every change after the seed goes through review. The source files are input
+principal can reach it. *(Amendment 4, E4: for a page whose approved, signed original exists, the
+revision enters through `mae-daemon kb import` with its signed PDF instead.)* Every change after the seed goes through review. The source files are input
 only: the server's KB is the truth from then on.
 
 ## Amendment 2 (2026-11-15): a revision's attachments are its record
@@ -328,7 +333,9 @@ correction; nothing is ever overwritten. An annulled attachment counts as refere
 (B5), exactly as a current one.
 
 Every `PUT` carries the sha256 the client computed (`expected_sha256`). The daemon hashes what it
-received and refuses a mismatch with `upload_digest_mismatch`, storing nothing. That is an integrity
+received and refuses a mismatch with `upload_digest_mismatch`, storing nothing. *(Superseded by O3's
+decision and Amendment 4, E9 and E11: the upload is ADR-115's, with `Content-Digest` and
+`blob_hash_mismatch`; the attach call binds the hash. B1's write-once rule applies to the binding.)* That is an integrity
 check on the transfer, separate from `attachment_exists`.
 
 ### B2. Two kinds, and the daemon stores bytes
@@ -356,11 +363,12 @@ does not (a scan never will), it records nothing.
 
 - `signed_pdf`: a principal on the KB's approver list (D3) who counts as a **person** under
   ADR-098 Amendment 1 C3 (an IdP sign-in on a binding flagged `person`). Every other principal is
-  refused: `not_approver` off the list, `agent_forbidden` for an agent even when listed. Until native
-  clients sign in through the IdP (ADR-111 P4), this means a browser session.
+  refused: `not_approver` off the list, `agent_forbidden` for an agent even when listed. Browser
+  and native IdP sign-in both qualify from the start *(Amendment 4, E5)*.
 - `rendered_pdf`: as D6 (the requester's client renders and uploads it), in any state except
   `rejected` and `withdrawn`.
-- `signed_pdf` only to a revision that is approved, in force, superseded, derogated or imported:
+- `signed_pdf` only to a revision that is approved, in force, superseded or derogated (an imported
+  revision is in one of these; `imported` is a property, *Amendment 4, E1*):
   never to one still pending, so no revision rejected later can carry a "signed original" of
   something never approved. A signature often comes after entry into force, which this allows.
 
@@ -404,9 +412,14 @@ An import creates past revisions in the `superseded` (or `derogated`) state, eac
 source, its dates, its `signed_pdf` and, where one exists, its `rendered_pdf`, plus an `import`
 event naming who imported it and from where. It extends A4, which seeds only the in-force revision.
 It is an owner act, and it is refused for a node whose history already holds revisions past the
-imported dates, so an import can fill the past but never rewrite it.
+imported dates, so an import can fill the past but never rewrite it. *(Amendment 4, E4: it is an
+operator act through `mae-daemon kb import`, under a required manifest.)*
 
 ### B7. The approval is the signature
+
+*(Amendment 4, E3 keeps this paragraph as the default and adds a per-KB policy,
+`approval_record: signed_pdf`, under which the signed PDF is the interim record of approval. The two
+switches below stay; E8 pins the second-factor check and drops the `acr` alternative.)*
 
 For a controlled document, the evidence that it was approved is the approval record itself, not an
 image on the PDF (decided 2026-11-15). The record holds who approved, when, and the exact bytes they
@@ -442,8 +455,8 @@ An attachment is read under the KB's own access (`kb_access` Read, ADR-115 D2), 
   attachment is unchanged; the same bytes again succeed.
 - A `PUT` whose bytes do not match `expected_sha256` is refused and stores nothing.
 - A non-PDF (wrong content type, or bytes not starting `%PDF-`) is refused for both kinds.
-- `signed_pdf` on a pending revision is refused; on approved, in force, superseded, derogated and
-  imported it is accepted.
+- `signed_pdf` on a pending revision is refused; on approved, in force, superseded and derogated
+  (imported or not) it is accepted.
 - An import creates superseded revisions with their signed originals and an `import` event, and
   is refused when it would land before revisions the node already has.
 - With `approval_requires_rendered_pdf`: approve without a rendered PDF, or with another hash, is
@@ -519,7 +532,8 @@ what their own agent wrote, even when they are on the approver list.
 
 ### C4. A fresh second factor at the moment of acting
 
-B7's `approval_requires_mfa` gains a freshness window, and it covers every controlled act, not only
+*(Amendment 4, E8: the window is the per-KB `reauth_max_age_secs` under an operator ceiling, and
+the exact check is pinned there.)* B7's `approval_requires_mfa` gains a freshness window, and it covers every controlled act, not only
 `approve`: `enter_into_force`, `accept`, attaching `signed_pdf` or `controlled_copy`, and the
 owner's administrative acts on a review-enabled KB (membership, reviewer and approver lists, the
 review policy). Each requires the actor's sign-in time (the token's `auth_time`) to fall within an
@@ -595,7 +609,8 @@ Each ceiling change and each grant is an event in the chain (D7).
 `kb/review.in_force {kb_id}` answers, under the KB's own read access (`kb_access` Read), one entry
 per document with a revision in force: its code, title, revision number, state, in force since,
 approved by and put into force by, its document type, and its classification marking (a property
-the KB names). A deployment builds its master list of controlled documents from it. It is paged like `kb/query.list`.
+the KB names). A deployment builds its master list of controlled documents from it. It is paged with
+`kb/query.list`'s limits but an opaque `cursor` *(Amendment 4, E9)*.
 
 ### C11. Values come from the KB's vocabularies
 
@@ -651,6 +666,578 @@ Field values on a controlled document are chosen from the KB's vocabularies, nev
   a vocabulary revision the owner approves lets the same revision through; a declared but
   unapproved vocabulary change does not.
 - A KB's settings accept one type source; naming both is refused.
+
+## Amendment 4 (2026-11-25): the open decisions settled, and the review API pinned
+
+The owner settled seven open points on 2026-11-25 (E1 to E7), and they are recorded here as decided.
+This amendment also pins the second-factor check (E8), the method shapes D8 left without results
+(E9), the event-log export (E10) and every refusal kind (E11), and commits fixtures a client can build
+against (E12). Its sections are lettered E, because D already numbers the Decision. Where it changes
+earlier text, the earlier words are edited in place and marked *(Amendment 4)*, and E14 lists every
+place.
+
+### E1. The state vocabulary
+
+A revision is in exactly one of seven states: `in_review`, `approved`, `in_force`, `superseded`,
+`derogated`, `rejected`, `withdrawn`.
+
+- `superseded`: a later revision of the same node entered into force.
+- `derogated`: its force ended with no successor (D4's derogation).
+
+These are two distinct states, and together they replace `historical` everywhere (D2, D4, D5, the
+tests). V1 and V2 quote the browser client's requirements as stated, so they keep the word; in this
+ADR it means `superseded` or `derogated`.
+
+**`imported` is a property, not a state.** A revision entered by the operator's import (E4) carries
+`imported: {import_event_id, approved_by_name}` and is in one of `in_force`, `superseded` or
+`derogated` like any other. B3's and B9's lists that named `imported` beside the states are corrected.
+
+The transitions are these, and no others (`invalid_transition`, with `from` and `act`, otherwise):
+
+| From | Act | To | Performed by |
+|---|---|---|---|
+| (none) | `request` | `in_review`, every member | a member with Edit |
+| `in_review` | `act` (`reviewed`) | unchanged | a listed reviewer, not an author |
+| `in_review` | `approve` | `approved`; `in_force` for every member when it completes a set that goes into force on approval | a listed approver, not an author |
+| `in_review` | `reject` (one member) | `rejected`, **every** member of the request, approved ones included | a listed reviewer or approver of that member, not an author |
+| `in_review`, `approved` | `withdraw` | `withdrawn`, every member | the requester, or a listed approver who is not an author |
+| `approved` (all members) | `enter_into_force` | `in_force`, every member | as C2 |
+| `in_force` | a later revision of the node enters into force | `superseded` | (follows from that act) |
+| `in_force` | `derogate` | `derogated` | a listed approver, not an author |
+| (none) | the operator's import (E4) | `in_force`, `superseded` or `derogated`, with `imported` set | the operator, through the CLI |
+
+`rejected`, `withdrawn`, `superseded` and `derogated` are final. A revision never returns to an
+earlier state. That removes D4's "the revision returns to `in_review`" on withdrawing an approval:
+under E2 a withdrawal ends the request.
+
+### E2. Rejected and withdrawn are outcomes of the request
+
+A request is the approval unit (D4), so its ending is recorded on each member revision, as its state.
+
+- **Reject.** Rejecting any member of a request ends the whole request. Every member becomes
+  `rejected`. The member named in `kb/review.reject` carries the reason; each other member records
+  `rejected_with`, the revision whose rejection ended it. A set can only publish whole (D4), so a set
+  with one rejected member has nothing left to wait for.
+- **Withdraw.** `kb/review.withdraw` ends the whole request, and every member becomes `withdrawn`,
+  approved members included. It is allowed until the request's entry into force, and refused after it
+  (only a successor or a derogation ends a revision in force, V6).
+- A new attempt is a new request, which freezes the working copy again (D2). Nothing is reopened.
+
+This point was proposed by the build lead and confirmed by the owner on 2026-11-25.
+
+### E3. The signed PDF as the interim record of approval
+
+B7 stands: the evidence that a revision was approved is the approval record itself. This amendment
+adds a per-KB policy that, until an in-system approval is accepted as equivalent to a signature,
+makes the signed PDF the record of approval instead.
+
+- **The policy.** `approval_record`, set through `kb/review.set_policy`, is `act` (B7; the default)
+  or `signed_pdf`.
+  - Under `act`, the in-system approve act is the record, and a signed PDF, when attached, is
+    supporting evidence (B3).
+  - Under `signed_pdf`, the record of approval is the revision's `signed_pdf` attachment, stored byte
+    for byte, and the in-system act is the gated step that leads to it.
+- **Why the interim policy exists.** A deployment may answer to an assessor who has not yet accepted
+  an in-system approval as equivalent to a signature. The owner has asked for a written criterion.
+  Until it exists, the signed PDF is the approval of record, held with its revision. If the criterion
+  accepts in-system approval, the KB switches to `act`.
+- **A switch is an owner act.** It is recorded as an event (D7) with its reason. It never rewrites a
+  revision approved before it: each revision's record states the policy in force when it was
+  approved.
+- **The bytes.** ADR-115 stores a PDF exactly as it arrives: the image processing of its D3a does not
+  apply to it, as built on the ADR-115 P1 branch (`daemon/src/blob_store/process.rs`, "a PDF
+  (`%PDF-` at offset 0) is stored exactly as it arrived"). So the blob's address is the sha256 of the
+  signed file itself, and the `attach` event (B4) puts that sha256 into the signed, hash-chained log
+  (D7).
+- **The in-system approve act stays, and stays gated, under either policy.** It is still recorded
+  (who, when, which revision, the sign-in details of E8) and still refused to an author (D3, A3) and
+  to anyone who is not a person (B3). B7's two switches stay as they are.
+  `approval_requires_rendered_pdf` binds the act to the bytes that were rendered.
+  `approval_requires_mfa` is pinned by E8.
+- **What the daemon does not verify, and why that is acceptable.** The daemon does not validate the
+  PDF's signatures: not their cryptography, certificate chains, revocation or timestamps, not who
+  signed, and not whether the signed content matches the revision's source. A scanned handwritten
+  signature cannot be verified by software at all. What the daemon guarantees is narrower, and it is
+  what it can prove: these exact bytes were attached to this revision, by this person, at this time,
+  and the log that says so is chained and signed. That is the signature-to-record linking 21 CFR
+  11.70 requires: electronic and handwritten signatures executed to electronic records "shall be
+  linked to their respective electronic records to ensure that the signatures cannot be excised,
+  copied, or otherwise transferred to falsify an electronic record by ordinary means". The legal
+  effect lies in the signature, not in the store: under the EU's eIDAS Regulation (No 910/2014),
+  Art. 25(1) an electronic signature is not denied legal effect solely for being electronic, and
+  Art. 25(2) gives a qualified electronic signature the effect of a handwritten one. Whether a given
+  signature is valid is a question for a validator built for it. Such a validator can answer it at
+  any later time, against the same bytes, because the daemon kept them unchanged. A daemon that
+  half-validated would only give false assurance.
+- **Until a signed PDF is attached** under `signed_pdf`, the revision has no record of approval yet.
+  `kb/review.status` and `kb/review.in_force` return `approval_record: "signed_pdf"` and
+  `signed_pdf_sha256: null`, so the gap is visible. Whether entry into force must wait for the signed
+  PDF was O19, decided by the owner on 2026-11-25: **under `signed_pdf`, no revision is in force
+  without its record of approval.**
+  - `kb/review.enter_into_force` is refused `signed_pdf_required` (+`missing`: the members with no
+    `signed_pdf`) unless every member of the request holds one.
+  - Under `in_force_on_approval`, the approval that completes a set is recorded, and its answer's
+    `in_force_since` is null. The set enters into force in the transaction of the
+    `kb/review.attach_signed_pdf` that gives its last member a signed PDF, with that attach's time
+    as `in_force_since`, and that answer carries it. Every member moves at once, as D4 requires.
+  - B3's "the signature may come after entry into force" does not apply under `signed_pdf`; it still
+    applies under `act`.
+  - An import (E4) always carries the signed PDF, so imported revisions are unaffected.
+  - Switching a KB from `act` to `signed_pdf` leaves revisions already in force as they are (each
+    records the policy it was approved under); approved revisions not yet in force then wait for
+    their PDFs.
+
+### E4. Importing documents already approved and signed
+
+This rewrites A4 and B6 for documents that already have an approved, signed original, and it answers
+O10 for import.
+
+**The command is `mae-daemon kb import`**, a new sub-command beside `kb seed`, not a flag of it. The
+reasons:
+
+- `kb seed`'s input is one commit of an org repository. Its `plan_hash` covers org text, and its
+  contract (`org-literal-v1`) is about working copies.
+- An import's input is revisions: signed PDFs that do not live in the org repository, attested
+  facts, and dates.
+- An import must also add past revisions to a KB that already exists (B6), which seeding does not
+  do.
+- A separate command leaves the meaning of seed's `plan_hash` unchanged, and gives the import its
+  own all-or-nothing gate.
+
+It keeps seed's discipline:
+- `--dry-run` verifies everything and prints an `import_hash`;
+- the apply requires `--import-hash`, and recomputes it before writing;
+- it runs under the same store lock as the other `kb` operator commands.
+
+**Its input** is a directory holding:
+- `import.json` (`format: "mae-import/1"`): per page, the `node_id`, the `doc_code`, and the page's
+  revisions in order. Each revision has:
+  - `rev` and `state` (`in_force`, `superseded` or `derogated`);
+  - the org `source` file;
+  - the `signed_pdf` file, required;
+  - an optional `rendered_pdf`;
+  - `effective_at`, and `ended_at` for an ended revision;
+  - `approved_by_name`, required and non-empty;
+  - optionally the attested `approved_on` date.
+
+  At most one revision per page is `in_force`, and it is the last.
+- a manifest, `SHA256SUMS`, in the format `sha256sum` writes: one `<64 lowercase hex>  <path>` per
+  line (two spaces, or space and `*`), LF line endings, paths relative to the directory, with no
+  `..`, no absolute path and no duplicate.
+- the files themselves.
+
+**The manifest is required and exact.** The import refuses the whole import, `manifest_mismatch`
+(with `path` and a `reason`), unless every one of these holds:
+- every file `import.json` names, org source and PDF alike, has a line;
+- the sha256 of its bytes equals that line;
+- every line is used;
+- every line is well formed.
+
+Nothing is written on a refusal. The brief's minimum was the PDFs; the org sources are covered too,
+because the attested approval is of that text as much as of the PDF. Every PDF must also be a PDF
+(B2, `attachment_type`).
+
+**The record.** The approver is recorded **by name**, as an attested fact in the import record. It is
+not an act by that person: no principal approved anything in MAE, and the revision's record says
+"approved by (attested at import)". The source is split by seed's own `split()`, so the frozen
+source is what seeding that file would produce, and `source_sha256` is computed as D2 computes it.
+One `import` event (D7) records:
+- the operator (OS user, as ADR-117 D7's operator log does);
+- the `import_hash` and the manifest's sha256;
+- per revision, its id, node, `rev`, state, `source_sha256`, the signed PDF's sha256 (and the
+  rendered PDF's, if any), `effective_at`, `ended_at`, and the attested name and date.
+
+**All or nothing.** Every file is verified before anything is written. The PDFs go to ADR-115's store,
+then the revision rows and the event are written in one SQLite transaction. A failure between the two
+leaves only unreferenced blobs, which the sweep collects after its grace period (ADR-115 D5). It
+never leaves part of a record.
+
+**Past revisions (B6) use the same path**: `superseded` and `derogated` entries in the same file. B6's
+"owner act" becomes an operator act. The overlap rule stands: an import that would place a revision
+at or before one the node already holds is refused, `import_overlap`.
+
+**Relation to A4.** A4's imported revision is the same mechanism, with a different kind of evidence:
+for a page with no signed original, it rests on the source repository's history. For a page whose
+approved, signed original exists, `kb import` is the only path. A page gets its first revision from
+exactly one of the two, which the overlap rule enforces.
+
+**Agents can never reach it** (principle #16). It is a local CLI only: no network method, MCP tool or
+Scheme call reaches it, and a test scans for one.
+
+### E5. Browser and native sign-in are both in from the start
+
+This re-decides O9. A person may perform review acts from the browser client or from native MAE. The
+native editor obtains a person token by signing in through the IdP (ADR-111 P4). `kb/review.*` is
+served on the OAuth listener to any bound, person-flagged IdP token, whichever client obtained it.
+
+- PR-4 no longer waits on a decision about one surface. Both are supported by design. The owner
+  has scheduled the browser first (2026-11-25): native sign-in is built after the first production
+  signing, and nothing in PR-4 may assume a browser-only session.
+- B3's "until native clients sign in through the IdP, this means a browser session" no longer
+  applies.
+- A native session over mutual TLS, or with a self-issued token, is still an agent (C3).
+- Owner administration of a review-enabled KB goes over HTTPS with a fresh second factor (ADR-117
+  D6, E8). C4 refuses the mutual-TLS path for it, because that path carries no `auth_time`. This
+  answers O9's last question.
+
+### E6. Review acts and uploads go ahead before #727
+
+This decides O11.
+- Review acts, and blob uploads (ADR-115), are accepted over IdP sessions before the hub verifies
+  member signatures on content ops (#727). Neither is a CRDT content write.
+- CRDT content writes over HTTPS keep ADR-098 C0's rule.
+- During the pilot, the hub keeps accepting unsigned content ops and counting them: the existing
+  `auth.require_signed_content_ops = false` and its accepted-unsigned counter, which the running
+  daemon reports at shutdown.
+- Enforcement (`require_signed_content_ops = true`) is switched on after the first production
+  signing. That counter is the evidence for the switch.
+- A3 already refuses approval when an unsigned relay wrote in the window, so an unsigned op can block
+  an approval but never permit one.
+
+### E7. Controlled revisions are never deleted, only derogated
+
+A revision is never deleted, in any state. A document leaves force only by derogation (D4) or by a
+successor.
+
+- **The guard.** Every delete path refuses a node that holds **any** revision, whatever its state:
+  - `kb/collection_node_remove` on the collab handler;
+  - the editor's delete command;
+  - seed removal (`kb seed --update` dropping a page whose file left the source refuses the update,
+    naming the node).
+
+  The refusal is `invalid_transition` with `act: "delete"` and `reason: "has_revisions"`.
+- **What it supersedes.** D5's rule allowed deleting a node with only ended revisions, and purging a
+  node while keeping its revisions. Both are superseded: such a node is neither deleted nor purged.
+- **Out of scope.** Deleting drafts and mistakes (a node with no revision, or a revision made in
+  error) gets its own ADR, not this one.
+- **Attachments.** B5's retention deletion removes an attachment's bytes, never the revision, and
+  stays as designed.
+
+### E8. A recent second factor, pinned
+
+The browser client's server performs a step-up and then relays the act. The daemon and the client
+must check the same thing, so this section fixes exactly what the daemon checks. It applies to every
+controlled act: approve, enter into force, accept, and attaching `signed_pdf` or `controlled_copy`.
+It applies on a KB with `approval_requires_mfa` (B7, C4), and always to the administrative acts of
+ADR-117 D6.
+
+**The token it reads.** The daemon decides from claims in a token it verified itself, and from
+nothing else.
+- **The token.** It is the person's IdP access token, presented as the bearer of the request that
+  carries the act, and bound to a member flagged `person` (ADR-098 Amendment 1, C3).
+- **How it is verified.** `validate_bearer_token` checks the RS256 signature against the IdP's JWKS,
+  that `aud` is the daemon's resource URI, `exp`, and `iss`. `amr`, `acr` and `auth_time` are read
+  from that token's verified claims (`daemon/src/sign_in.rs`, `SignIn::from_claims`).
+- **What is ignored.** No header, assertion or parameter that a relaying server adds is ever read.
+- **Self-issued tokens.** A self-issued token (`kid: "self"`) has no sign-in
+  (`ValidatedPrincipal.sign_in` is `None`) and is never a person. It is refused `agent_forbidden`
+  before any second-factor question, and so is an ADR-118 agent token.
+- **No exchange is added.** No exchange turns an IdP sign-in into a self-issued token. One that
+  copied `auth_time` and `amr` would be the daemon signing a sign-in it never saw, and would make a
+  self-issued token a person, which C3 forbids.
+- **ID tokens are not accepted.** Their audience is the client, not the daemon.
+
+**What has to change, and where.** The daemon already reads the claims. What may be missing is on
+the IdP side.
+- OIDC Core §2 defines `auth_time` and `amr` for the ID token. An access token carries them only if
+  the IdP puts them there. RFC 9068 §2.2.1 lists both as optional access-token claims, with OIDC
+  Core's meanings.
+- The deployment configures its IdP to put `auth_time` and `amr` into the access tokens it issues
+  for the daemon's audience.
+- Where it does not, every controlled act fails closed, as below. The listener's bare probe
+  (`sign_in` in its answer) shows exactly the claims the daemon read.
+- Checking the IdP's real output against a staging instance is open (O21). Nothing should rely on
+  this rule before that check.
+
+**The step-up.** The relaying client asks for a new authorization with `max_age` (OIDC Core
+§3.1.2.1, where `max_age=0` forces re-authentication) or `prompt=login`, with whatever its IdP needs
+to demand a second factor. It then sends the act with the access token that authorization returned.
+- A refreshed token will not do. OIDC Core §12.2 keeps a refreshed ID token's `auth_time` at the
+  original authentication, and nothing obliges an IdP to give a refreshed access token a newer one.
+- The shape is RFC 9470's step-up: the resource server refuses with the age it requires, and the
+  client re-authenticates. MAE states it as `error.data` on a JSON-RPC answer, not as an HTTP
+  challenge.
+
+**The rule.** These checks are evaluated in this order, so a client sees the missing factor before
+the stale time:
+
+| # | Check | Refusal |
+|---|---|---|
+| 1 | The caller is a bound IdP token flagged `person`. | `agent_forbidden` |
+| 2 | The operator has configured at least one `oauth.second_factor_amr` value. | `second_factor_unconfigured` |
+| 3 | `amr` is a JSON array of strings (RFC 8176) holding at least one configured value. Absent, malformed (a string, mixed types) or no match fails. | `mfa_required` (+`accepted_amr`) |
+| 4 | `auth_time` is present and an integer, `auth_time ≤ now + 60`, and `now − auth_time ≤ W`. | `reauthentication_required` (+`max_age`: W, and `auth_time` when present) |
+
+- **Which `amr` values count.** The operator's list counts. The recommended starting value is
+  `["mfa"]` (RFC 8176 §2: multiple-factor authentication). A value naming a single method (`otp`,
+  `hwk`, `swk`, `sms`, `fpt`, …) proves a second factor only if the IdP never accepts that method on
+  its own. It is listed only after the staging check (O21). `pwd` never counts, and configuration
+  refuses it.
+- **`acr` is not consulted** for these acts. That supersedes B7's "or an `acr` level". Its values are
+  IdP-defined, and some IdPs emit a constant `acr` that says nothing about the factors used (as
+  `oauth_config.rs` notes). `acr` stays in the probe's report.
+- **The window, `W`.** The per-KB policy key is `reauth_max_age_secs`, set through
+  `kb/review.set_policy`.
+  - It defaults to the operator's `oauth.second_factor_max_age_secs`, which defaults to 300.
+  - An owner may only shorten it, never below 60. Below 60 the window would be shorter than the
+    clock leeway, and the two hosts' clocks would decide the outcome.
+  - Five minutes is the default because the window only has to cover the time between the person's
+    step-up and the act arriving. A client controls that time by stepping up immediately before the
+    act, and five minutes allows for a slow second-factor push and one retry.
+  - A longer window would let a sign-in made earlier act without the person being present at the
+    moment of acting, which is what C4 exists to rule out.
+  - A test pins the boundary (`now − W` accepted, `now − W − 1` refused) and this reasoning.
+  - Administrative acts that belong to no review-enabled KB use the operator's value.
+  - This replaces C4's single operator-set number. ADR-117 D6's and ADR-118's
+    `oauth.second_factor.{accepted_amr, accepted_acr, max_age_secs}` name these same settings: the
+    built `oauth.second_factor_amr` and `oauth.second_factor_acr`, and the new
+    `oauth.second_factor_max_age_secs`.
+- **Clock skew is 60 seconds**: `JWT_CLOCK_LEEWAY_SECS`, the leeway the validator gives `exp` and
+  `nbf`.
+  - It applies only to an `auth_time` in the future (`SignIn::fresh_within`, as built).
+  - It is not added to the old end of the window, so the pinned boundary is exact whatever the
+    clocks.
+- **What the act records**: `sign_in: {amr, auth_time, second_factor}` with the token's `iss` and
+  `sub` (B4, C4), in its event.
+
+### E9. The API
+
+**Transport and conventions.**
+- **Transport.** JSON-RPC 2.0, POSTed to the OAuth listener with a bearer token, as `kb/query.*` is
+  (`route_authenticated_request`).
+- **Errors.** Refusals are JSON-RPC errors carrying `error.data.kind`, and clients branch on the kind
+  only. `error.code` is `-32602` for `invalid_params` and otherwise informative.
+- **Gate order.** Every method takes `kb_id` and passes the KB's gate first:
+  - a caller the KB does not admit gets one `not_member`, also for a KB that does not exist;
+  - then an E2E KB gets `e2e_unsupported`;
+  - then, with review off, every method except `set_policy` gets `review_not_enabled`.
+- **Identifiers.** `revision_id`, `request_id` and `event_id` are opaque strings.
+- **Times.** RFC 3339 UTC with milliseconds and `Z`.
+- **Hashes.** Lowercase hex.
+- **Paging.** Paged methods take `cursor?` and `limit?`, with `limit` clamped as `kb/query.list`
+  clamps it. They return `next_cursor`, which is `null` on the last page. An unknown cursor is
+  `invalid_params` (`param: "cursor"`). This supersedes C10's "paged like `kb/query.list`" on the
+  parameter's name: a cursor is used, not an `after` node id, because these lists are not in node-id
+  order.
+
+**Naming.** This amendment adopts the field names already proposed to the browser client. On the
+wire (storage column names are the build's to choose):
+- `revision_id` replaces D5's `rev_id`, also in `kb/query.get`'s `revision` parameter and answer.
+- `rev` replaces `rev_no`.
+- `rev` is `null` until the revision is approved (D2 counts approved revisions only), so the
+  `request` answer carries `rev: null`.
+
+**Methods.** Every method listed below is a writer method unless it is marked as a read:
+
+| Method | Params | Result | Who |
+|---|---|---|---|
+| `kb/review.request` | `kb_id, nodes:[{node_id, version}], set_name?, in_force_on_approval?, reason` | `{request_id, event_id, state:"in_review", revisions:[{revision_id, node_id, rev, source_sha256}]}` (`event_id`: the `request` event, D7) | a member with Edit |
+| `kb/review.act` | `kb_id, revision_id, act:"reviewed", comment?` | `{event_id, at}` | a listed reviewer |
+| `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?` | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
+| `kb/review.reject` | `kb_id, request_id, revision_id, reason` | `{event_id}` | a listed reviewer or approver |
+| `kb/review.withdraw` | `kb_id, request_id, reason` | `{event_id}` | the requester, or a listed approver |
+| `kb/review.enter_into_force` | `kb_id, request_id, effective_at` | `{event_id}` | C2's publisher |
+| `kb/review.derogate` | `kb_id, node_id, effective_at, reason` | `{event_id}` | a listed approver |
+| `kb/review.attach_signed_pdf` | `kb_id, revision_id, blob_sha256` | `{event_id, in_force_since}` (`in_force_since` set only when, under `signed_pdf` and `in_force_on_approval`, this attach completed the set; E3) | a listed approver (B3) |
+| `kb/review.attach_rendered_pdf` | `kb_id, revision_id, blob_sha256, source_sha256` | `{event_id}` | as O13 decides |
+| `kb/review.attach_controlled_copy` | `kb_id, revision_id, blob_sha256` | `{event_id}` | a listed approver (C6) |
+| `kb/review.annul_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner or the uploader (B1) |
+| `kb/review.delete_attachment` | `kb_id, revision_id, kind, reason` | `{event_id}` | the owner, after the period (B5) |
+| `kb/review.status` (read) | `kb_id, node_id` | `{kb_id, node_id, doc_code, approval_record, draft, working_version, in_review, approved, in_force, revisions}`. `approved` is `null`, or the revision approved and not yet in force: `{request_id, revision_id, rev, approved_at, waiting_for}`, where `waiting_for` is `"set"` (other members of its request are not approved yet), `"signed_pdf"` (E3, O19) or `"enter_into_force"`. `in_force` is `null` or `{revision_id, rev, since, approval_record, signed_pdf_sha256}` | a reader of the KB |
+| `kb/review.pending` (read) | `kb_id, cursor?, limit?` | `{kb_id, requests, next_cursor}` | a reader of the KB |
+| `kb/review.in_force` (read) | `kb_id, cursor?, limit?` | `{kb_id, rows:[{code, title, rev, state, since, approver, publisher, type, marking, node_id, revision_id, imported}], next_cursor}` | a reader of the KB |
+| `kb/review.events` (read) | `kb_id, cursor?, limit?` | `{kb_id, header, events, head, next_cursor}` (E10) | the owner and ADR-117 D9's auditor |
+| `kb/review.set_policy` | `kb_id` and any of `review_enabled, in_force_on_approval, required_acts, reviewers, approvers, approval_requires_mfa, approval_requires_rendered_pdf, approval_record, reauth_max_age_secs, attachment_retention_days, code_prefixes`, and `reason`, required when `approval_record` changes (`invalid_params` without it; E3) (types: C1, PR-9) | `{event_id, policy}` (the whole policy after the change) | the owner |
+| `kb/review.set_code` | `kb_id, node_id, doc_code` | `{event_id, doc_code}` | the owner |
+
+Field notes:
+- **Who.** In this table, "listed" means on the KB's list and not an author (D3, A3), and a person
+  (B3) whose sign-in meets E8 where the act is controlled.
+- **Uploading bytes.** Bytes always go first through `POST /kb/<kb_id>/blobs` with `Content-Digest`
+  (ADR-115 D3, O3). The attach methods then bind the returned sha256; a hash the KB does not hold is
+  refused `blob_missing`.
+- **`status`.** Its `revisions` entries carry: `revision_id, rev, state, request_id, set_name,
+  source_sha256, version, created_at, approved_at, in_force_since, ended_at, reason, rejected_with,
+  replaces, superseded_by, imported, signed_pdf_sha256`. Its `in_review.waiting_for` names
+  capacities and a group or a label, never the members of a group (ADR-117 D1).
+- **`pending`.** It is per KB. The proposal sent to the client had `kb_id` optional and "the caller's
+  open requests". That is ADR-117 D1's `kb/review.my_pending`, which spans KBs; this method stays
+  the KB's own list, as ADR-117 states.
+- **`in_force`.** `approver` and `publisher` are labels (ADR-117 D8). For an imported revision,
+  `approver` is the attested name and `imported` is true.
+- **`effective_at`.** It may not be later than the act plus the clock leeway. Scheduled entry into
+  force is open (O20).
+- **`set_policy`.** It is an administrative act (E8). It refuses a named performer who is not a
+  person (`performer_not_person`, ADR-117 D8) and a retention period below the floor
+  (`retention_below_floor`).
+
+### E10. The event chain, and its export
+
+D7's chain, made precise enough that a third party can verify it without MAE.
+
+**The event.** Each event is the JSON object
+`{v: 1, kb_id, seq, prev_hash, kind, at, actor, payload, member_sig}`, where:
+- `seq` counts from 1 per KB;
+- `actor` is `{principal, kind, iss?, sub?, sign_in?}`;
+- `member_sig` is `null` until #727.
+
+**Kinds.** `import`, `policy_changed`, `code_set`, `request`, `act`, `approve`, `reject`, `withdraw`,
+`enter_into_force`, `derogate`, `attach`, `annul_attachment`, `delete_attachment`. C9's agent kinds
+are ADR-118's. A verifier needs no payload semantics, and carries an unknown kind through.
+
+**Canonical bytes** are the event's RFC 8785 (JSON Canonicalization Scheme) serialization. The values
+are restricted so that JCS has one obvious answer:
+- object keys are ASCII;
+- there are no floating-point numbers, and every integer is within ±(2^53 − 1);
+- times are RFC 3339 strings as in E9, hashes lowercase hex, keys and signatures standard base64
+  with padding;
+- absent optional values are written `null`, never omitted.
+
+**Hashes and signatures.**
+- **Entry hash.** `entry_hash = SHA-256("maereview/v1\n" ‖ canonical)`.
+- **Chain.** `prev_hash` is the previous event's `entry_hash`, and 64 zeros for `seq` 1.
+- **Event signature.** `sig = Ed25519(daemon identity key, "maereview-sig/v1\n" ‖ entry_hash)`, with
+  RFC 8032 pure Ed25519 over the 32 raw bytes of the hash.
+- **Head.** The head is the JCS of `{format: "maereview-head/v1", kb_id, seq, entry_hash, signed_at}`,
+  signed as `Ed25519(key, "maereview-head-sig/v1\n" ‖ head canonical)`.
+
+**The export is JSON Lines**, one object per line:
+- first a header `{type: "header", format: "maereview-export/v1", kb_id, daemon_key}`;
+- then one `{type: "event", seq, prev_hash, canonical, entry_hash, sig}` per event, where
+  `canonical` is the base64 of the canonical bytes;
+- last the signed head `{type: "head", canonical, sig}`.
+
+`kb/review.events` returns the same objects, paged, with the current head on every page.
+
+**Verifying needs no canonicalizer**, because it hashes the bytes it is given:
+1. Decode each `canonical` and parse it.
+2. Check `seq` is consecutive from 1.
+3. Check `prev_hash` equals both the line's value and the previous `entry_hash`.
+4. Recompute `entry_hash`.
+5. Verify `sig`.
+6. Verify the head's signature, and that it names the last `seq` and `entry_hash`.
+
+A producer must use JCS so that the same event always exports to the same bytes.
+
+**The commands.** `mae-daemon kb review export --kb-id <id> --out <file>` writes the export. `mae-daemon
+kb review verify --in <file> --key <base64> [--against <head-file>]` checks it offline, with no daemon
+configuration or database.
+
+**What it proves.** The `daemon_key` in the header is only a claim. As ADR-116 D4 states for history,
+tamper evidence is only as strong as a key or head kept outside the daemon (`kb anchor`, a head file
+kept elsewhere). `--key` and `--against` take those, never the header's.
+
+### E11. Every refusal kind
+
+This closes O12, except a ceiling or grant refusal, which ADR-118 names. It covers `kb/review.*`,
+the blob route as the attach flow meets it, the import CLI, and the two other surfaces this ADR adds
+guards to. `upload_digest_mismatch` (B1) is retired in favour of `blob_hash_mismatch` (O3). ADR-115's
+other route kinds (`attachment_unsupported`, `attachment_too_many_pixels`, `attachment_undecodable`,
+`upload_timeout`, `attachment_busy`) are not repeated here.
+
+| Kind | Extra `data` | Raised by | Defined in |
+|---|---|---|---|
+| `invalid_params` | `param` | any method | D8 |
+| `not_member` | — | any method, the blob route; also for an unknown KB | D8, ADR-115 B5 |
+| `role_forbidden` | — | `set_policy`/`set_code` by a non-owner, `events` by a non-auditor, loosening `in_force_on_approval` | D3 |
+| `review_not_enabled` | — | every method but `set_policy`, with review off | D3 |
+| `e2e_unsupported` | — | every method, the blob route | D1 |
+| `node_not_in_kb` | — | `request`, `status`, `set_code`, `derogate` | D8 |
+| `unknown_request` | — | `reject`, `withdraw`, `enter_into_force` | D8 |
+| `unknown_revision` | — | every method naming a `revision_id` | E9 (new) |
+| `stale_version` | `node_id`, `current` | `request` | D2 |
+| `invalid_transition` | `from`, `act`, or `act: "delete"` with `reason` | any act against E1's table; the delete paths (E7) | D4, E1, E7 |
+| `set_incomplete` | `missing` | `enter_into_force` | D4 |
+| `doc_code_taken` | `holder` | `set_code` | D2 |
+| `not_reviewer` | — | `act`, `reject` | D3 |
+| `not_approver` | — | `approve`, `reject`, `withdraw`, `derogate`, attach methods | D3, B3 |
+| `author_cannot_approve` | — | every act by an author | D3 |
+| `authors_unknown` | — | every act, when the author record is incomplete | A3 |
+| `agent_forbidden` | — | every act, by an agent | D3, C3 |
+| `performer_not_person` | `member` | `set_policy` | ADR-117 D8 |
+| `performer_not_satisfied` | `capacity`, `performer` | an act whose performer (C1) the caller does not satisfy | E11 (new, O12) |
+| `act_out_of_order` | `capacity`, `awaiting` | an act before the acts C1 orders before it | E11 (new, O12) |
+| `vocabulary_violation` | `node_id`, `field`, `value` | `request`, `approve` | C11 |
+| `mfa_required` | `accepted_amr` | controlled acts | B7, E8 |
+| `reauthentication_required` | `max_age`, `auth_time` | controlled acts | C4, E8 |
+| `second_factor_unconfigured` | — | controlled acts | ADR-117 D6, E8 |
+| `rendered_pdf_required` | — | `approve` | B7 |
+| `signed_pdf_required` | `missing` | `enter_into_force`, under `approval_record: signed_pdf` | E3 (O19) |
+| `rendered_pdf_mismatch` | `current` | `approve` | B7 |
+| `source_mismatch` | `expected` | `attach_rendered_pdf` | D6 (unnamed until now) |
+| `attachment_exists` | `current` | attach methods | B1 |
+| `attachment_type` | — | attach methods, import | B2 |
+| `blob_missing` | — | attach methods | ADR-115 B5 |
+| `controlled_copy_mismatch` | — | `attach_controlled_copy` | C6 |
+| `retention_below_floor` | `floor_days` | `set_policy` | E11 (new, O12) |
+| `retention_not_elapsed` | `deletable_from` | `delete_attachment` | E11 (new, O12) |
+| `agents_not_assessed` | — | agent write paths (`sync/update`, `/ws`, `kb/node_update`, the relay) | C9 |
+| `quota_exceeded` | `size`, `limit` | blob upload | D6, ADR-115 D3 |
+| `tenant_quota_exceeded` | — | blob upload | ADR-115 D3a |
+| `blob_hash_mismatch` | — | blob upload | ADR-115 D3, O3 |
+| `import_overlap` | `node_id`, `latest_existing` | `kb import` | B6, E4 (new, O12) |
+| `manifest_mismatch` | `path`, `reason` (`hash`, `missing_line`, `unused_line`, `malformed_line`, `duplicate`) | `kb import` | E4 (new) |
+
+That is 40 kinds. **Grammar:** every refusal kind, and every event kind (E10), matches
+`^[a-z][a-z0-9_]{0,63}$`; a client must accept digits (`e2e_unsupported`) and must carry an unknown
+kind through as a refusal it does not specialise. The import CLI prints its refusals as `{ok: false, error: {kind, …}}` with `--json`.
+
+### E12. Fixtures
+
+`docs/verification/fixtures/review-api/` holds one JSON file per method, so a client can build against
+them before the daemon exists. Each file has a request, its success response, and at least one
+refusal. Beside them are:
+- `blob_upload.json`: the ADR-115 route as built, with its headers, its success body and
+  `blob_hash_mismatch`;
+- `cli_import.json`: the import file, the manifest and the CLI's output;
+- `other_surface_refusals.json`: E7's delete guard and C9's gate.
+
+Every kind in E11 appears in at least one file. The request fixture is a named set of three, and
+`reject.json` shows its rejection ending the set. `events.json` is a real chain, signed with a fixed
+**test** key, and verifies under E10's steps; a changed byte fails them. The fixtures are examples of
+shape. Where they disagree with this text, the text governs.
+
+### E13. Tests this amendment adds
+
+- Every transition outside E1's table is refused `invalid_transition`, and no final state ever
+  changes (a property test over random act sequences).
+- Rejecting one member of three leaves all three `rejected`, with one reason and two `rejected_with`.
+  Withdrawing a request with an approved member leaves every member `withdrawn`.
+- An import with one PDF byte changed, a missing line, an unused line or a malformed line writes
+  nothing: no blob row, no revision, no event. A clean import records each PDF's sha256 and the
+  manifest's in its event. Imported revisions name the attested approver and no principal.
+- `kb import` is unreachable from every network method, MCP tool and Scheme call (a scan).
+- Each delete path (`kb/collection_node_remove`, the editor's delete, seed removal) refuses a node
+  with a revision in each of the seven states.
+- E8, each against a real validated token:
+  - `auth_time = now − W` is accepted, and `now − W − 1` is refused;
+  - `now + 60` is accepted, and `now + 61` is refused;
+  - an absent `auth_time` is refused;
+  - an `amr` that is absent, a string, `["pwd"]`, or `["mfa"]` with nothing configured is refused,
+    each with its own kind;
+  - an `acr` that alone would satisfy is refused;
+  - a relayed header or parameter claiming a recent sign-in changes nothing;
+  - a self-issued token is refused `agent_forbidden`;
+  - an owner cannot set `reauth_max_age_secs` above the operator's value or below 60.
+- The fixtures' event chain verifies under E10's steps, and fails after any byte of any line is
+  changed.
+- `attach_signed_pdf` stores the sha256 of the uploaded file unchanged, and the `attach` event
+  carries it.
+
+### E14. What this amendment supersedes
+
+Edited in place and marked *(Amendment 4)*:
+- D2's state list;
+- D4's "becomes historical" (twice) and its withdrawal of an approval returning to `in_review`;
+- D5's "historical", its delete rule and its purge rule;
+- the tests that named them;
+- B3's `imported` state and its browser-only note;
+- B7's first paragraph and its `acr` alternative;
+- B9's `imported` state;
+- C4's single operator window;
+- C10's paging parameter;
+- A4 and B6 as E4 rewrites them;
+- O9, O10, O11 and O12.
 
 ## Build sequence (2026-11-16)
 
@@ -858,7 +1445,8 @@ sweep's live set gains every revision's frozen `attachments` map, in every state
 approver lists, `view: "published"`, revision attachments. With the switch on, readers are served
 exactly what they are today.
 
-**Prerequisites:** PR-3 (a frozen map must hold its blobs). O7, O8 and O11 settled.
+**Prerequisites:** PR-3 (a frozen map must hold its blobs). O7 and O8 settled (O11 is, by
+Amendment 4 E6). Native IdP sign-in (ADR-111 P4) is built alongside, not first (E5).
 
 **Data:** per-KB review settings (switch, `in_force_on_approval`, `required_acts`, code prefixes);
 review requests (name, mode, reason, requester, state); revisions (`rev_id`, KB, node, request,
@@ -871,7 +1459,7 @@ migration.
 **Methods and errors:** `kb/review.request`, `kb/review.withdraw` (by the requester, before
 approval), `kb/review.status`, `kb/review.pending`, `kb/review.set_policy` (switch, mode,
 `required_acts`), `kb/review.set_code`; `kb/query.revisions`; `kb/query.get` with `revision`.
-Dispatched on the OAuth listener and wherever O9 decides. Refusals: `invalid_params`,
+Dispatched on the OAuth listener, to browser and native person tokens alike (Amendment 4, E5). Refusals: `invalid_params`,
 `role_forbidden`, `review_not_enabled`, `stale_version` (+`current`), `unknown_request`,
 `node_not_in_kb`, `doc_code_taken`, `invalid_transition`, `e2e_unsupported`.
 
@@ -932,9 +1520,8 @@ in-force revision from the seed record, through the operator CLI only.
   leaves all three unmoved.
 - Withdrawal after entry into force is refused; before it, a different listed approver returns the
   revision to `in_review`.
-- Deleting a node with a published revision is refused (`act: "delete"`) and succeeds after
-  derogation; purging a node with historical revisions leaves every revision and the chain
-  verifiable.
+- Deleting a node with any revision is refused (`act: "delete"`), also after derogation
+  (Amendment 4, E7); the chain stays verifiable after a derogation.
 - A1's credit cases and A3's three unknown cases, driven through real `sync/update` traffic.
 - The imported act is unreachable from every `kb/review.*` method and from an agent principal: a
   scan of the method table and of every refusal.
@@ -1021,7 +1608,8 @@ scopes them). Each act records the claim and value that satisfied it and the `au
 **Does not build:** group performers (PR-9). `accept` and `controlled_copy` take the check in PR-9,
 where they are built.
 
-**Prerequisites:** PR-6 and the sign-in claims follow-up to ADR-098. O9 settled.
+**Prerequisites:** PR-6 and the sign-in claims follow-up to ADR-098 (built: `sign_in.rs`). The
+check is Amendment 4 E8's.
 
 **Data:** the switch and the operator's accepted values and window; the recorded claims on acts.
 No migration.
@@ -1144,6 +1732,8 @@ named.
   holds its own copy, and the kind of that version.
 - **Decided 2026-11-16 (O9):** native MAE sessions stay agents; native IdP sign-in (ADR-111 P4)
   is built **before** PR-4, so a person reaches their review-enabled KBs from native MAE as a person.
+- **Closed by Amendment 4, E5 (O9):** browser and native IdP sign-in are both in from the start; the
+  earlier "native first, before PR-4" decision is replaced, and owner administration goes over HTTPS.
 - **O9. Native sessions are agents (PR-4, PR-8, PR-10).** Under ADR-098 Amendment 1 C3, a person
   using native MAE counts as an agent. With C9, a review-enabled KB at the default ceiling `none`
   then refuses that person's reads and writes from native MAE. C4 requires a fresh `auth_time` for
@@ -1151,13 +1741,21 @@ named.
   has no `auth_time`. D8 places `kb/review.*` on the OAuth listener, while `kb/history.*` is on the
   collab handler only. Confirm these consequences, and name the path for owner administration of
   a review-enabled KB.
+- **Closed by Amendment 4, E4 and E9 (O10):** `kb/review.delete_attachment`,
+  `kb/review.annul_attachment`, and the period as `attachment_retention_days` on `set_policy`; the
+  import is the operator CLI `mae-daemon kb import`, never a network method.
 - **O10. Unnamed methods (PR-7).** B5's attachment deletion and retention period, and B6's import,
   have no method in D8. B6 is "an owner act", while A4's import is operator-only, through the CLI.
   Name them, and say whether B6 is a network method (then C4 applies) or a CLI one.
+- **Closed by Amendment 4, E6 (O11):** review acts and uploads go ahead before #727; unsigned content
+  ops are counted during the pilot and `require_signed_content_ops` is switched on after the first
+  production signing.
 - **O11. Writes over IdP sessions (PR-1, PR-4).** ADR-098 Amendment 1 C0 says HTTPS writes wait for
   hub signature verification (#727). This ADR needs IdP sessions to act (B3, B7, C4), and ADR-115
   uploads need `Edit` on the same listener. State that review acts and blob uploads, which are not
   CRDT content writes, are allowed before #727, or that they wait.
+- **Closed by Amendment 4, E11 (O12):** every kind is in E11's table; a ceiling or grant refusal is
+  ADR-118's.
 - **O12. Unnamed refusal kinds (PR-7, PR-9, PR-10).** None is defined for: a KB retention period
   below the floor, deletion before the period, an import overlapping existing revisions, an unmet
   performer or order on `publish` or `accept`, a ceiling or a grant refusal.
@@ -1191,6 +1789,28 @@ named.
   and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
   refused while revisions exist, as it is while history holds plaintext. No PR here builds the
   switch, but the first revision makes the question live, so it blocks PR-4.
+- **Decided 2026-11-25 (O19):** under `approval_record: signed_pdf`, entry into force waits for the
+  signed PDF of every member (Amendment 4, E3; refusal `signed_pdf_required`).
+- **O20. Scheduled entry into force (Amendment 4, E9).** `effective_at` may not be in the future.
+  Decide whether a future date is accepted, and what moves the published pointer at that time.
+- **O21. The IdP's real `amr` and `auth_time` (Amendment 4, E8).** Check, against a staging instance
+  of the deployment's IdP, that its access tokens for the daemon's audience carry `auth_time` and an
+  `amr` array, which values a password-plus-second-factor sign-in and a password-only sign-in each
+  produce, and that a `max_age` or `prompt=login` authorization moves `auth_time`. E8's rule is not
+  relied on before this check.
+  - Measured so far, in a rehearsal of the deployment's IdP: a refresh does not re-evaluate the
+    application's policies or the second factor; refreshed tokens are re-issued with recomputed
+    group claims, so removing a person from a group takes effect within one refresh; and a refreshed
+    ID token comes back without `amr`. So the step-up proof can come only from a fresh
+    authorization, as E8 requires, and a refreshed token fails check 3 (`mfa_required`), which is
+    the intended outcome. Whether that IdP's *access* tokens carry `amr` and `auth_time` at all is
+    still to be measured.
+- **O22. Deleting drafts and mistakes (Amendment 4, E7).** Its own ADR, not this one.
+- **O23. A session with no absolute lifetime (Amendment 4, E8).** The same rehearsal measured that
+  each refresh resets the IdP session's idle lifetime, with no absolute cap, so a session refreshed
+  often enough never ends. E8 is unaffected, since controlled acts need a fresh authorization. The
+  general question, whether the daemon or the browser client's server enforces an absolute session
+  lifetime, belongs to ADR-111's session rules.
 - **O18. Incremental backup.** ADR-115 D1 says an incremental copy of the immutable blob files is
   exact; `mae-daemon backup` writes one archive each run. Either extend the format or narrow the
   claim (PR-1).

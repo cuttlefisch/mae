@@ -1,0 +1,62 @@
+{
+  "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
+  "method": "kb/review.withdraw",
+  "description": "Ends the whole request: every member becomes `withdrawn`, including members already approved. By the requester, or by a listed approver who is not an author; only before entry into force.",
+  "transport": {
+    "http": "POST /",
+    "headers": {
+      "Authorization": "Bearer <the person's IdP access token for this daemon's audience>",
+      "Content-Type": "application/json"
+    }
+  },
+  "examples": [
+    {
+      "name": "withdraw",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 29,
+        "method": "kb/review.withdraw",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-01a7c2",
+          "reason": "Superseded by a wider revision."
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 29,
+        "result": {
+          "event_id": "ev-0000000006"
+        }
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "case": "after entry into force",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "kb/review.withdraw",
+        "params": {
+          "kb_id": "0b8c5d0e-3f4a-4c61-9d2e-5a7b8c9d0e1f",
+          "request_id": "rq-01a7c2",
+          "reason": "x"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "error": {
+          "code": -32603,
+          "message": "a revision in force is ended only by a successor or a derogation",
+          "data": {
+            "kind": "invalid_transition",
+            "from": "in_force",
+            "act": "withdraw"
+          }
+        }
+      }
+    }
+  ]
+}
