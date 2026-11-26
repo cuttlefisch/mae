@@ -55,11 +55,13 @@ pub enum Op {
     ContentWrap = 16,
     ContentUnwrap = 17,
     SignOp = 18,
+    OpCanonicalBytes = 19,
+    VerifyOp = 20,
 }
 
 impl Op {
     /// Every operation, in ABI order.
-    pub const ALL: [Op; 18] = [
+    pub const ALL: [Op; 20] = [
         Op::Version,
         Op::Generate,
         Op::ImportSeed,
@@ -78,6 +80,8 @@ impl Op {
         Op::ContentWrap,
         Op::ContentUnwrap,
         Op::SignOp,
+        Op::OpCanonicalBytes,
+        Op::VerifyOp,
     ];
 
     pub fn from_u32(n: u32) -> Option<Op> {
@@ -192,6 +196,8 @@ fn run(op: Op, r: &[u8]) -> Result<String, ApiError> {
         Op::ContentWrap => content_wrap(r),
         Op::ContentUnwrap => content_unwrap(r),
         Op::SignOp => sign_op(r),
+        Op::OpCanonicalBytes => op_canonical_bytes(r),
+        Op::VerifyOp => verify_op(r),
     }
 }
 
@@ -694,5 +700,110 @@ fn sign_op(r: &[u8]) -> Result<String, ApiError> {
         base_sv: STANDARD.encode(&op.base_sv),
         sig: STANDARD.encode(sig),
         author_pubkey: STANDARD.encode(public),
+    })
+}
+
+/// The fields of an op signed outside the module: `op_canonical_bytes`'s
+/// request, and `verify_op`'s with `sig`. The author is named by its public
+/// key, and its fingerprint derived from it, never claimed.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutsideOpReq<'a> {
+    #[serde(borrow)]
+    kb_id: Cow<'a, str>,
+    #[serde(borrow)]
+    node_id: Cow<'a, str>,
+    #[serde(borrow)]
+    base_sv: Cow<'a, str>,
+    #[serde(borrow)]
+    author_pubkey: Cow<'a, str>,
+    /// Decimal text, as `sign_op`'s.
+    #[serde(borrow)]
+    epoch: Cow<'a, str>,
+    issued_at: u64,
+    #[serde(borrow)]
+    update: Cow<'a, str>,
+    /// `verify_op` only.
+    #[serde(borrow, default)]
+    sig: Option<Cow<'a, str>>,
+    /// Optional: the author the client would send. It must be the key's
+    /// fingerprint (`op_canonical_bytes` refuses another; `verify_op` answers
+    /// `valid: false`), as the daemon requires.
+    #[serde(borrow, default)]
+    author: Option<Cow<'a, str>>,
+}
+
+/// The header and payload an outside op names, checked as `sign_op` checks
+/// its own: the ids encodable, the epoch canonical, the key 32 bytes.
+fn outside_op(req: &OutsideOpReq) -> Result<(ContentOp, [u8; 32], Vec<u8>), ApiError> {
+    let base_sv = bytes("base_sv", &req.base_sv)?;
+    let update = bytes("update", &req.update)?;
+    let epoch = decimal_u64("epoch", &req.epoch)?;
+    let public = *bytes32("author_pubkey", &req.author_pubkey)?;
+    let op = ContentOp {
+        kb_id: req.kb_id.to_string(),
+        node_id: req.node_id.to_string(),
+        base_sv: base_sv.to_vec(),
+        author: member::fingerprint(&public),
+        epoch,
+        issued_at: req.issued_at,
+    };
+    op.check()?;
+    Ok((op, public, update.to_vec()))
+}
+
+/// `op_canonical_bytes` (ADR-098 Amendment 2): the exact bytes ADR-036 D1
+/// signs, for a client that signs them with a key it holds outside the module
+/// (a non-extractable WebCrypto key), and the header to send with its
+/// signature. The same function the daemon verifies against builds them.
+fn op_canonical_bytes(r: &[u8]) -> Result<String, ApiError> {
+    let req: OutsideOpReq = parse(r)?;
+    if req.sig.is_some() {
+        return Err(ApiError::new("bad-request", "sig belongs to verify_op"));
+    }
+    let (op, public, update) = outside_op(&req)?;
+    if req.author.as_deref().is_some_and(|a| a != op.author) {
+        return Err(ApiError::new(
+            "bad-request",
+            "author is not author_pubkey's fingerprint",
+        ));
+    }
+    #[derive(Serialize)]
+    struct Unsigned {
+        canonical: String,
+        author: String,
+        epoch: String,
+        issued_at: u64,
+        base_sv: String,
+        author_pubkey: String,
+    }
+    out(&Unsigned {
+        canonical: STANDARD.encode(op.canonical_bytes(&update)),
+        author: op.author.clone(),
+        epoch: op.epoch.to_string(),
+        issued_at: op.issued_at,
+        base_sv: STANDARD.encode(&op.base_sv),
+        author_pubkey: STANDARD.encode(public),
+    })
+}
+
+/// `verify_op`: whether `sig` is the author's signature over the op, as the
+/// daemon checks it. `{valid: false}` for a signature that does not verify; an
+/// error only for a request that does not name an op.
+fn verify_op(r: &[u8]) -> Result<String, ApiError> {
+    let req: OutsideOpReq = parse(r)?;
+    let Some(sig) = req.sig.as_deref() else {
+        return Err(ApiError::new("bad-request", "verify_op needs sig"));
+    };
+    let sig = bytes("sig", sig)?;
+    let (op, public, update) = outside_op(&req)?;
+    #[derive(Serialize)]
+    struct Valid {
+        valid: bool,
+    }
+    out(&Valid {
+        valid: req.author.as_deref().is_none_or(|a| a == op.author)
+            && op.fingerprint_matches(&public)
+            && op.verify(&sig, &public, &update),
     })
 }

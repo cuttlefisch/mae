@@ -102,3 +102,52 @@ find = '''        if self.check().is_err() {
         let Ok(vk)'''
 replace = '''        let Ok(vk)'''
 
+
+# op_canonical_bytes and verify_op (ADR-098 Amendment 2): the bytes a client
+# signs outside the module, and the verdict on what it sent.
+# Tests: shared/crypto-wasm/tests/outside_op.rs.
+
+[[mutant]]
+id = "crypto-sign-op/outside-author-claimed"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "outside_op"]
+filter = "test(a_request_that_names_no_op_is_refused)"
+ref = "ADR-098 A2: the author is the key, never claimed"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''    if req.author.as_deref().is_some_and(|a| a != op.author) {'''
+replace = '''    if req.author.as_deref().is_some_and(|a| a.is_empty()) {'''
+
+[[mutant]]
+id = "crypto-sign-op/outside-ids-unchecked"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "outside_op"]
+filter = "test(a_request_that_names_no_op_is_refused)"
+ref = "ADR-036 D1: ids the encoding cannot carry are refused"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''    op.check()?;
+    Ok((op, public, update.to_vec()))'''
+replace = '''    Ok((op, public, update.to_vec()))'''
+
+[[mutant]]
+id = "crypto-sign-op/verify-op-trusts-any-sig"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "outside_op"]
+filter = "test(verify_op_refuses_what_the_daemon_refuses)"
+ref = "ADR-098 A2: verify_op answers as the daemon checks"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''            && op.verify(&sig, &public, &update),'''
+replace = '''            && !sig.is_empty(),'''
+
+[[mutant]]
+id = "crypto-sign-op/verify-op-ignores-claimed-author"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "outside_op"]
+filter = "test(verify_op_refuses_what_the_daemon_refuses)"
+ref = "ADR-098 A2: a claimed author that is not the key fails"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''        valid: req.author.as_deref().is_none_or(|a| a == op.author)'''
+replace = '''        valid: req.author.as_deref().is_none_or(|_| true)'''

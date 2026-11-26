@@ -41,6 +41,7 @@ const OPS = new Map([
   ['keyInfo', 6], ['fingerprint', 7], ['checkChallenge', 8], ['signChallenge', 9],
   ['backupSeal', 10], ['backupOpen', 11], ['backupParams', 12], ['contentKeyGenerate', 13],
   ['contentSeal', 14], ['contentOpen', 15], ['contentWrap', 16], ['contentUnwrap', 17], ['signOp', 18],
+  ['opCanonicalBytes', 19], ['verifyOp', 20],
 ]);
 const FAST = { m: 19456, t: 2, p: 1 };
 const ISS = 'https://idp.example.com';
@@ -152,6 +153,15 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
       epoch: '18446744073709551557', issued_at: NOW, update: b64(randomBytes(40)) };
     script.push(['signOp', op], ['signOp', { ...op, kb_id: '' }], ['signOp', { ...op, node_id: 'a\u0000b' }],
       ['signOp', { ...op, epoch: '007' }], ['signOp', { ...op, epoch: 7 }], ['signOp', { ...op, author: fp }]);
+    // Outside-signed ops (ADR-098 Amendment 2): the bytes, and the verdict on
+    // a random and an all-zero signature, and each refusal.
+    const { key: _k, ...rest } = op;
+    const out = { ...rest, author_pubkey: info.public_key };
+    script.push(['opCanonicalBytes', out], ['opCanonicalBytes', { ...out, kb_id: '' }],
+      ['opCanonicalBytes', { ...out, epoch: '007' }], ['opCanonicalBytes', { ...out, author: 'SHA256:x' }],
+      ['opCanonicalBytes', { ...out, author_pubkey: b64(new Uint8Array(31)) }],
+      ['verifyOp', { ...out, sig: b64(randomBytes(64)) }], ['verifyOp', { ...out, sig: b64(new Uint8Array(64)) }],
+      ['verifyOp', out]);
   });
   script.push(
     ['forget', { key: 1 }], ['forget', { key: 1 }], ['keyInfo', { key: 1 }], ['exportSeed', { key: 1 }],
@@ -187,6 +197,22 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
     check(Buffer.from(h.sig, 'base64').toString('hex') === 'f98071fb0ab87e6107a5e0835b3beadc3aa532bee4de847b6dba6a0b1ba67a6fc8ee7c45935c5d3cb25143207acb1c39ab20f620bf16d135782318d049a87702',
       'signOp: the pinned vector');
     check(h.author === k.fingerprint && h.epoch === '7', 'signOp: author is the key, epoch is text');
+    // ADR-098 Amendment 2: the same op signed OUTSIDE the module, with a
+    // non-extractable WebCrypto key, gives the same signature and header.
+    const seed = new Uint8Array(32).fill(0x5a);
+    const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from(seed)]);
+    const priv = await crypto.subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign']);
+    check(priv.extractable === false, 'the WebCrypto key is non-extractable');
+    const op = { kb_id: 'kb-alpha', node_id: 'concept:buffer', base_sv: b64(Uint8Array.from([1, 2, 0, 255])),
+      author_pubkey: k.public_key, epoch: '7', issued_at: 1790000000, update: b64(Uint8Array.from([0, 1, 2, 3, 0, 9])) };
+    const u = m.opCanonicalBytes(op);
+    const sig = Buffer.from(await crypto.subtle.sign({ name: 'Ed25519' }, priv, Buffer.from(u.canonical, 'base64')));
+    check(sig.toString('base64') === h.sig, 'WebCrypto over opCanonicalBytes: the pinned vector');
+    check(u.author === h.author && u.author_pubkey === h.author_pubkey && u.epoch === h.epoch && u.base_sv === h.base_sv,
+      'opCanonicalBytes: the header signOp gives');
+    check(m.verifyOp({ ...op, sig: h.sig }) === true, 'verifyOp: the signed op verifies');
+    check(m.verifyOp({ ...op, node_id: 'concept:other', sig: h.sig }) === false, 'verifyOp: another node fails');
+    check(m.verifyOp({ ...op, sig: h.sig, author: 'SHA256:someone' }) === false, 'verifyOp: a claimed author fails');
   }
   // And a signature verifies over exactly the challenge bytes.
   const signed = w.map(result).find((r) => r.ok && r.result.body);
