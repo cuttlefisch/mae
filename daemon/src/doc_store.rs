@@ -1390,6 +1390,7 @@ impl DocStore {
             Option<&str>,
             Option<delete_guard::RemovalBaseline>,
         ),
+        list: Option<node_list_guard::ListBaseline>,
     ) -> Result<(), StorageError> {
         let after = doc.sync.payload_bytes();
         let mut refused = self.size_refusal(doc_name, size_before, after);
@@ -1402,6 +1403,7 @@ impl DocStore {
         } else if let Some(kb) = coll_touched {
             refused = self.applied_switch_refusal(kb, doc_name, &doc.sync).await;
         }
+        refused = refused.or_else(|| Self::list_refusal(list, &doc.sync));
         match refused {
             Some(refused) => {
                 self.restore_from_storage(doc_name, doc).await?;
@@ -1453,14 +1455,16 @@ impl DocStore {
             let mut doc = entry.lock().await;
             // ADR-116 D2: decided before the update lands, since the version a
             // handoff cuts is the node as the previous session left it.
-            let mut stamp = self.stamp(by.into());
+            let by: Writer = by.into();
+            let mut stamp = self.stamp(by);
             stamp.checkpoint = self.handoff(doc_name, &doc.sync, &stamp.editors).await?;
             let (before, pending_before) = (doc.sync.payload_bytes(), doc.sync.pending_digest());
             let kb = switch.as_ref().map(|(k, _)| k.as_str());
             let removal = self.removal_baseline(kb, &doc.sync).await;
+            let list = self.list_baseline(kb, &by, &doc.sync);
             let touched = apply_in_memory(&mut doc, update, switch.is_some())?;
             let coll_touched = kb.filter(|_| touched);
-            self.refuse_applied(doc_name, &mut doc, (before, coll_touched, removal))
+            self.refuse_applied(doc_name, &mut doc, (before, coll_touched, removal), list)
                 .await?;
 
             // WAL append (durability) before the update is acknowledged or relayed.
@@ -1951,6 +1955,7 @@ impl DocStore {
         // (ADR-116 Amendment 1, O17), no node with a revision dropped (E7).
         self.refuse_replacing(kb, state_before.as_deref(), &probe)
             .await?;
+        self.refuse_replacing_list(kb, &by, state_before.as_deref(), &probe)?;
         #[cfg(test)]
         Self::pause_at(&self.pauses.replace).await;
 
@@ -2079,6 +2084,10 @@ mod e2e_switch;
 // ADR-113 E7: a node holding a revision is never removed from its KB.
 #[path = "doc_store_delete_guard.rs"]
 mod delete_guard;
+
+// ADR-036 Amendment 2 G3: a session changes a node list only by a signed op.
+#[path = "doc_store_node_list_guard.rs"]
+mod node_list_guard;
 
 // ADR-113 D1/D2: the review tables, and the freeze of a node for a request.
 #[path = "doc_store_review.rs"]

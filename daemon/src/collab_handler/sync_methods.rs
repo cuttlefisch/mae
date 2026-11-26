@@ -144,6 +144,25 @@ async fn authorize_node_write(
 /// key (absent for a bearer or `none` session), transport.
 type NodeWriter<'a> = (u64, Option<&'a str>, Option<&'a [u8; 32]>, Transport);
 
+/// A session's first write to `doc_name`: track the client and subscribe it to
+/// the document's events. Later writes do nothing here.
+async fn track_first_write(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    session_docs: &mut HashSet<String>,
+    doc_name: &str,
+) {
+    if session_docs.insert(doc_name.to_string()) {
+        let _ = doc_store.track_client_connect(doc_name).await;
+        broadcaster
+            .lock()
+            .unwrap()
+            .subscribe_doc(session_id, doc_name);
+        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_update(
     doc_store: &DocStore,
@@ -197,15 +216,7 @@ pub(super) async fn handle_sync_update(
     };
     // Track and subscribe only once the write is authorized: a refused caller
     // must not join the document's live feed.
-    if session_docs.insert(doc_name.clone()) {
-        // First interaction — track client connect + subscribe to doc events.
-        let _ = doc_store.track_client_connect(&doc_name).await;
-        broadcaster
-            .lock()
-            .unwrap()
-            .subscribe_doc(session_id, &doc_name);
-        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
-    }
+    track_first_write(doc_store, broadcaster, session_id, session_docs, &doc_name).await;
 
     // ADR-113 D3: a verified signer is the content's author; record it beside
     // the session (a relay, on the P2P transport) that delivered it.

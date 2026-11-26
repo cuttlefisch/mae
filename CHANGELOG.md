@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.210] - 2026-11-26
+
+
+
+
+### Features
+
+- *(#727 part 2)* A change to a KB's node list is a signed manifest op ([d080f88](https://github.com/cuttlefisch/mae/commit/d080f88f91f4a20b0ede0eb1dfa431861183f9d3))
+
+### Bug Fixes
+
+- *(#727 part 2)* Judge a node-list change in the store, on what landed ([b26e151](https://github.com/cuttlefisch/mae/commit/b26e15193a5c38868881533180e8cbe8e2c10a7d))
+- *(#727 part 2)* A manifest-op write makes only its signed change ([e960f9a](https://github.com/cuttlefisch/mae/commit/e960f9a46829118925ee8dfddd99065808589c08))
+
+### Refactor
+
+- *(daemon)* Sync/update's raw-list guard and first-write tracking as named steps ([a972291](https://github.com/cuttlefisch/mae/commit/a972291ff5bfa1a36749ec5550581fce68382ad7))
+
+### Documentation
+
+- *(adr-036)* Amendment 2, a change to a KB's node list is a signed op (#727 part 2) ([797e487](https://github.com/cuttlefisch/mae/commit/797e487d14d25abab9183cb74ba1db096e0930ef))
+
+### Testing
+
+- *(mutants)* The session-writer mutant names its type, so it builds ([a1b0f40](https://github.com/cuttlefisch/mae/commit/a1b0f400385a6e80e3989e8de2ef9ce75d3ccb0f))
+
+### Miscellaneous
+
+- Code map after the manifest op ([de602f0](https://github.com/cuttlefisch/mae/commit/de602f0180140fdd5de7fc28fd773dba0ea5cc54))
+- ADR KB checksum after ADR-036 G3 ([d432844](https://github.com/cuttlefisch/mae/commit/d432844cc5e27b12b9b4d84ce890c1a56666d84b))
+
 ## [0.14.209] - 2026-11-26
 
 
@@ -18,6 +49,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - ADR KB checksum after merging main ([c77b7fb](https://github.com/cuttlefisch/mae/commit/c77b7fbcb7e70e3d13154d5cb658808a181030c9))
+- Bump version to 0.14.209 ([81356c9](https://github.com/cuttlefisch/mae/commit/81356c92e59af82d29a1a7044f307b9db3fdee86))
 
 ## [0.14.208] - 2026-11-26
 

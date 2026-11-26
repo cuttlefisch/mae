@@ -246,6 +246,7 @@ Source: `shared/crypto/src/lib.rs`
 | `content_crypto` | mod |
 | `content_op` | mod |
 | `identity_challenge` | mod |
+| `manifest_op` | mod |
 | `member` | mod |
 | `rng` | mod |
 | `VERSION` | const |

@@ -299,6 +299,9 @@ pub enum CollabCommand {
         node_id: String,
         title: String,
         add: bool,
+        /// The KB's authorization epoch, captured on the editor thread as for
+        /// `KbNodeUpdate`: the signed manifest op carries it (ADR-036 Amendment 2).
+        epoch: u64,
     },
     /// Approve a pending join request as `role` (owner-only, ADR-018). On an E2e KB the
     /// network task wraps the content key to the approved member (ADR-037/038), authoring
@@ -1768,6 +1771,50 @@ fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
     msg_rx
 }
 
+/// A `kb/collection_node_add` / `_remove` request, with the ADR-036 Amendment 2
+/// signed manifest op when a key-mode `signing_identity` is present (else the
+/// unsigned form, which a daemon with `require_signed_content_ops` refuses). A
+/// removal signs no title. Kept pure so it is directly unit-testable.
+fn kb_collection_node_request(
+    req_id: u64,
+    (kb_id, node_id, title, add): (&str, &str, &str, bool),
+    epoch: u64,
+    signing_identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
+) -> serde_json::Value {
+    use mae_sync::manifest_op::{ManifestAction, ManifestOp};
+    let method = if add {
+        "kb/collection_node_add"
+    } else {
+        "kb/collection_node_remove"
+    };
+    let mut params = serde_json::json!({ "kb_id": kb_id, "node_id": node_id, "title": title });
+    if let Some(id) = signing_identity {
+        let (action, signed_title) = match add {
+            true => (ManifestAction::Add, title),
+            false => (ManifestAction::Remove, ""),
+        };
+        let op = ManifestOp {
+            kb_id: kb_id.to_string(),
+            node_id: node_id.to_string(),
+            action,
+            title: signed_title.to_string(),
+            author: id.fingerprint(),
+            epoch,
+            issued_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        let b64 = mae_sync::encoding::update_to_base64;
+        params["author"] = serde_json::json!(op.author);
+        params["epoch"] = serde_json::json!(op.epoch);
+        params["issued_at"] = serde_json::json!(op.issued_at);
+        params["author_pubkey"] = serde_json::json!(b64(&id.public().to_bytes()));
+        params["sig"] = serde_json::json!(b64(&op.sign(&id.secret_bytes())));
+    }
+    serde_json::json!({ "jsonrpc": "2.0", "id": req_id, "method": method, "params": params })
+}
+
 /// Build a `kb/node_update` JSON-RPC request, signing the ADR-036 authorship header
 /// when a key-mode `signing_identity` is present (else the legacy unsigned form).
 ///
@@ -3228,21 +3275,12 @@ async fn run_collab_task(
                         // Phase D1.1: collection-manifest add/remove (best-effort,
                         // fire-and-forget — the daemon broadcasts the kbc: change and the
                         // projector reconciles; no response tracking needed).
-                        CollabCommand::KbCollectionNode { kb_id, node_id, title, add } => {
+                        CollabCommand::KbCollectionNode { kb_id, node_id, title, add, epoch } => {
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let method = if add {
-                                    "kb/collection_node_add"
-                                } else {
-                                    "kb/collection_node_remove"
-                                };
-                                let req = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": req_id,
-                                    "method": method,
-                                    "params": { "kb_id": kb_id, "node_id": node_id, "title": title }
-                                });
+                                let node = (kb_id.as_str(), node_id.as_str(), title.as_str(), add);
+                                let req = kb_collection_node_request(req_id, node, epoch, transport.identity());
                                 if let Ok(body) = serde_json::to_vec(&req) {
                                     let _ = write_framed(w, &body, write_timeout).await;
                                 }

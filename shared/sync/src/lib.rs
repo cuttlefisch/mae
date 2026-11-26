@@ -8,6 +8,8 @@ pub mod awareness;
 /// ADR-037 content crypto. It lives in mae-crypto (no I/O, builds for wasm32)
 /// so the browser runs the same code; this path is kept for every caller.
 pub use mae_crypto::content_crypto;
+/// ADR-036 Amendment 2: a signed change to a KB's node list.
+pub use mae_crypto::manifest_op;
 pub mod content_ops;
 pub mod encoding;
 pub mod kb;

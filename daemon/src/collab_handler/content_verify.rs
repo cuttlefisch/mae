@@ -98,6 +98,106 @@ pub async fn verify_node_op(
     Ok(Some(signed))
 }
 
+/// ADR-036 Amendment 2 (G1, G2): the signed header of a node-list change
+/// (`kb/collection_node_add` / `_remove`), checked exactly as a content op's:
+/// unsigned is refused or counted under the same switch; a signed one must
+/// verify, be authored by the session (F4), and come from a member with
+/// `Edit` at its own epoch (F2, ADR-023). `Some(author)` when it was signed.
+pub(crate) async fn verify_manifest_op(
+    doc_store: &DocStore,
+    change: (&str, &str, mae_sync::manifest_op::ManifestAction, &str),
+    params: &serde_json::Value,
+    sender: OpSender<'_>,
+    coll: &KbCollectionDoc,
+) -> Result<Option<String>, Refusal> {
+    let (kb_id, node_id, action, title) = change;
+    if params.get("sig").is_none() {
+        return accept_unsigned(doc_store, (kb_id, node_id), sender.transport).map(|_| None);
+    }
+    let malformed = || {
+        Refusal::new(
+            RefusalKind::SignatureInvalid,
+            "malformed signed manifest op header",
+        )
+    };
+    let (author, pubkey, epoch, issued_at, sig) = manifest_header(params).ok_or_else(malformed)?;
+    let op = mae_sync::manifest_op::ManifestOp {
+        kb_id: kb_id.to_string(),
+        node_id: node_id.to_string(),
+        action,
+        title: title.to_string(),
+        author,
+        epoch,
+        issued_at,
+    };
+    if !op.verify(&sig, &pubkey) {
+        return Err(Refusal::new(
+            RefusalKind::SignatureInvalid,
+            "signed manifest op rejected: the signature does not verify, or its key is not the author's",
+        ));
+    }
+    if let Some(principal) = sender.originator() {
+        if principal != op.author {
+            return Err(Refusal::new(
+                RefusalKind::NotAuthor,
+                format!(
+                    "manifest op signed by {} sent by session {principal}: a session may send only \
+                     ops it authored (ADR-036 Amendment 1 F4)",
+                    op.author
+                ),
+            ));
+        }
+    }
+    let members = author_membership(doc_store, kb_id, coll, &op.author).await;
+    let Some(member) = members.get(&op.author) else {
+        return Err(Refusal::new(
+            RefusalKind::NotMember,
+            "signed manifest op rejected: not a member",
+        ));
+    };
+    if !member.role.includes(SyncRole::Editor) {
+        return Err(Refusal::new(
+            RefusalKind::RoleForbidden {
+                required: SyncRole::Editor,
+            },
+            "signed manifest op rejected: changing the node list needs the editor role",
+        ));
+    }
+    if member.epoch != op.epoch {
+        return Err(Refusal::new(
+            RefusalKind::EpochFenced {
+                current_epoch: member.epoch,
+                caller_epoch: Some(op.epoch),
+            },
+            "signed manifest op rejected: a stale epoch",
+        ));
+    }
+    Ok(Some(op.author))
+}
+
+/// A manifest op header: author, key, epoch, issue time, signature.
+type ManifestHeader = (String, [u8; 32], u64, u64, Vec<u8>);
+
+fn manifest_header(p: &serde_json::Value) -> Option<ManifestHeader> {
+    let b64 = |k: &str| mae_sync::encoding::base64_to_update(p.get(k)?.as_str()?).ok();
+    let epoch = match p.get("epoch")? {
+        serde_json::Value::String(t) => {
+            let canonical = !t.is_empty()
+                && t.bytes().all(|b| b.is_ascii_digit())
+                && (t == "0" || !t.starts_with('0'));
+            canonical.then(|| t.parse::<u64>().ok()).flatten()?
+        }
+        v => v.as_u64()?,
+    };
+    Some((
+        p.get("author")?.as_str()?.to_string(),
+        b64("author_pubkey")?.try_into().ok()?,
+        epoch,
+        p.get("issued_at")?.as_u64()?,
+        b64("sig")?,
+    ))
+}
+
 /// Step 1: an unsigned op, refused or counted.
 fn accept_unsigned(
     doc_store: &DocStore,
