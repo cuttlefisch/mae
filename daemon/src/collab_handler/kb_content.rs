@@ -964,7 +964,13 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     // A verified manifest op's update may change the node list (G3); an
     // unsigned one, accepted while the switch is off, is the session's own.
     let by = match signer.as_deref() {
-        Some(author) => crate::doc_editors::Writer::manifest_op(who.1, author),
+        Some(author) => {
+            let change = crate::doc_editors::ManifestChange {
+                node_id: &node_id,
+                title: add.then_some(title),
+            };
+            crate::doc_editors::Writer::manifest_op(who.1, author, change)
+        }
         None => who.1.into(),
     };
     match super::persist_and_broadcast_collection_typed(

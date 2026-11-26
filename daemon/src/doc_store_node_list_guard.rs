@@ -1,7 +1,9 @@
 //! ADR-036 Amendment 2, G3: once the hub requires signed ops, a session's
 //! write to a KB's collection may not change its node list. The node list then
 //! changes only through `kb/collection_node_add`/`_remove` with a signed
-//! manifest op, whose update the daemon applies as [`Writer::manifest_op`].
+//! manifest op, whose update the daemon applies as [`Writer::manifest_op`],
+//! and then by exactly the change signed: a held-back raw change that the
+//! daemon's update happens to release is refused with it.
 //!
 //! **Where it runs.** Inside `DocStore::apply_update` and `replace_doc`, under
 //! the document's lock, beside the E7 delete guard (`doc_store_delete_guard`):
@@ -10,7 +12,7 @@
 //! after the write, so an update whose list change yrs held back as pending is
 //! seen in whichever later write integrates it.
 //!
-//! **What it covers.** Writes by a session ([`Writer::keeps_node_list`]). Not
+//! **What it covers.** Writes by a session ([`Writer::guards_node_list`]). Not
 //! a mesh relay (#727 part 3) and not the daemon acting for no session (seed,
 //! migration, the operator's control socket).
 //!
@@ -31,8 +33,8 @@ use crate::doc_editors::Writer;
 use crate::storage::StorageError;
 use mae_sync::kb::Transport;
 
-/// KB `kb`'s node list before a session's write, when the write may not
-/// change it.
+/// The node list KB `kb`'s collection must hold after a session's write: the
+/// list before it, with the write's verified manifest change, if any.
 pub(super) struct ListBaseline {
     kb: String,
     nodes: BTreeMap<String, String>,
@@ -40,7 +42,7 @@ pub(super) struct ListBaseline {
 
 impl DocStore {
     /// Before a write by `by` to KB `kb`'s collection (`None`: not a
-    /// collection), held in `sync`: its node list, if the write must keep it.
+    /// collection), held in `sync`: the node list it must leave, if guarded.
     pub(super) fn list_baseline(
         &self,
         kb: Option<&str>,
@@ -48,17 +50,22 @@ impl DocStore {
         sync: &TextSync,
     ) -> Option<ListBaseline> {
         let kb = kb?;
-        if !self.content_op_policy().require_signed(Transport::Hub) || !by.keeps_node_list() {
+        if !self.content_op_policy().require_signed(Transport::Hub) || !by.guards_node_list() {
             return None;
         }
+        let before = KbCollectionDoc::nodes_in(sync.doc());
+        let nodes = match by.manifest_op {
+            Some(change) => change.applied_to(before),
+            None => before,
+        };
         Some(ListBaseline {
             kb: kb.to_string(),
-            nodes: KbCollectionDoc::nodes_in(sync.doc()),
+            nodes,
         })
     }
 
-    /// The refusal for a write that left the collection as `after`, if it
-    /// changed the node list `base` held.
+    /// The refusal for a write that left the collection as `after`, if its
+    /// node list is not the one `base` expects.
     pub(super) fn list_refusal(
         base: Option<ListBaseline>,
         after: &TextSync,

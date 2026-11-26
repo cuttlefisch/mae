@@ -115,9 +115,31 @@ pub struct Writer<'a> {
     /// A verified signer. Never set from an unverified header.
     pub signer: Option<&'a str>,
     /// The write is the daemon's own update for a VERIFIED signed manifest op
-    /// (ADR-036 Amendment 2, G1), so it may change a KB's node list while
-    /// `require_signed_content_ops` is on. Never set anywhere else.
-    pub manifest_op: bool,
+    /// (ADR-036 Amendment 2, G1): the one change to a KB's node list it may
+    /// make while `require_signed_content_ops` is on. Never set anywhere else.
+    pub manifest_op: Option<ManifestChange<'a>>,
+}
+
+/// The node-list change a verified manifest op signed: `title` for an add,
+/// `None` for a removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManifestChange<'a> {
+    pub node_id: &'a str,
+    pub title: Option<&'a str>,
+}
+
+impl ManifestChange<'_> {
+    /// `nodes` with this change made.
+    pub(crate) fn applied_to(
+        &self,
+        mut nodes: std::collections::BTreeMap<String, String>,
+    ) -> std::collections::BTreeMap<String, String> {
+        match self.title {
+            Some(t) => nodes.insert(self.node_id.to_string(), t.to_string()),
+            None => nodes.remove(self.node_id),
+        };
+        nodes
+    }
 }
 
 impl<'a> From<Attribution<'a>> for Writer<'a> {
@@ -125,7 +147,7 @@ impl<'a> From<Attribution<'a>> for Writer<'a> {
         Writer {
             by,
             signer: None,
-            manifest_op: false,
+            manifest_op: None,
         }
     }
 }
@@ -135,28 +157,29 @@ impl<'a> Writer<'a> {
         Writer {
             by,
             signer: signer.filter(|s| !s.is_empty()),
-            manifest_op: false,
+            manifest_op: None,
         }
     }
 
-    /// The daemon's update for a manifest op whose signature by `author` it
-    /// VERIFIED (`verify_manifest_op` returned the author). Call it nowhere else.
-    pub fn manifest_op(by: Attribution<'a>, author: &'a str) -> Self {
+    /// The daemon's update for `change`, a manifest op whose signature by
+    /// `author` it VERIFIED (`verify_manifest_op` returned the author). Call it
+    /// nowhere else.
+    pub fn manifest_op(by: Attribution<'a>, author: &'a str, change: ManifestChange<'a>) -> Self {
         Writer {
-            manifest_op: true,
+            manifest_op: Some(change),
             ..Writer::signed(by, Some(author))
         }
     }
 
-    /// ADR-036 Amendment 2 (G3): whether this write must leave a KB's node list
-    /// as it was once the hub requires signed ops. A session's own write must;
-    /// the daemon's update for a verified manifest op need not. A mesh relay
-    /// (#727 part 3) and the daemon acting for no session are not covered.
-    pub(crate) fn keeps_node_list(&self) -> bool {
+    /// ADR-036 Amendment 2 (G3): whether the hub guards this write's change to
+    /// a KB's node list once it requires signed ops: a session's own write,
+    /// which may change it by its verified manifest op's change only. A mesh
+    /// relay (#727 part 3) and the daemon acting for no session are not.
+    pub(crate) fn guards_node_list(&self) -> bool {
         matches!(
             self.by,
             Attribution::Principal(_) | Attribution::Unauthenticated
-        ) && !self.manifest_op
+        )
     }
 
     /// Every `(kind, editor)` this write is recorded under. A relay whose

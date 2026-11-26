@@ -367,7 +367,11 @@ missing, and a later write integrates it, so a change can land in a write that d
 The test `a_node_list_change_held_pending_is_refused_when_it_lands` sends exactly that pair.
 
 **Who.** A session's write, authenticated or not. The daemon's own update for a verified G1 op is
-marked as such (`Writer::manifest_op`) and may change the list. Two writers stay outside G3. A mesh
+marked with the change that was signed (`Writer::manifest_op`). It may change the list by exactly
+that change and nothing else. The second review found the first fix exempted that update entirely.
+An exempt update would also land any raw change held pending on the origin the update creates (an
+overwrite of the same node's entry, say), so a signed add could carry an unsigned retitle with it.
+Two writers stay outside G3. A mesh
 relay stays with part 3, because a relayed change carries no manifest signature to check. The daemon
 acting for no session (seed, migration, the operator's control socket) stays outside because it is
 the operator.
@@ -405,4 +409,6 @@ both is the epoch.
   is refused; at the store, a session's add, removal or retitle is refused on apply and on replace,
   the same update as a verified manifest op lands, and a mesh relay and the daemon itself are not
   guarded.
+- A manifest-op write that makes more than its signed change is refused, and so is one that releases
+  a held raw change.
 - The editor's network task sends a signed header on both methods, and the daemon accepts it.

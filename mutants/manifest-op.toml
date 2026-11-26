@@ -91,15 +91,26 @@ find = '''        self.refuse_replacing_list(kb, &by, state_before.as_deref(), &
 replace = '''        let _ = (&by, &probe);'''
 
 [[mutant]]
-id = "manifest-op/manifest-flag-ignored"
+id = "manifest-op/manifest-change-ignored"
 runner = "daemon"
 targets = ["--lib"]
 filter = "test(with_the_switch_on_only_a_manifest_op_changes_the_list)"
-ref = "G3: a verified manifest op's update may change the list"
+ref = "G3: a verified manifest op's update may make its change"
 [[mutant.edit]]
-file = "daemon/src/doc_editors.rs"
-find = '''        ) && !self.manifest_op'''
-replace = '''        )'''
+file = "daemon/src/doc_store_node_list_guard.rs"
+find = '''            Some(change) => change.applied_to(before),'''
+replace = '''            Some(_) => before,'''
+
+[[mutant]]
+id = "manifest-op/manifest-write-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_change_released_by_a_manifest_op_write_is_refused)"
+ref = "G3: a manifest-op write makes only its signed change (second review)"
+[[mutant.edit]]
+file = "daemon/src/doc_store_node_list_guard.rs"
+find = '''        if !self.content_op_policy().require_signed(Transport::Hub) || !by.guards_node_list() {'''
+replace = '''        if !self.content_op_policy().require_signed(Transport::Hub) || !by.guards_node_list() || by.manifest_op.is_some() {'''
 
 [[mutant]]
 id = "manifest-op/signed-change-applied-as-session"
@@ -109,8 +120,8 @@ filter = "test(with_the_switch_on_a_node_list_change_must_be_signed)"
 ref = "G1 then G3: the handler applies a verified op as a manifest op"
 [[mutant.edit]]
 file = "daemon/src/collab_handler/kb_content.rs"
-find = '''        Some(author) => crate::doc_editors::Writer::manifest_op(who.1, author),'''
-replace = '''        Some(_) => crate::doc_editors::Writer::from(who.1),'''
+find = '''            crate::doc_editors::Writer::manifest_op(who.1, author, change)'''
+replace = '''            { let _ = change; crate::doc_editors::Writer::signed(who.1, Some(author)) }'''
 
 [[mutant]]
 id = "manifest-op/editor-signs-removal-title"
