@@ -110,7 +110,7 @@ ref = "G1 then G3: the handler applies a verified op as a manifest op"
 [[mutant.edit]]
 file = "daemon/src/collab_handler/kb_content.rs"
 find = '''        Some(author) => crate::doc_editors::Writer::manifest_op(who.1, author),'''
-replace = '''        Some(_) => who.1.into(),'''
+replace = '''        Some(_) => crate::doc_editors::Writer::from(who.1),'''
 
 [[mutant]]
 id = "manifest-op/editor-signs-removal-title"
