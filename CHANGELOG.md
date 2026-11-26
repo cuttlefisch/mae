@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.208] - 2026-11-26
+
+
+
+
+### Features
+
+- *(daemon)* Mae-daemon kb import, signed history into a KB (ADR-113 E4) ([6c6d1ab](https://github.com/cuttlefisch/mae/commit/6c6d1ab6c080fcda9ae2512e56a224b069778d8a))
+
+### Bug Fixes
+
+- *(import)* Review findings — ended windows, rev numbers, one code per import, the author window, plain files ([0ae122d](https://github.com/cuttlefisch/mae/commit/0ae122da51ed3c8d93267e732b9a4111ca5e1283))
+
+### Testing
+
+- *(import)* An in-force revision that is not the last, with no ended_at, is refused ([a88e353](https://github.com/cuttlefisch/mae/commit/a88e35383d462a2ab094f1c26c321f91bd16f4d5))
+
 ## [0.14.207] - 2026-11-26
 
 
@@ -28,6 +45,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.206 ([3992caf](https://github.com/cuttlefisch/mae/commit/3992caf6e5741712f32fc3f3ec39ab295414ea2d))
+- Bump version to 0.14.207 ([002473f](https://github.com/cuttlefisch/mae/commit/002473f24bfe3572e04588b2cb0c6abe55a2a486))
 
 ## [0.14.205] - 2026-11-26
 
