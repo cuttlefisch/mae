@@ -258,6 +258,15 @@ async fn an_import_with_a_wrong_file_or_order_is_refused() {
             edit(&|i| i["pages"][0]["revisions"][1]["rev"] = json!(0)),
             "invalid_params",
         ),
+        // In force but not last, and no ended_at: only the order rule refuses it.
+        (
+            edit(&|i| {
+                let r0 = &mut i["pages"][0]["revisions"][0];
+                r0["state"] = json!("in_force");
+                r0.as_object_mut().unwrap().remove("ended_at");
+            }),
+            "invalid_params",
+        ),
         (
             edit(&|i| i["pages"][0]["revisions"][0]["approved_by_name"] = json!("  ")),
             "invalid_params",
