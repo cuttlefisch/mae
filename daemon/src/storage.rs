@@ -74,6 +74,13 @@ pub enum StorageError {
         kb_id: String,
         nodes: Vec<String>,
     },
+    /// A session's write to `kbc:{kb_id}` would change the KB's node list while
+    /// the hub requires signed ops: the node list changes only through a signed
+    /// manifest op (ADR-036 Amendment 2, G3). Refused whole, before it is
+    /// logged. See `doc_store_node_list_guard`.
+    UnsignedNodeListChange {
+        kb_id: String,
+    },
 }
 
 /// What a refused switch to E2E would have left readable.
@@ -105,6 +112,12 @@ impl std::fmt::Display for StorageError {
                 f,
                 "KB '{kb_id}': a node could not be removed: whether it holds a \
                  publication-review revision could not be checked"
+            ),
+            Self::UnsignedNodeListChange { kb_id } => write!(
+                f,
+                "a raw write to KB '{kb_id}''s collection may not change its node list: add or \
+                 remove a node with kb/collection_node_add or kb/collection_node_remove and a \
+                 signed manifest op (ADR-036 Amendment 2)"
             ),
             Self::NodeHasRevisions { kb_id, nodes } => write!(
                 f,

@@ -560,6 +560,10 @@
           "kind": "mod"
         },
         {
+          "name": "manifest_op",
+          "kind": "mod"
+        },
+        {
           "name": "member",
           "kind": "mod"
         },

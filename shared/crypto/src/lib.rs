@@ -23,6 +23,7 @@ pub mod backup;
 pub mod content_crypto;
 pub mod content_op;
 pub mod identity_challenge;
+pub mod manifest_op;
 pub mod member;
 pub mod rng;
 
