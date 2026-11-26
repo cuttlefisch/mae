@@ -1,0 +1,102 @@
+# ADR-036 Amendment 2 (#727 part 2): signed changes to a KB's node list.
+# One mutant per guard, each named for the test that must catch it.
+
+[[mutant]]
+id = "manifest-op/canonical-field-dropped"
+runner = "editor"
+targets = ["-p", "mae-crypto", "--lib"]
+filter = "test(the_canonical_bytes_and_signature_are_pinned)"
+ref = "G1: the canonical message"
+[[mutant.edit]]
+file = "shared/crypto/src/manifest_op.rs"
+find = '''            &self.title,
+'''
+replace = ''''''
+
+[[mutant]]
+id = "manifest-op/signature-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_signed_change_must_be_the_sessions_exact_and_current)"
+ref = "G1: the signature verifies"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/content_verify.rs"
+find = '''    if !op.verify(&sig, &pubkey) {'''
+replace = '''    if op.verify(&[], &pubkey) {'''
+
+[[mutant]]
+id = "manifest-op/another-sessions-op"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_signed_change_must_be_the_sessions_exact_and_current)"
+ref = "G1, F4: a session sends only its own ops"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/content_verify.rs"
+find = '''        if principal != op.author {'''
+replace = '''        if principal.is_empty() {'''
+
+[[mutant]]
+id = "manifest-op/stale-epoch-admitted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_signed_change_must_be_the_sessions_exact_and_current)"
+ref = "G1, ADR-023: the epoch fence"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/content_verify.rs"
+find = '''    if member.epoch != op.epoch {'''
+replace = '''    if member.epoch != member.epoch {'''
+
+[[mutant]]
+id = "manifest-op/unsigned-admitted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_a_node_list_change_must_be_signed)"
+ref = "G2: the switch refuses an unsigned change"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/content_verify.rs"
+find = '''        return accept_unsigned(doc_store, (kb_id, node_id), sender.transport).map(|_| None);'''
+replace = '''        return Ok(None);'''
+
+[[mutant]]
+id = "manifest-op/raw-list-change-allowed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
+ref = "G3: a raw write may not change the node list"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/content_verify.rs"
+find = '''    if list(&before) == list(&after) {'''
+replace = '''    if list(&before) != list(&after) || true {'''
+
+[[mutant]]
+id = "manifest-op/raw-guard-off-on-sync-update"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
+ref = "G3 on sync/update"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/sync_methods.rs"
+find = '''        if let Err(e) = raw(doc_store, &kb_id, &update_bytes, transport).await {'''
+replace = '''        if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
+
+[[mutant]]
+id = "manifest-op/raw-guard-off-on-collection-op"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
+ref = "G3 on kb/collection_op"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_content.rs"
+find = '''    if let Err(e) = raw(doc_store, &kb_id, &update, transport).await {'''
+replace = '''    if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
+
+[[mutant]]
+id = "manifest-op/editor-signs-removal-title"
+runner = "editor"
+targets = ["-p", "mae", "--bin", "mae"]
+filter = "test(the_editors_node_list_requests_are_signed_over_what_they_ask)"
+ref = "G1: a removal signs no title"
+[[mutant.edit]]
+file = "crates/mae/src/collab_bridge/mod.rs"
+find = '''            false => (ManifestAction::Remove, ""),'''
+replace = '''            false => (ManifestAction::Remove, title),'''

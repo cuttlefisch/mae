@@ -312,8 +312,9 @@ that change itself, recorded only against the session. This amendment closes it 
 - `kb/collection_node_add` and `kb/collection_node_remove`, at `Edit`: the native editor's only way
   to create or delete a node. The daemon builds the collection update, so there are no client bytes
   to sign.
-- `kb/collection_op` and a raw `sync/update` or `sync/share` of `kbc:<kb>`: owner only (`Manage`,
-  `deny_collection_smuggling`), plus a member's own identity ops (ADR-040). Their membership and
+- `kb/collection_op` and a raw `sync/update` of `kbc:<kb>`: owner only (`Manage`,
+  `deny_collection_smuggling`), plus a member's own identity ops (ADR-040). `sync/share` never
+  reaches a KB document (`method_authz` scopes it to non-KB documents). Their membership and
   encryption changes are already signed op-log entries every peer verifies; nothing signs a node-list
   change made through them.
 - `kb/share` (the owner's own first share, which creates the KB) and the mesh dialer's pushed
@@ -350,8 +351,8 @@ any setting.
 
 ### G3. Raw collection writes may not change the node list once the switch is on
 
-With the switch on, a raw collection write (`kb/collection_op`, `sync/update`, `sync/share` of
-`kbc:<kb>`) that adds, removes or retitles a node is refused `signature_required`: the node list
+With the switch on, a raw collection write (`kb/collection_op`, `sync/update` of `kbc:<kb>`) that
+adds, removes or retitles a node is refused `signature_required`: the node list
 changes only through G1, so every change to it has an author's signature. The owner's signed
 membership and encryption ops through `kb/collection_op` are unaffected. The check compares the node
 list before and after the write, as the E7 delete guard does, in the store, under the same gate.
@@ -363,8 +364,10 @@ existing list and stays as it is (F3's open item); the mesh join and push stay w
 - The native editor signs with its identity key (D2), in the network task that sends the request.
 - mae-crypto gains the canonical bytes for both kinds of signer. A WASM `sign_manifest_op` is not
   built until a browser client needs one; mae-web does not write the node list.
-- The browser client's relay refuses methods its editor never sends (mae-web, agreed 2026-11-26), so
-  a same-origin script cannot reach `kb/collection_node_*` through it even before the switch is on.
+- The browser client's relay will refuse methods its editor never sends, closing the socket `4405`
+  (mae-web, agreed 2026-11-26, scheduled after browser signing), so a same-origin script cannot reach
+  `kb/collection_node_*` through it even before the switch is on. Until then the daemon's role check
+  and, once the switch is on, G2 are what refuse it.
 
 ### G5. Tests
 

@@ -831,6 +831,12 @@ pub(super) async fn handle_kb_collection_op(
     // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
     // node doc under #171.) Additive flag — an old daemon ignores it.
     let scrub = params["scrub"].as_bool().unwrap_or(false);
+    // ADR-036 Amendment 2 (G3): the node list changes only through a signed
+    // manifest op once the switch is on.
+    let raw = super::content_verify::refuse_raw_node_list_change;
+    if let Err(e) = raw(doc_store, &kb_id, &update, transport).await {
+        return JsonRpcResponse::error(id, e.into());
+    }
     // A switch to E2E over plaintext is refused inside the write itself, on
     // every path (`doc_store_e2e_switch`); here it only keeps its kind.
     match super::persist_and_broadcast_collection_typed(
@@ -939,6 +945,20 @@ pub(super) async fn handle_kb_collection_node_add_remove(
         Ok(c) => c,
         Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
+    // ADR-036 Amendment 2 (G1, G2): the change carries its author's signature,
+    // refused unsigned once `require_signed_content_ops` is on. A removal
+    // signs no title.
+    let (action, signed_title) = match add {
+        true => (mae_sync::manifest_op::ManifestAction::Add, title),
+        false => (mae_sync::manifest_op::ManifestAction::Remove, ""),
+    };
+    let sender = super::content_verify::OpSender::session(auth_principal, transport);
+    let change = (kb_id.as_str(), node_id.as_str(), action, signed_title);
+    if let Err(r) =
+        super::content_verify::verify_manifest_op(doc_store, change, params, sender, &coll).await
+    {
+        return JsonRpcResponse::error(id, r.into());
+    }
     let update = if add {
         coll.add_node(&node_id, title)
     } else {

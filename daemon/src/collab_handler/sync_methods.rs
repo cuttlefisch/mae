@@ -176,6 +176,14 @@ pub(super) async fn handle_sync_update(
         Ok(b) => b,
         Err(e) => return JsonRpcResponse::error(id, e),
     };
+    if let Some(mae_sync::DocAddress::KbCollection { kb_id }) =
+        mae_sync::DocAddress::parse(&doc_name)
+    {
+        let raw = super::content_verify::refuse_raw_node_list_change;
+        if let Err(e) = raw(doc_store, &kb_id, &update_bytes, transport).await {
+            return JsonRpcResponse::error(id, e.into());
+        }
+    }
     let client_id = params["client_id"].as_u64();
     let by = Attribution::session(auth_principal, transport);
 

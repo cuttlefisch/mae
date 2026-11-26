@@ -543,11 +543,13 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
         } else {
             title
         };
+        let epoch = editor.collab.kb_epochs.get(&kb_id).copied().unwrap_or(0);
         let cmd = CollabCommand::KbCollectionNode {
             kb_id,
             node_id,
             title,
             add,
+            epoch,
         };
         if collab_tx.try_send(cmd).is_err() {
             warn!("collab command channel full — KB manifest op dropped");

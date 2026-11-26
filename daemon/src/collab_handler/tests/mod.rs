@@ -57,6 +57,7 @@ mod collab_handler_kb_share_ownership_tests;
 mod collab_handler_keyauth_principal_tests;
 mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;
+mod collab_handler_manifest_op_tests;
 mod collab_handler_member_access_tests;
 mod collab_handler_membership_join_tests;
 mod collab_handler_method_routing_tests;
