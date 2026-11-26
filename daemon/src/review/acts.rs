@@ -571,7 +571,7 @@ async fn completing_set(
     let others_approved = members
         .iter()
         .all(|m| m.revision_id == rev.revision_id || m.state == "approved");
-    let by_act = members.iter().all(|m| m.approval_record != "signed_pdf");
+    let by_act = !members.iter().any(|m| m.approval_record == "signed_pdf");
     let completes = req.is_some_and(|q| q.in_force_on_approval) && others_approved && by_act;
     Ok(completes.then_some(members))
 }

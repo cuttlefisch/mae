@@ -99,6 +99,10 @@ ref = "E3, O19: no entry into force without the PDF"
 file = "daemon/src/review/acts.rs"
 find = '''    let by_act = members.iter().all(|m| m.approval_record != "signed_pdf");'''
 replace = '''    let by_act = true;'''
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let by_act = !members.iter().any(|m| m.approval_record == "signed_pdf");'''
+replace = '''    let by_act = true;'''
 
 [[mutant]]
 id = "daemon-review-pr5/signed-pdf-not-awaited-by-act"
