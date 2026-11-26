@@ -23,9 +23,9 @@ a deliberately minimal one.
 
 | Group | Roles | Notes |
 |---|---|---|
-| `ui` | `background`, `panel`, `foreground`, `muted`, `link`, `accent`, `mark` | The page. Text roles reach 4.5:1 on `background` and `panel`; `foreground` reaches 4.5:1 on `mark` (a translucent veil); `background` reaches 4.5:1 on `link` (text on accent fills). |
+| `ui` | `background`, `panel`, `foreground`, `muted`, `link`, `accent`, `mark` | The page. In the default palette, text roles reach 4.5:1 on `background` and `panel`, `foreground` reaches 4.5:1 on `mark` (a translucent veil), and `background` reaches 4.5:1 on `link` (text on accent fills). In every palette, `link` reaches 4.5:1 on `background` and `panel`. Other palettes are the reader's choice and are not held to the rest (owner, 2026-11-13): `muted`, for one, falls below 3:1 in some light modes. |
 | `gallery` | `title` | A title on a fixed dark scrim (`#000000bf`): the same value in both modes. |
-| `diagram` | `ink`, `background`, `border`, nodes, lines, `highlight`, `blocked`, seven zones | Graphviz diagrams and maps: ink 4.5:1 and border 3:1 on the background; map roles pairwise distinguishable. |
+| `diagram` | `ink`, `background`, `border`, nodes, lines, `highlight`, `blocked`, seven zones | Graphviz diagrams and maps: in the default palette, ink 4.5:1 and border 3:1 on the background; in every palette, map roles pairwise distinguishable. |
 | `graph` | `ink`, `accent`, `neighbour`, `visited`, `edge` | The chord graph: 3:1 on the page, inside the graph's chroma/lightness band, ΔE ≥ 15 apart. Written as `--chord-<role>-light/-dark`. |
 | `code` | `text`, `background` and nine token classes | Code blocks: each role 4.5:1 (default) or 3:1 (others) on the block background. |
 

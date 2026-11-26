@@ -259,6 +259,7 @@ self_issued_token_ttl_secs = 3600               # default lifetime of `token min
 self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` refuses to exceed
 # kb_query_max_scan_nodes = 500                 # search/agenda/health scan cap — see below
 # site_enabled = true                          # the live KB site, GET /kb/<kb-id>/<id> (ADR-119)
+# site_cache_kbs = 8                           # KBs whose derived site is held; 0 = derive per request
 # attachments_enabled = true                   # a KB's attachments (ADR-115), below
 # max_attachment_bytes = 10485760              # largest upload; refused before its body is read
 # max_attachment_pixels = 40000000             # an image's width x height, checked before decoding
@@ -291,6 +292,11 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `health`) examines at most `kb_query_max_scan_nodes` nodes and answers `"truncated": true` (plus
   the KB's `"total"`) when that cap, rather than the caller's result limit, ended the scan. A
   `RemoteHub` client reports such a result as partial. Raise the cap for KBs larger than it.
+- **The same caps bound the live site.** A KB with more than `kb_query_max_scan_nodes` nodes, or one
+  node over `kb_query_max_body_bytes`, is not served by the live site (ADR-119): every page answers
+  `503` naming both settings. The site derives a KB once per change and holds it for later requests
+  (`site_cache_kbs` KBs at a time), so a raised cap costs one derivation per change, not one per
+  page.
 - **`kb/query.my_kbs` lists the caller's own KBs.** It takes no `kb_id` and answers
   `{"kbs": [{"kb_id", "title", "role", "encryption"}]}`, sorted by `kb_id`: every KB on this daemon
   the token's principal may read as a member. `role` is `owner`, `editor` or `viewer`, the same

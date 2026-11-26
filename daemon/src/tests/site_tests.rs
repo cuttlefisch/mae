@@ -11,11 +11,11 @@ use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, Role, TransportPolicy};
 
 use super::kb_query_tests::{fresh_doc_store, seed_e2e_kb};
 
-const BY: mae_daemon::doc_editors::Attribution<'static> =
+pub(super) const BY: mae_daemon::doc_editors::Attribution<'static> =
     mae_daemon::doc_editors::Attribution::Principal("test-editor");
-const READER: &str = "oauth:reader@example.com";
-const STRANGER: &str = "oauth:stranger@example.com";
-const LIMITS: site::SiteLimits = site::SiteLimits {
+pub(super) const READER: &str = "oauth:reader@example.com";
+pub(super) const STRANGER: &str = "oauth:stranger@example.com";
+pub(super) const LIMITS: site::SiteLimits = site::SiteLimits {
     max_scan_nodes: 500,
     max_body_bytes: 65_536,
 };
@@ -28,7 +28,7 @@ fn nodes(n: usize) -> site::SiteLimits {
 }
 
 /// A plaintext KB with `READER` as a viewer and these `(id, title, body)` nodes.
-async fn seed(doc_store: &DocStore, kb_id: &str, nodes: &[(&str, &str, &str)]) {
+pub(super) async fn seed(doc_store: &DocStore, kb_id: &str, nodes: &[(&str, &str, &str)]) {
     let owner = Arc::new(Identity::generate("owner"));
     doc_store.set_signer(Arc::clone(&owner));
     let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
@@ -54,7 +54,7 @@ async fn seed(doc_store: &DocStore, kb_id: &str, nodes: &[(&str, &str, &str)]) {
     }
 }
 
-async fn kb() -> Arc<DocStore> {
+pub(super) async fn kb() -> Arc<DocStore> {
     let store = fresh_doc_store().await;
     seed(
         &store,

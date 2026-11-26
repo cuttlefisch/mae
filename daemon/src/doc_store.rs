@@ -130,6 +130,13 @@ pub struct DocStore {
     /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
     /// Absent ⇒ no projector wired (e.g. a pure relay); emits are dropped.
     change_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Per-KB content generation: moves after every committed write to a KB's
+    /// collection or node documents (and a deletion of one), so a reader that
+    /// took it BEFORE reading content can tell whether what it read is still
+    /// current. The live site's derivation cache keys on it (`site_cache`).
+    kb_generations: std::sync::Mutex<HashMap<String, u64>>,
+    /// The live site's derived KBs (ADR-119 D6, first step).
+    site_cache: crate::site_cache::SiteCache,
     /// Per-KB LOCAL self-protection blocklist (ADR-039 A2, #162): principals this
     /// daemon refuses to trust, enforced at EVERY membership-derivation site via
     /// [`DocStore::membership_view_for`]. Purely local — NEVER propagated to peers and
@@ -359,6 +366,8 @@ impl DocStore {
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
+            kb_generations: std::sync::Mutex::new(HashMap::new()),
+            site_cache: crate::site_cache::SiteCache::default(),
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
             authorized_keys_path: std::sync::OnceLock::new(),
@@ -875,6 +884,40 @@ impl DocStore {
                 let _ = tx.send(doc_name.to_string());
             }
         }
+    }
+
+    /// After a committed write to `doc_name`: if it is one of a KB's documents,
+    /// move that KB's generation. Called after the write is visible, so a
+    /// generation read before a read of content never names newer content
+    /// than it read (a race costs a needless re-read, never a stale one), and
+    /// before any later step that can fail (a compaction), so a failure there
+    /// never leaves changed content under an unmoved generation.
+    fn note_kb_write(&self, doc_name: &str) {
+        let kb = match mae_sync::DocAddress::parse(doc_name) {
+            Some(mae_sync::DocAddress::KbCollection { kb_id }) => kb_id,
+            Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
+            _ => return,
+        };
+        let mut g = self
+            .kb_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *g.entry(kb).or_insert(0) += 1;
+    }
+
+    /// KB `kb_id`'s content generation ([`Self::note_kb_write`]). Take it
+    /// BEFORE reading the content it vouches for.
+    pub fn kb_generation(&self, kb_id: &str) -> u64 {
+        let g = self
+            .kb_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        g.get(kb_id).copied().unwrap_or(0)
+    }
+
+    /// The live site's derivation cache.
+    pub fn site_cache(&self) -> &crate::site_cache::SiteCache {
+        &self.site_cache
     }
 
     /// The daemon's signing identity, if running in key-auth mode.
@@ -1454,6 +1497,7 @@ impl DocStore {
             (forced || doc.update_count >= self.compact_threshold, wal_id)
         };
         drop((gate, switch)); // before compacting, which takes the gate again
+        self.note_kb_write(doc_name); // committed: before anything below can fail
 
         if should_compact {
             self.compact(doc_name).await?;
@@ -1518,6 +1562,7 @@ impl DocStore {
         }
         // Remove from persistent storage.
         self.storage.delete_document(doc_name).await?;
+        self.note_kb_write(doc_name);
         self.forget_ephemeral_editors(doc_name).await;
         info!(doc = doc_name, "document deleted");
         Ok(())
@@ -1858,6 +1903,19 @@ impl DocStore {
         self.replace_doc(doc_name, update, by.into(), true).await
     }
 
+    /// The first destructive step of a replace: the old document leaves
+    /// storage and memory. From here it has changed whatever fails after, so
+    /// its KB's generation moves now (and again once the new one is in place).
+    async fn remove_for_replace(&self, doc_name: &str) {
+        // Delete old doc from storage. Log errors — silent swallow could
+        // lead to corrupted recovery if WAL append succeeds but old data remains.
+        if let Err(e) = self.storage.delete_document(doc_name).await {
+            warn!(doc = doc_name, error = %e, "share_doc: failed to delete old document from storage");
+        }
+        self.docs.write().await.remove(doc_name);
+        self.note_kb_write(doc_name);
+    }
+
     async fn replace_doc(
         &self,
         doc_name: &str,
@@ -1901,17 +1959,7 @@ impl DocStore {
         #[cfg(test)]
         Self::pause_at(&self.pauses.replace).await;
 
-        // Delete old doc from storage. Log errors — silent swallow could
-        // lead to corrupted recovery if WAL append succeeds but old data remains.
-        if let Err(e) = self.storage.delete_document(doc_name).await {
-            warn!(doc = doc_name, error = %e, "share_doc: failed to delete old document from storage");
-        }
-
-        // Remove old in-memory entry.
-        {
-            let mut docs = self.docs.write().await;
-            docs.remove(doc_name);
-        }
+        self.remove_for_replace(doc_name).await;
 
         // WAL append first (durability), with the editor record (ADR-113 D3).
         let mut stamp = self.stamp(by);
@@ -1943,6 +1991,7 @@ impl DocStore {
         );
 
         // Notify the projector (ADR-029 B2).
+        self.note_kb_write(doc_name);
         self.emit_change(doc_name);
 
         Ok(ApplyResult {

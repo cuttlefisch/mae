@@ -690,6 +690,9 @@ async fn spawn_oauth_listener(
     if let (Some(routes), Some(store)) = (blobs.as_ref(), doc_store.as_ref()) {
         store.set_blob_store(Arc::clone(&routes.store));
     }
+    if let Some(store) = doc_store.as_ref() {
+        store.site_cache().set_capacity(config.oauth.site_cache_kbs);
+    }
     let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
     {
         Ok(l) => l

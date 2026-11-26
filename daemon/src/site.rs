@@ -16,20 +16,23 @@
 //! node waits for a derivation, while a non-member is refused at the gate. It
 //! tells a caller only whether THEY may read the KB, which they know anyway.
 //!
-//! This first slice derives the KB per request, bounded (D21) by
-//! [`SiteLimits`] and run off the async workers (`spawn_blocking`). The derivation cache and incremental re-derivation (D6) come with the
-//! change index (ADR-074 Amendment 1).
+//! A KB is derived whole, bounded (D21) by [`SiteLimits`] and off the async
+//! workers (`spawn_blocking`), once per change: later requests are answered
+//! from the derivation cache (`site_cache`, D6's first step). The read gate
+//! still runs on every request, before the cache is asked. Incremental
+//! re-derivation per node is the rest of D6.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::doc_store::DocStore;
 use crate::kb_query;
+use crate::site_cache::{DerivationKey, Derived};
 use crate::site_components::{KbComponents, Slots};
 use mae_org::{AttachmentState, ResolvedAttachment};
 use mae_site::components::{PageData, Slot};
 use mae_site::{derive_with, Addressing, SourcePage};
-use mae_sync::kb::{AttachmentRef, Encryption, KbNodeDoc};
+use mae_sync::kb::{AttachmentRef, Encryption, KbCollectionDoc, KbNodeDoc};
 
 /// What the route answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,32 +198,98 @@ pub async fn view(
     if matches!(view, View::Site(_)) && components.is_none() {
         return SitePage::NotFound;
     }
-    let (sources, addressing, may_copy) =
-        match readable_sources(doc_store, kb_id, principal, limits).await {
-            Ok(v) => v,
-            Err(refused) => return refused.into(),
-        };
+    let Ok(addressing) = Addressing::live(kb_id) else {
+        return SitePage::NotFound;
+    };
+    // Before any read: what is read below is at least this new (`site_cache`).
+    let key = derivation_key(doc_store, kb_id, limits, opts);
+    let (coll, may_copy) = match gated(doc_store, kb_id, principal).await {
+        Ok(v) => v,
+        Err(refused) => return refused.into(),
+    };
+    let derived = doc_store
+        .site_cache()
+        .get_or_derive(kb_id, key, || {
+            derive_kb(doc_store, kb_id, coll, (addressing.clone(), limits), opts)
+        })
+        .await;
+    match *derived {
+        Derived::Site(_) => {}
+        Derived::TooLarge => return SitePage::TooLarge,
+        Derived::Failed => return SitePage::NotFound,
+    }
     // Rendering is CPU work: off the async workers.
     let view = view.clone();
-    let opts = opts.clone();
-    let kb_id = kb_id.to_string();
-    let answered = tokio::task::spawn_blocking(move || {
-        let site = derive_with(&sources, &addressing, &opts);
-        // P-108: never fatal, but said. Once per derivation, which is per
-        // request until the derivation cache (D6) lands.
-        for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
-            tracing::info!("{line}");
-        }
-        answer(&site, &addressing, view, may_copy, components.as_ref())
+    let answered = tokio::task::spawn_blocking(move || match &*derived {
+        Derived::Site(site) => answer(site, &addressing, view, may_copy, components.as_ref()),
+        Derived::TooLarge => SitePage::TooLarge,
+        Derived::Failed => SitePage::NotFound,
     })
     .await;
     answered.unwrap_or(SitePage::NotFound)
+}
+
+/// What a derivation of `kb_id` reads, besides its content (`site_cache`).
+fn derivation_key(
+    doc_store: &DocStore,
+    kb_id: &str,
+    limits: SiteLimits,
+    opts: &mae_site::SiteOptions,
+) -> DerivationKey {
+    DerivationKey {
+        generation: doc_store.kb_generation(kb_id),
+        blob_changes: doc_store.blob_store().map_or(0, |b| b.changes()),
+        hidden_namespaces: opts.hidden_namespaces.clone(),
+        highlighted: opts.highlighter.is_some(),
+        max_scan_nodes: limits.max_scan_nodes,
+        max_body_bytes: limits.max_body_bytes,
+    }
+}
+
+/// Read and derive the whole of `kb_id` from `coll`: the cache's one way in.
+async fn derive_kb(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: KbCollectionDoc,
+    (addressing, limits): (Addressing, SiteLimits),
+    opts: &mae_site::SiteOptions,
+) -> Derived {
+    let sources = match readable_sources(doc_store, kb_id, &coll, limits).await {
+        Ok(sources) => sources,
+        Err(Refused::Unreadable) => return Derived::Failed,
+        Err(_) => return Derived::TooLarge,
+    };
+    let (opts, kb_id) = (opts.clone(), kb_id.to_string());
+    let started = std::time::Instant::now();
+    let derived = tokio::task::spawn_blocking(move || {
+        let site = derive_with(&sources, &addressing, &opts);
+        // P-108: never fatal, but said, once per derivation.
+        for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
+            tracing::info!("{line}");
+        }
+        (site, kb_id, sources.len())
+    })
+    .await;
+    match derived {
+        Ok((site, kb_id, pages)) => {
+            let ms = started.elapsed().as_millis();
+            tracing::info!(kb_id = %kb_id, pages, ms, "site: derived");
+            Derived::Site(site)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "site: derivation stopped");
+            Derived::Failed
+        }
+    }
 }
 
 /// Why [`readable_sources`] gave no sources: the answer it stands for.
 enum Refused {
     NotFound,
     TooLarge,
+    /// A listed node's document could not be read for a reason other than
+    /// its absence: the derivation fails, and is not held (`site_cache`).
+    Unreadable,
 }
 
 impl From<Refused> for SitePage {
@@ -228,22 +297,19 @@ impl From<Refused> for SitePage {
         match r {
             Refused::NotFound => SitePage::NotFound,
             Refused::TooLarge => SitePage::TooLarge,
+            Refused::Unreadable => SitePage::NotFound,
         }
     }
 }
 
-/// The KB's pages as sources, once the read gate admits `principal` and the
-/// KB is within `limits`, and whether `principal` may have the whole KB's
-/// content at once (D7, G2); otherwise the answer to give.
-async fn readable_sources(
+/// The KB's collection, once the read gate admits `principal` to a plaintext
+/// KB, and whether `principal` may have the whole KB's content at once (D7,
+/// G2); otherwise the answer to give. Every request, cached or not.
+async fn gated(
     doc_store: &DocStore,
     kb_id: &str,
     principal: Option<&str>,
-    limits: SiteLimits,
-) -> Result<(Vec<SourcePage>, Addressing, bool), Refused> {
-    let Ok(addressing) = Addressing::live(kb_id) else {
-        return Err(Refused::NotFound);
-    };
+) -> Result<(KbCollectionDoc, bool), Refused> {
     let Ok((coll, encryption)) = kb_query::load_gated(doc_store, kb_id, principal).await else {
         return Err(Refused::NotFound);
     };
@@ -251,6 +317,17 @@ async fn readable_sources(
         return Err(Refused::NotFound);
     }
     let may_copy = kb_query::may_copy_whole_kb(doc_store, kb_id, &coll, principal).await;
+    Ok((coll, may_copy))
+}
+
+/// The pages of `coll`, KB `kb_id`'s collection, as sources, when the KB is
+/// within `limits`.
+async fn readable_sources(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    limits: SiteLimits,
+) -> Result<Vec<SourcePage>, Refused> {
     let nodes = coll.list_nodes();
     if nodes.len() > limits.max_scan_nodes {
         return Err(Refused::TooLarge);
@@ -259,8 +336,15 @@ async fn readable_sources(
     let mut entries = Vec::with_capacity(nodes.len());
     for (node_id, _) in nodes {
         let name = mae_sync::kb_node_doc_name(kb_id, &node_id);
-        let Ok((state, _sv)) = doc_store.encode_state_and_sv(&name).await else {
-            continue;
+        // Absent is the KB's state, held like any other; any other read error
+        // may pass, so this derivation is not held.
+        let state = match doc_store.encode_state_and_sv(&name).await {
+            Ok((state, _sv)) => state,
+            Err(crate::storage::StorageError::DurableDocMissing(_)) => continue,
+            Err(e) => {
+                tracing::warn!(kb_id = %kb_id, node_id = %node_id, error = %e, "site: a node could not be read");
+                return Err(Refused::Unreadable);
+            }
         };
         let Ok(doc) = KbNodeDoc::from_bytes(&state) else {
             continue;
@@ -290,7 +374,7 @@ async fn readable_sources(
     for (source, states) in sources.iter_mut().zip(states) {
         source.attachments = states;
     }
-    Ok((sources, addressing, may_copy))
+    Ok(sources)
 }
 
 /// Each page's attachments as the page shows them (ADR-115 E3): a NAME whose

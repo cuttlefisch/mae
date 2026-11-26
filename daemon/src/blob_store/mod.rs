@@ -228,6 +228,10 @@ pub struct BlobStore {
     conn: Mutex<sqlite::Connection>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     faults: Option<FaultHook>,
+    /// Rows written or removed since the store opened: the live site's
+    /// derivation cache keys on it, since a page shows whether its
+    /// attachments resolve (`site_cache`).
+    changes: std::sync::atomic::AtomicU64,
 }
 
 /// Holds one KB's binding lock (D5): a commit, and P2's binds and sweep.
@@ -250,7 +254,18 @@ impl BlobStore {
             conn: Mutex::new(conn),
             locks: Mutex::new(HashMap::new()),
             faults: None,
+            changes: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// How many rows have been written or removed since the store opened.
+    pub fn changes(&self) -> u64 {
+        self.changes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn note_change(&self) {
+        self.changes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Install a fault hook (tests: the crash seam).
@@ -373,6 +388,7 @@ impl BlobStore {
             stored_at: now_unix(),
         };
         insert(&conn, kb_id, &meta, quota.map(|q| q.tenant.as_str()))?;
+        self.note_change();
         if self.fault(CommitStep::AfterRow) {
             return Err(BlobError::Interrupted(CommitStep::AfterRow));
         }
@@ -395,6 +411,7 @@ impl BlobStore {
             st.bind((2, sha256))?;
             while st.next()? != sqlite::State::Done {}
         }
+        self.note_change();
         match std::fs::remove_file(self.blob_path(kb_id, sha256)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),

@@ -27,6 +27,7 @@ pub mod rfc3339;
 pub mod seed;
 pub mod sign_in;
 pub mod site;
+pub mod site_cache;
 pub mod site_components;
 pub mod site_highlight;
 pub mod storage;
