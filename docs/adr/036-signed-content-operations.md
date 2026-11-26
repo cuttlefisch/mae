@@ -299,3 +299,81 @@ every path.
 - **A genesis authored after anchoring.** The warning fires when the anchor is recorded. A KB whose
   owner authors its genesis later moves to the log then, without a warning; `kb anchor` (show, or
   the no-argument listing) reports it.
+
+## Amendment 2 (2026-11-26): a change to a KB's node list is a signed op too
+
+Amendment 1 F3 left one write path without an author's signature: the node list of a KB's
+collection document (`kbc:<kb>`). The hub enforces signed content ops (#727 part 1, behind
+`require_signed_content_ops`), but any editor can still add or remove a node, and the daemon writes
+that change itself, recorded only against the session. This amendment closes it (#727 part 2).
+
+**What writes the node list today** (surveyed 2026-11-26):
+
+- `kb/collection_node_add` and `kb/collection_node_remove`, at `Edit`: the native editor's only way
+  to create or delete a node. The daemon builds the collection update, so there are no client bytes
+  to sign.
+- `kb/collection_op` and a raw `sync/update` or `sync/share` of `kbc:<kb>`: owner only (`Manage`,
+  `deny_collection_smuggling`), plus a member's own identity ops (ADR-040). Their membership and
+  encryption changes are already signed op-log entries every peer verifies; nothing signs a node-list
+  change made through them.
+- `kb/share` (the owner's own first share, which creates the KB) and the mesh dialer's pushed
+  collection (#727 part 3, after the pilot).
+- The browser client writes none of these. It never writes the collection document; a node's title
+  lives in its own node document, so a rename is a content op (mae-web, 2026-11-26).
+
+### G1. A node-list change carries a signed manifest op
+
+`kb/collection_node_add` and `kb/collection_node_remove` take the same header a content op carries
+(`author`, `author_pubkey`, `epoch`, `issued_at`, `sig`), over a new canonical message:
+
+```
+maemanifest/v1 \0 kb_id \0 node_id \0 action \0 title \0 author \0 epoch \0 issued_at \0
+```
+
+`action` is `add` or `remove`; `title` is empty for a removal. Fields are NUL-terminated exactly as
+D1's (empty or NUL-bearing ids refused), and a new domain tag, so a content-op signature can never be
+presented as a manifest op or the reverse. It lives in `mae_crypto::manifest_op` beside
+`content_op`, one encoding for every signer and the verifier.
+
+The hub verifies it as it verifies a content op, through the same steps: the key's fingerprint is
+the author, the signature holds, the author is a member with `Edit` at the op's epoch (the role the
+method already requires) under F2's membership source, the epoch fence, and F4: on a session the
+author is the session's principal. The daemon then builds and applies the collection update as it
+does today, and the editor record names the author.
+
+### G2. The switch covers it
+
+The same `require_signed_content_ops`. Off: an unsigned manifest op is accepted and counted with the
+unsigned content ops, so one number says whether every writer signs. On: refused
+`signature_required`, whatever the caller's role. A signed op that fails verification is refused at
+any setting.
+
+### G3. Raw collection writes may not change the node list once the switch is on
+
+With the switch on, a raw collection write (`kb/collection_op`, `sync/update`, `sync/share` of
+`kbc:<kb>`) that adds, removes or retitles a node is refused `signature_required`: the node list
+changes only through G1, so every change to it has an author's signature. The owner's signed
+membership and encryption ops through `kb/collection_op` are unaffected. The check compares the node
+list before and after the write, as the E7 delete guard does, in the store, under the same gate.
+`kb/share`, which creates the KB with its node list in the owner's own session, is not a change to an
+existing list and stays as it is (F3's open item); the mesh join and push stay with part 3.
+
+### G4. Signers
+
+- The native editor signs with its identity key (D2), in the network task that sends the request.
+- mae-crypto gains the canonical bytes for both kinds of signer. A WASM `sign_manifest_op` is not
+  built until a browser client needs one; mae-web does not write the node list.
+- The browser client's relay refuses methods its editor never sends (mae-web, agreed 2026-11-26), so
+  a same-origin script cannot reach `kb/collection_node_*` through it even before the switch is on.
+
+### G5. Tests
+
+- A signed add and remove by an editor apply, attributed to the author; the same op from another
+  session is `not_author`; a non-member's or a viewer's signed op is refused; a removed member's op is
+  fenced.
+- A content-op signature presented as a manifest op (and the reverse) fails; a changed `node_id`,
+  `action` or `title` fails.
+- With the switch off an unsigned call is accepted and counted; on, refused.
+- With the switch on, a raw collection write by the owner that adds, removes or retitles a node is
+  refused and changes nothing; one that only appends a signed membership op is accepted.
+- The editor's network task sends a signed header on both methods, and the daemon accepts it.
