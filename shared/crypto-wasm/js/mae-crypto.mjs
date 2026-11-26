@@ -31,6 +31,8 @@ const OPS = new Map([
   ['contentWrap', 16],
   ['contentUnwrap', 17],
   ['signOp', 18],
+  ['opCanonicalBytes', 19],
+  ['verifyOp', 20],
 ]);
 
 /**
@@ -206,6 +208,24 @@ export class MaeCrypto {
   // `params.content_header` of `sync/update`.
   signOp({ key, kb_id, node_id, base_sv, epoch, update, issued_at = nowSeconds() }) {
     return this.call('signOp', { key, kb_id, node_id, base_sv, epoch, issued_at, update });
+  }
+
+  // The exact bytes a content op signs (ADR-036 D1), for a key held OUTSIDE
+  // the module, such as a non-extractable WebCrypto Ed25519 key (ADR-098
+  // Amendment 2). The author is named by its public key; its fingerprint is
+  // derived, never claimed. Sign `canonical` (base64) with
+  // crypto.subtle.sign('Ed25519', key, bytes), then send the returned header
+  // fields (without `canonical`) plus `sig`, as signOp's result is sent.
+  opCanonicalBytes({ kb_id, node_id, base_sv, author_pubkey, epoch, update, issued_at = nowSeconds() }) {
+    return this.call('opCanonicalBytes', { kb_id, node_id, base_sv, author_pubkey, epoch, issued_at, update });
+  }
+
+  // Whether `sig` is the author's signature over the op, as the daemon checks
+  // it: `true` or `false`. A malformed request throws, as signOp's does.
+  verifyOp({ kb_id, node_id, base_sv, author_pubkey, epoch, update, issued_at, sig, author }) {
+    const req = { kb_id, node_id, base_sv, author_pubkey, epoch, issued_at, update, sig };
+    if (author !== undefined) req.author = author;
+    return this.call('verifyOp', req).valid;
   }
 
   // The key backup (envelope v1). The module NFC-normalises the passphrase

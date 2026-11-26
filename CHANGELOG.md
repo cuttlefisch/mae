@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.207] - 2026-11-26
+
+
+
+
+### Features
+
+- *(crypto)* Op_canonical_bytes and verify_op, so a browser signs with a non-extractable key ([107998b](https://github.com/cuttlefisch/mae/commit/107998b00cdc38268a6bd88de4b6500f6906a06c))
+
+### Bug Fixes
+
+- *(daemon)* A blob path with attachments off answers attachments_disabled ([8fcd0fe](https://github.com/cuttlefisch/mae/commit/8fcd0fe9fbd8e6c08d23aab4c5f144bb227375a8))
+
+### Documentation
+
+- *(adr-098)* Amendment 2, the browser signs with the member key ([ba61f5d](https://github.com/cuttlefisch/mae/commit/ba61f5dcb8f2f507029d0f8369c3db8427a0cb4f))
+- *(adr-098)* Amendment 2 signs canonical bytes with WebCrypto, key never extractable ([c7dfebb](https://github.com/cuttlefisch/mae/commit/c7dfebb34ab9d899f20ba36eaada3bee3e3c2a6e))
+- Verify_op checks the signature, not admission; Amendment 2 amends D6's block explicitly ([dd6e5fe](https://github.com/cuttlefisch/mae/commit/dd6e5fea811fe7c7cbae0061a6db9ac182c95fe4))
+
+### Testing
+
+- *(crypto)* Mutants for op_canonical_bytes and verify_op ([07484c6](https://github.com/cuttlefisch/mae/commit/07484c66f029c3dae0710f02b0903ca7f5e2d664))
+
+### Miscellaneous
+
+- Bump version to 0.14.206 ([3992caf](https://github.com/cuttlefisch/mae/commit/3992caf6e5741712f32fc3f3ec39ab295414ea2d))
+
 ## [0.14.205] - 2026-11-26
 
 
@@ -15,6 +42,10 @@ All notable changes to this project will be documented in this file.
 
 - *(review)* Attaches to one KB serialize from the completion check to the commit ([9ae4fe5](https://github.com/cuttlefisch/mae/commit/9ae4fe5d4de919ffa3c780b3e50b3cda703d57ea))
 - *(review)* A signed-PDF retry answers as the attach that completed the set ([084653e](https://github.com/cuttlefisch/mae/commit/084653e1973f92ec57fe5507454d4ebca999b5b6))
+
+### Miscellaneous
+
+- Bump version to 0.14.205 ([67a1f55](https://github.com/cuttlefisch/mae/commit/67a1f550ed8541bc2ffb8eaa7a1fb4808299af31))
 
 ## [0.14.204] - 2026-11-26
 

@@ -240,7 +240,7 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 
 | op | name | request | result |
 |----|------|---------|--------|
-| 1 | `version` | `{}` | `{"version":"0.2.0","backup_version":1,"challenge_domain":"mae-identity-binding-v1","content_op_domain":"maecontent/v1"}` |
+| 1 | `version` | `{}` | `{"version":"0.3.0","backup_version":1,"challenge_domain":"mae-identity-binding-v1","content_op_domain":"maecontent/v1"}` |
 | 2 | `generate` | `{}` | `KeyInfo` (seed: 32 bytes from the host) |
 | 3 | `import_seed` | `{"seed":B64}` | `KeyInfo` |
 | 4 | `export_seed` | `{"key":n}` | `{"seed":B64}` |
@@ -258,6 +258,8 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 | 16 | `content_wrap` | `{"content_key":B64,"wrap_public":B64}` | `{"wrapped":B64}` |
 | 17 | `content_unwrap` | `{"key":n,"wrapped":B64}` | `{"content_key":B64}` |
 | 18 | `sign_op` | `{"key":n,"kb_id":S,"node_id":S,"base_sv":B64,"epoch":"<decimal u64>","issued_at":unix,"update":B64}` | `{"author","epoch":"<decimal u64>","issued_at","base_sv":B64,"sig":B64,"author_pubkey":B64}` |
+| 19 | `op_canonical_bytes` | `{"kb_id":S,"node_id":S,"base_sv":B64,"author_pubkey":B64,"epoch":"<decimal u64>","issued_at":unix,"update":B64,"author"?:S}` | `{"canonical":B64,"author","epoch":"<decimal u64>","issued_at","base_sv":B64,"author_pubkey":B64}` |
+| 20 | `verify_op` | `op_canonical_bytes`'s request plus `"sig":B64` | `{"valid":bool}` |
 
 The loader's method names are the camelCase forms (`signChallenge`, `backupSeal`, …). `challenge` (8, 9) is
 the challenge text or the daemon's whole `/identity/challenge` answer; it is signed only if it is
@@ -345,6 +347,26 @@ The result is the ADR-036 header, sent in one of two ways:
 
 Either way the daemon re-binds `kb_id` and `node_id` from the request or document it will write, so a header
 signed for one node never verifies for another.
+
+**Signing outside the module: `op_canonical_bytes` (19) and `verify_op` (20), since 0.3.0 (ADR-098
+Amendment 2).** The browser keeps the member key as a non-extractable WebCrypto Ed25519 key (ADR-098 D2) and
+never loads its seed into the module. `op_canonical_bytes` returns the exact bytes `sign_op` would sign,
+built by the same `ContentOp::canonical_bytes`, and the header fields to send. The author is derived from
+`author_pubkey`, never taken from the request: an `author` that is not that key's fingerprint is
+`bad-request`. The client signs `canonical` with `crypto.subtle.sign("Ed25519", key, bytes)` and sends the
+fields plus `sig`, exactly as `sign_op`'s result. For the same op, that header is byte-identical to
+`sign_op`'s (Ed25519 is deterministic); `tests/outside_op.rs` and `js/test.mjs` hold both to the pinned
+vector, the latter with a real non-extractable WebCrypto key. `verify_op` answers `valid: true` exactly when
+the daemon's *signature* check would pass: the signature, the author being the key's fingerprint, encodable
+ids. It does not know the KB, so the daemon's admission (membership, role, epoch) can still refuse an op it
+calls valid.
+
+What this moves, stated plainly: with `sign_op`, the module signs only the canonical messages it builds
+itself. A WebCrypto key signs whatever bytes the page's code hands it, so that guarantee now rests on the
+browser client's own code, which must sign only what `op_canonical_bytes` returns. Script injected into the
+page cannot copy the key out, but while it runs it can sign anything with it, membership ops included. That
+is ADR-098's "a compromised device compromises the member" (Consequences), and it is why the client's
+strict CSP and Trusted Types (ADR-119) are part of the key's protection, not only the page's.
 
 Test vector (`mae_crypto::content_op`, `tests/sign_op.rs` and `js/test.mjs` pin it):
 - seed: 32 bytes of `0x5a`;

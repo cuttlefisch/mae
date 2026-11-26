@@ -846,6 +846,18 @@ impl McpError {
         )
     }
 
+    /// A blob route on a daemon whose attachments are off
+    /// (`oauth.attachments_enabled = false`). A daemon-wide setting, nothing
+    /// about any KB (#1029).
+    pub fn attachments_disabled(message: String) -> Self {
+        Self::kinded(
+            -32601,
+            message,
+            "attachments_disabled",
+            serde_json::json!({}),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     /// ADR-120 D5: the activity record could not take the request's event in
@@ -944,6 +956,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "attachment_type",
     "rendered_pdf_required",
     "rendered_pdf_mismatch",
+    "attachments_disabled",
     "internal",
 ];
 
@@ -1173,6 +1186,7 @@ mod tests {
             McpError::attachment_type(m()),
             McpError::rendered_pdf_required(m()),
             McpError::rendered_pdf_mismatch(m(), "c"),
+            McpError::attachments_disabled(m()),
             McpError::internal_fault(m()),
         ]
     }

@@ -131,6 +131,17 @@ export class MaeCrypto {
   signOp(request: SignOpRequest): ContentOpHeader;
 
   /**
+   * The exact bytes a content op signs (ADR-036 D1), for a key held outside the module: a
+   * non-extractable WebCrypto Ed25519 key (ADR-098 Amendment 2). Sign `canonical` with
+   * `crypto.subtle.sign('Ed25519', key, bytes)` and send the other fields plus `sig`, exactly as
+   * `signOp`'s header. The author is `author_pubkey`'s fingerprint. Refusals as `signOp`'s, and
+   * 'bad-request' for a claimed author that is not the key's.
+   */
+  opCanonicalBytes(request: OutsideOpRequest): UnsignedContentOpHeader;
+  /** Whether `sig` is the author's signature over the op, as the daemon checks it. */
+  verifyOp(request: OutsideOpRequest & { sig: B64; author?: string }): boolean;
+
+  /**
    * The key's seed, sealed under the passphrase: envelope v1 text. The module NFC-normalises the
    * passphrase; it must then have at least 12 characters ('passphrase-weak').
    */
@@ -157,6 +168,29 @@ export class MaeCrypto {
   liveBytes(): number;
   /** Zeroes the instance's memory (every held key) and refuses later calls. A failed call does the same. */
   dispose(): void;
+}
+
+export interface OutsideOpRequest {
+  kb_id: string;
+  node_id: string;
+  base_sv: B64;
+  /** The signer's 32-byte Ed25519 public key. */
+  author_pubkey: B64;
+  /** Canonical decimal text, as in SignOpRequest. */
+  epoch: string;
+  update: B64;
+  /** Unix seconds; defaults to this host's clock for opCanonicalBytes. Required by verifyOp. */
+  issued_at?: number;
+}
+
+/** `opCanonicalBytes`'s answer: the bytes to sign, and the header to send with the signature. */
+export interface UnsignedContentOpHeader {
+  canonical: B64;
+  author: string;
+  epoch: string;
+  issued_at: number;
+  base_sv: B64;
+  author_pubkey: B64;
 }
 
 export interface SignOpRequest {
