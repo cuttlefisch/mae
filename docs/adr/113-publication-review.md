@@ -313,6 +313,11 @@ known author, and with **`authors_unknown`** when the set is unknown. Approval i
 an incomplete record. *(Owner decision, 2026-11-25: both are soft blocks, D3. Unknown authors are
 acknowledged with `acknowledge_unknown_authors: true` and an `override_reason`, recorded alike.)*
 
+*(As built, PR-5: under `in_force_on_approval`, the approval that completes a set puts every member
+in force, so its author check covers every member, as `enter_into_force` does, and an acknowledged
+override is recorded on the entry into force too. A set completed by a concurrent approval after
+that check stays `approved` and waits for an explicit `enter_into_force`.)*
+
 **Attested seed authorship** *(owner decision, 2026-11-25: new documents enter either through the
 browser or through a seed, and both must record who wrote them)*. A seed writes as the daemon, so on
 its own seeded content has unknown authors. `kb seed --author <fingerprint>` lets the operator

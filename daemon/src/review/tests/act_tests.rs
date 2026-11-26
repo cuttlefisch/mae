@@ -562,3 +562,49 @@ async fn one_reviewer_reviews_once() {
         "invalid_transition"
     );
 }
+
+/// D3 with `in_force_on_approval`: the approval that completes a set puts
+/// every member in force, so its author check covers every member, as an
+/// explicit entry into force does. X authored n2, Y approved it; X's approval
+/// of n1 (not X's) is refused until acknowledged, and the acknowledgement is
+/// recorded on the entry into force. Kills checking only the approved member.
+#[tokio::test]
+async fn the_approval_that_completes_a_set_checks_every_members_authors() {
+    let env = env().await;
+    policy(&env, json!({"in_force_on_approval": true})).await;
+    let viewer = env.viewer.clone();
+    edit_with(&env.store, KB, "n2", &viewer, |d| d.set_title("X's text")).await;
+    retitle(&env, "n1", "Editor's text").await;
+    let r = request(&env, &env.editor, &["n1", "n2"]).await.unwrap();
+    let rev = |i: usize| {
+        r["revisions"][i]["revision_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let y = signed_in(&env.owner, &["approvers"], PrincipalKind::Person);
+    let p2 = json!({"kb_id": KB, "revision_id": rev(1)});
+    as_(&env, &y, "kb/review.approve", p2).await.unwrap();
+
+    let p1 = json!({"kb_id": KB, "revision_id": rev(0)});
+    let refused = as_(&env, &approver(&env), "kb/review.approve", p1.clone()).await;
+    assert_eq!(err_kind(refused), "author_cannot_approve");
+    assert_eq!(status(&env, "n2").await["in_force"], Value::Null);
+
+    let mut ack = p1;
+    ack["acknowledge_self_approval"] = json!(true);
+    ack["override_reason"] = json!("Reviewed by a second approver first.");
+    let a = as_(&env, &approver(&env), "kb/review.approve", ack)
+        .await
+        .unwrap();
+    assert_eq!(a["revision_state"], json!("in_force"));
+    let ev = event_objects(&env).await;
+    let entry = ev
+        .iter()
+        .find(|e| e["kind"] == json!("enter_into_force"))
+        .unwrap();
+    assert_eq!(
+        entry["payload"]["override"]["self_approval"],
+        json!([rev(1)])
+    );
+}

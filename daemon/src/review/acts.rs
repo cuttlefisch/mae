@@ -417,6 +417,9 @@ struct ApproveInput {
     required: Vec<String>,
     /// The acknowledged override, `null` when none (`author_gate`).
     ovr: Value,
+    /// The author check covered every member of the request, so this
+    /// approval may put the set in force (`in_force_on_approval`).
+    gated_set: bool,
 }
 
 /// The required acts other than `approved` that `acts` lacks, in order, each
@@ -477,7 +480,10 @@ fn record_approval(
     let all_approved = members.iter().all(|m| m.state == "approved");
     let on_approval = req.is_some_and(|q| q.in_force_on_approval);
     let by_act = members.iter().all(|m| m.approval_record != "signed_pdf");
-    let in_force_since = if on_approval && all_approved && by_act {
+    // Entry into force is an act on every member, so its author check must
+    // have covered them all (as `enter_into_force` does). A set that
+    // completed after the check stays approved, for an explicit entry.
+    let in_force_since = if on_approval && all_approved && by_act && i.gated_set {
         enter_into_force_now(
             c,
             signer,
@@ -488,7 +494,7 @@ fn record_approval(
             at,
             i.actor,
             Some(seq),
-            Value::Null,
+            i.ovr,
         )?;
         Some(time(at))
     } else {
@@ -522,9 +528,13 @@ pub(super) async fn approve(
             "not on this KB's approver list".into(),
         ));
     }
-    let ovr = author_gate(store, std::slice::from_ref(&rev), who, params).await?;
+    let set = completing_set(store, kb_id, &rev).await?;
+    let gated_set = set.is_some();
+    let checked = set.unwrap_or_else(|| vec![rev.clone()]);
+    let ovr = author_gate(store, &checked, who, params).await?;
     let signer = signer(store)?;
     let input = ApproveInput {
+        gated_set,
         ovr,
         kb: kb_id.to_string(),
         id: rev.revision_id,
@@ -538,6 +548,32 @@ pub(super) async fn approve(
             .review_write(move |c| record_approval(c, &signer, input, at))
             .await,
     )
+}
+
+/// When approving `rev` would complete its request and put the set in force
+/// (`in_force_on_approval`, every other member approved, approval by act):
+/// every member, for the author check. Otherwise `None`.
+async fn completing_set(
+    store: &DocStore,
+    kb_id: &str,
+    rev: &Revision,
+) -> Result<Option<Vec<Revision>>, McpError> {
+    let (kb, rid) = (kb_id.to_string(), rev.request_id.clone());
+    let (req, members) = store
+        .review_read(move |c| {
+            Ok((
+                store::request(c, &kb, &rid)?,
+                store::request_revisions(c, &rid)?,
+            ))
+        })
+        .await
+        .map_err(storage_fault)?;
+    let others_approved = members
+        .iter()
+        .all(|m| m.revision_id == rev.revision_id || m.state == "approved");
+    let by_act = members.iter().all(|m| m.approval_record != "signed_pdf");
+    let completes = req.is_some_and(|q| q.in_force_on_approval) && others_approved && by_act;
+    Ok(completes.then_some(members))
 }
 
 /// A request's members, read outside the write (for the author checks).

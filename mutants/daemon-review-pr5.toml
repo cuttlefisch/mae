@@ -422,3 +422,14 @@ ref = "D5: the published list pages like the working one"
 file = "daemon/src/review/published.rs"
 find = '''            for r in store::in_force_after(c, &kb, &from, limit + 1)? {'''
 replace = '''            for r in store::in_force_after(c, &kb, &from, limit)? {'''
+
+[[mutant]]
+id = "daemon-review-pr5/completing-approval-checks-one"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_approval_that_completes_a_set_checks_every_members_authors)"
+ref = "D3: the approval that puts a set in force checks every member's authors"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let checked = set.unwrap_or_else(|| vec![rev.clone()]);'''
+replace = '''    let checked = vec![rev.clone()];'''
