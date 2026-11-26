@@ -167,7 +167,9 @@ fn safe_path(p: &str) -> bool {
         && Path::new(p)
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
-        && !p.split('/').any(str::is_empty)
+        && !p
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
 /// `SHA256SUMS` as `sha256sum` writes it: `<64 lowercase hex>  <path>` or
@@ -220,9 +222,13 @@ fn read_file(
         return Err(ImportError::manifest(path, "missing_line", json!({})));
     };
     let full = dir.join(path);
-    let size = std::fs::metadata(&full)
-        .map_err(|_| ImportError::manifest(path, "missing_file", json!({})))?
-        .len();
+    // A regular file only: not a link out of the directory, not a FIFO that
+    // blocks the read.
+    let meta = std::fs::symlink_metadata(&full)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .ok_or_else(|| ImportError::manifest(path, "missing_file", json!({})))?;
+    let size = meta.len();
     if size > max_bytes {
         return Err(ImportError::new(
             "quota_exceeded",
@@ -391,7 +397,16 @@ pub fn check(dir: &Path, kb_id: &str, max_bytes: u64, now_ms: i64) -> Result<Che
     };
     let mut pages = Vec::new();
     let mut nodes = BTreeSet::new();
+    let mut codes = BTreeSet::new();
     for p in &file.pages {
+        if let Some(code) = &p.doc_code {
+            if !codes.insert(code.clone()) {
+                return Err(ImportError::invalid(
+                    &format!("pages[{}].doc_code", p.node_id),
+                    "another page of this import names the same code",
+                ));
+            }
+        }
         if !nodes.insert(p.node_id.clone()) {
             return Err(ImportError::invalid(
                 &format!("pages[{}]", p.node_id),

@@ -132,3 +132,47 @@ ref = "E4: all or nothing, re-checked in the write"
 file = "daemon/src/review/import.rs"
 find = '''    if let Err(e) = check_in_store(c, kb, &plan.pages, &plan.checked)? {'''
 replace = '''    if let Err(e) = Ok::<Result<(), ImportError>, StorageError>(Ok(()))? {'''
+
+[[mutant]]
+id = "daemon-review-import/ended-window-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "B6: an import never lands inside a recorded in-force window"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''            r.ended_at.map_or(start, |end| end.max(start))'''
+replace = '''            start'''
+
+[[mutant]]
+id = "daemon-review-import/rev-numbers-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "E4: imported revision numbers follow the node's"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''        if highest.is_some_and(|h| input.revisions[0].rev <= h) {'''
+replace = '''        if highest.is_some_and(|h| h < 0) {'''
+
+[[mutant]]
+id = "daemon-review-import/one-code-two-pages"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "D2: one code names one document, within an import too"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''            if !codes.insert(code.clone()) {'''
+replace = '''            if !codes.insert(code.clone()) && false {'''
+
+[[mutant]]
+id = "daemon-review-import/author-window-starts-at-import"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_does_not_start_the_next_reviews_author_window)"
+ref = "A1: the next review counts the live node's whole record"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''    let cutoff_wal = 0;'''
+replace = '''    let cutoff_wal = store.wal_high_water(&name).await.map_err(storage)?;'''

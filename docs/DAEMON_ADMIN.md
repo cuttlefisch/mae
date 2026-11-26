@@ -1337,8 +1337,11 @@ must split as `kb seed` would split it and name the page's node (`invalid_params
 (`attachments_disabled`).
 
 The apply re-checks everything and refuses `import_hash_mismatch` if anything changed since the dry run.
-An import never lands at or before a revision a node already holds, nor beside one in review, approved or
-in force (`import_overlap`, with `latest_existing`); a code another node holds is `doc_code_taken`.
+An import never lands at or before a revision a node already holds, inside an ended revision's window, nor
+beside one in review, approved or in force (`import_overlap`, with `latest_existing`); its revision numbers
+must follow the node's highest (`invalid_params`, `rev`); a code another node holds is `doc_code_taken`,
+and two pages of one import may not name the same code. Only regular files are read: a symlink or a path
+with a `.` part is refused.
 Running the same import twice is therefore refused the second time. The approver is recorded by name, as
 an attested fact (no one approved in MAE), and the import is one signed `import` event in the KB's review
 chain naming you (`$USER`), the `import_hash` and the manifest's sha256. Imported revisions are recorded

@@ -440,3 +440,142 @@ async fn the_apply_rechecks_inside_its_transaction() {
         "only the request's own revision"
     );
 }
+
+/// One page, all superseded: the past only.
+fn past_only(
+    node: &str,
+    rev: i64,
+    from: &str,
+    to: &str,
+) -> (Value, BTreeMap<&'static str, Vec<u8>>) {
+    let files = BTreeMap::from([
+        ("src/p.org", page(node, "A past text.")),
+        ("signed/p.pdf", pdf(&format!("signed {node} {rev} {from}"))),
+    ]);
+    let import = json!({"format": "mae-import/1", "kb_id": KB, "pages": [{
+        "node_id": node, "revisions": [{"rev": rev, "state": "superseded",
+            "source": "src/p.org", "signed_pdf": "signed/p.pdf",
+            "approved_by_name": "Example Approver", "effective_at": from, "ended_at": to}]}]});
+    (import, files)
+}
+
+/// Review findings: an import never lands inside an ended revision's window,
+/// never reuses or goes back on its revision numbers, and two pages of one
+/// import never claim one code. Kills the overlap rule reading only starts,
+/// the missing rev check, and the in-import code check.
+#[tokio::test]
+async fn an_import_respects_ended_windows_numbers_and_one_code_per_page() {
+    let env = env().await;
+    let _blobs = with_blobs(&env);
+    let (i0, f0) = past_only(
+        "n1",
+        0,
+        "2000-01-01T00:00:00.000Z",
+        "2005-01-01T00:00:00.000Z",
+    );
+    import_dir(&env, Dir::new(&i0, &f0, None).path())
+        .await
+        .unwrap();
+
+    let (inside, f1) = past_only(
+        "n1",
+        1,
+        "2003-01-01T00:00:00.000Z",
+        "2004-01-01T00:00:00.000Z",
+    );
+    let e = run(&env, Dir::new(&inside, &f1, None).path(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, "import_overlap", "{e}");
+    let (renumbered, f2) = past_only(
+        "n1",
+        0,
+        "2006-01-01T00:00:00.000Z",
+        "2007-01-01T00:00:00.000Z",
+    );
+    let e = run(&env, Dir::new(&renumbered, &f2, None).path(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.kind, e.data["param"].clone()),
+        ("invalid_params", json!("rev"))
+    );
+
+    let files = BTreeMap::from([
+        ("src/a.org", page("n2", "A.")),
+        ("src/b.org", page("n3", "B.")),
+        ("signed/a.pdf", pdf("a")),
+        ("signed/b.pdf", pdf("b")),
+    ]);
+    let one = |node: &str, src: &str, pdf: &str| {
+        json!({"node_id": node, "doc_code": "PRO-9",
+        "revisions": [{"rev": 0, "state": "in_force", "source": src, "signed_pdf": pdf,
+            "approved_by_name": "Example Approver", "effective_at": "2000-01-01T00:00:00.000Z"}]})
+    };
+    let both = json!({"format": "mae-import/1", "kb_id": KB, "pages": [
+        one("n2", "src/a.org", "signed/a.pdf"), one("n3", "src/b.org", "signed/b.pdf")]});
+    let e = run(&env, Dir::new(&both, &files, None).path(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, "invalid_params", "{e}");
+}
+
+/// Review finding: the imported text is not the live node's, so the next
+/// review's author window covers the node's whole record. A person who
+/// edited the live node before the import is an author of the next
+/// revision. Kills an author window that starts at the import.
+#[tokio::test]
+async fn an_import_does_not_start_the_next_reviews_author_window() {
+    let env = env().await;
+    let _blobs = with_blobs(&env);
+    policy(&env, json!({})).await;
+    let viewer = env.viewer.clone();
+    edit_with(&env.store, KB, "n1", &viewer, |d| {
+        d.set_title("The viewer's draft")
+    })
+    .await;
+    let (import, files) = history();
+    import_dir(&env, Dir::new(&import, &files, None).path())
+        .await
+        .unwrap();
+    let (_, revs) = requested(&env, &["n1"]).await;
+    let p = json!({"kb_id": KB, "revision_id": revs[0]});
+    let r = super::act_tests::as_(
+        &env,
+        &super::act_tests::approver(&env),
+        "kb/review.approve",
+        p,
+    )
+    .await;
+    assert_eq!(err_kind(r), "author_cannot_approve");
+}
+
+/// Review finding: a path with a `.` part, and a file that is not a regular
+/// file (a link), are refused. Kills `safe_path` passing `.` and a read that
+/// follows links.
+#[tokio::test]
+async fn only_plain_paths_and_regular_files_are_read() {
+    let env = env().await;
+    let _blobs = with_blobs(&env);
+    let (import, files) = history();
+    let good: String = files
+        .iter()
+        .map(|(p, b)| format!("{}  {p}\n", sha(b)))
+        .collect();
+    let dotted = good.replace("  src/n1-r0.org", "  src/./n1-r0.org");
+    let e = run(&env, Dir::new(&import, &files, Some(dotted)).path(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(e.data["reason"], json!("malformed_line"), "{e}");
+
+    let dir = Dir::new(&import, &files, None);
+    let target = dir.path().join("signed/n1-r0.pdf");
+    let real = dir.path().join("elsewhere.pdf");
+    std::fs::rename(&target, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &target).unwrap();
+    let e = run(&env, dir.path(), None).await.unwrap_err();
+    assert_eq!(
+        (e.kind, e.data["reason"].clone()),
+        ("manifest_mismatch", json!("missing_file"))
+    );
+}

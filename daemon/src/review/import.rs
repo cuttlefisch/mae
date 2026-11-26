@@ -116,9 +116,14 @@ fn storage(e: impl std::fmt::Display) -> ImportError {
 /// lands at or before a revision it already holds, nor beside one still in
 /// review, approved or in force.
 fn overlap(node: &str, first: i64, existing: &[Revision]) -> Option<ImportError> {
+    // The end of a revision's window counts too: an import never lands inside
+    // a recorded in-force period.
     let latest = existing
         .iter()
-        .map(|r| r.in_force_since.or(r.approved_at).unwrap_or(r.created_at))
+        .map(|r| {
+            let start = r.in_force_since.or(r.approved_at).unwrap_or(r.created_at);
+            r.ended_at.map_or(start, |end| end.max(start))
+        })
         .max()?;
     let live = existing
         .iter()
@@ -181,6 +186,19 @@ fn check_in_store(
         let first = input.revisions[0].effective_at;
         if let Some(e) = overlap(&p.node_id, first, &existing) {
             return Ok(Err(e));
+        }
+        let highest = existing.iter().filter_map(|r| r.rev_no).max();
+        if highest.is_some_and(|h| input.revisions[0].rev <= h) {
+            return Ok(Err(ImportError::new(
+                "invalid_params",
+                format!(
+                    "node {}: rev {} is not after its rev {}",
+                    p.node_id,
+                    input.revisions[0].rev,
+                    highest.unwrap_or_default()
+                ),
+                json!({ "param": "rev", "reason": "not after the node's highest rev" }),
+            )));
         }
         if let Err(e) = code_of(c, kb, input)? {
             return Ok(Err(e));
@@ -259,7 +277,11 @@ async fn build_page(
         .ok()
         .and_then(|s| KbNodeDoc::from_bytes(&s).ok())
         .map(|d| d.materialize());
-    let cutoff_wal = store.wal_high_water(&name).await.map_err(storage)?;
+    // The imported text is the file's, not the live node's, and nothing of the
+    // live node has been approved in MAE: the next review's author window
+    // covers the node's whole record (A1, A3), not only what follows the
+    // import. Unattributed content there reads as unknown authors.
+    let cutoff_wal = 0;
     let mut revisions = Vec::new();
     for r in &p.revisions {
         let created = live
@@ -603,6 +625,12 @@ fn write(
     for p in &plan.pages {
         if let Some((prefix, n)) = &p.code {
             store::assign_code(c, kb, prefix, *n, &p.node_id, seq)?;
+            if store::code_holder(c, kb, prefix, *n)?.as_deref() != Some(p.node_id.as_str()) {
+                return Err(StorageError::Sqlite(format!(
+                    "import: code {prefix}-{n} did not go to node {}",
+                    p.node_id
+                )));
+            }
         }
     }
     Ok(Ok(store::event_id(seq)))
