@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.211] - 2026-11-26
+
+
+
+
+### Features
+
+- *(site)* Derive a KB once per change, not once per page (ADR-119 D6, first step; #1036) ([366c75f](https://github.com/cuttlefisch/mae/commit/366c75f263c541b204fa8c6096e8efa57f5e82d3))
+
+### Bug Fixes
+
+- *(site)* A cached KB never outlives a write that failed part-way ([2c83e72](https://github.com/cuttlefisch/mae/commit/2c83e72ed6414eb89bb4086a4782793cfb6ba186))
+
 ## [0.14.210] - 2026-11-26
 
 
@@ -32,6 +45,7 @@ All notable changes to this project will be documented in this file.
 
 - Code map after the manifest op ([de602f0](https://github.com/cuttlefisch/mae/commit/de602f0180140fdd5de7fc28fd773dba0ea5cc54))
 - ADR KB checksum after ADR-036 G3 ([d432844](https://github.com/cuttlefisch/mae/commit/d432844cc5e27b12b9b4d84ce890c1a56666d84b))
+- Bump version to 0.14.210 ([8f1378d](https://github.com/cuttlefisch/mae/commit/8f1378dd3114432462144a05983b5f9ca422b7f3))
 
 ## [0.14.209] - 2026-11-26
 
