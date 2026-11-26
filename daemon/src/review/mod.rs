@@ -44,6 +44,23 @@ use crate::kb_query::KbQueryLimits;
 use crate::oauth_self_issue::ValidatedPrincipal;
 use crate::storage::StorageError;
 
+/// Every method [`dispatch`] serves. The activity record classes each one
+/// (ADR-120 D1), and a test holds this list to the dispatcher's own arms.
+pub const METHODS: &[&str] = &[
+    "kb/review.request",
+    "kb/review.withdraw",
+    "kb/review.act",
+    "kb/review.approve",
+    "kb/review.reject",
+    "kb/review.enter_into_force",
+    "kb/review.derogate",
+    "kb/review.set_policy",
+    "kb/review.set_code",
+    "kb/review.status",
+    "kb/review.pending",
+    "kb/review.events",
+];
+
 /// Whether `method` is one this module serves on the OAuth listener.
 pub fn is_review_method(method: &str) -> bool {
     method.starts_with("kb/review.")

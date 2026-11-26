@@ -51,9 +51,37 @@ pub(crate) fn open_exclusive(config: &DaemonConfig) -> Result<OfflineStore, Stri
         Arc::new(backend),
         config.collab.storage.compact_threshold,
     ));
+    // ADR-115: the attachment store beside it, as the serving daemon opens
+    // it, so a seed can store a page's images and an export write them back.
+    // Off when the daemon serves no attachments: a plan with images is then
+    // refused by name rather than seeded without them.
+    if config.oauth.attachments_enabled {
+        let root = dir.join(mae_daemon::blob_store::DIR);
+        let blobs = mae_daemon::blob_store::BlobStore::open(&root)
+            .map_err(|e| format!("open {}: {e}", root.display()))?;
+        doc_store.set_blob_store(Arc::new(blobs));
+    }
     Ok(OfflineStore {
         doc_store,
         _lock: lock,
+    })
+}
+
+/// Where an apply reads the plan's attachment files (the commit it was made
+/// from), under `[oauth]`'s bounds, charged to the shared bucket of
+/// principals in no tenant: the daemon writes a seed (ADR-115 B2).
+fn seed_attachments(
+    config: &DaemonConfig,
+    plan: &seed::SeedPlan,
+) -> Result<seed::SeedAttachments, String> {
+    let reader = seed::GitBlobs::open(std::path::Path::new(&plan.source.repo), &plan.source.commit)
+        .map_err(|e| e.to_string())?;
+    Ok(seed::SeedAttachments {
+        reader: Arc::new(reader),
+        limits: crate::seed_cli::attachment_limits(config),
+        quota: Some(mae_daemon::blob_store::StorageQuota::unassigned(
+            config.oauth.default_storage_bytes,
+        )),
     })
 }
 
@@ -93,7 +121,11 @@ pub(crate) async fn run_apply(config: &DaemonConfig, args: &SeedArgs) -> i32 {
 }
 
 async fn apply(config: &DaemonConfig, args: &SeedArgs) -> Result<ApplyOutcome, String> {
-    let plan = seed::plan(&plan_options(args)).map_err(|e| e.to_string())?;
+    let plan = seed::plan(&plan_options(
+        args,
+        crate::seed_cli::attachment_limits(config),
+    ))
+    .map_err(|e| e.to_string())?;
     let identity = crate::token_cli::load_identity(config)?;
     let store = open_exclusive(config)?;
     let target = ApplyTarget {
@@ -103,6 +135,7 @@ async fn apply(config: &DaemonConfig, args: &SeedArgs) -> Result<ApplyOutcome, S
         now: now(),
         author: args.author.as_deref(),
         operator: &operator(),
+        attach: Some(seed_attachments(config, &plan)?),
     };
     seed::apply(&store.doc_store, &plan, &target)
         .await
@@ -125,7 +158,7 @@ async fn run_update_dry_run(config: &DaemonConfig, args: &SeedArgs) -> i32 {
 }
 
 async fn update_dry_run(config: &DaemonConfig, args: &SeedArgs) -> Result<(String, bool), String> {
-    let opts = plan_options(args);
+    let opts = plan_options(args, crate::seed_cli::attachment_limits(config));
     let plan = seed::plan(&opts).map_err(|e| e.to_string())?;
     if !plan.ok() {
         return Ok(match args.json {
@@ -180,7 +213,11 @@ async fn run_update(config: &DaemonConfig, args: &SeedArgs) -> i32 {
 }
 
 async fn update(config: &DaemonConfig, args: &SeedArgs) -> Result<UpdateOutcome, String> {
-    let plan = seed::plan(&plan_options(args)).map_err(|e| e.to_string())?;
+    let plan = seed::plan(&plan_options(
+        args,
+        crate::seed_cli::attachment_limits(config),
+    ))
+    .map_err(|e| e.to_string())?;
     let identity = crate::token_cli::load_identity(config)?;
     let store = open_exclusive(config)?;
     let target = ApplyTarget {
@@ -190,6 +227,7 @@ async fn update(config: &DaemonConfig, args: &SeedArgs) -> Result<UpdateOutcome,
         now: now(),
         author: args.author.as_deref(),
         operator: &operator(),
+        attach: Some(seed_attachments(config, &plan)?),
     };
     seed::update(
         &store.doc_store,
@@ -277,8 +315,9 @@ fn print_export(report: &seed::ExportReport) -> i32 {
         println!("refused: {} [{}] {}", r.node_id, r.kind.as_str(), r.detail);
     }
     println!(
-        "exported: written={} refused={}",
+        "exported: written={} attachments={} refused={}",
         report.written.len(),
+        report.attachments.len(),
         report.refused.len()
     );
     i32::from(!report.refused.is_empty())

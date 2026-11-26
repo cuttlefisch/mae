@@ -295,6 +295,16 @@ impl JwksCache {
         })
     }
 
+    /// A cache already holding `keys`, fetched now: tests that validate
+    /// identity-provider tokens without a JWKS server.
+    #[cfg(test)]
+    pub(crate) fn preloaded(keys: Vec<JwkOwned>) -> Self {
+        let cache = JwksCache::new("http://127.0.0.1:9/unused".into(), None)
+            .expect("a client without a CA file builds");
+        *cache.state.write().unwrap() = Some((keys, Instant::now()));
+        cache
+    }
+
     /// Returns the cached JWKS if still fresh, otherwise fetches a new one.
     pub async fn get(&self) -> Result<Vec<JwkOwned>, reqwest::Error> {
         if let Some((keys, fetched_at)) = self.state.read().unwrap().clone() {
@@ -394,13 +404,28 @@ pub(crate) fn with_no_store(
 }
 
 pub(crate) fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
-    with_no_store(
+    // ADR-120 D2: a refusal's kind, as its body names it, for the activity
+    // record (an extension, never sent).
+    let refusal = (!status.is_success())
+        .then(|| {
+            body.get("kind")
+                .or_else(|| body.get("error"))
+                .and_then(|k| k.as_str())
+                .map(str::to_string)
+        })
+        .flatten();
+    let mut resp = with_no_store(
         Response::builder()
             .status(status)
             .header(hyper::header::CONTENT_TYPE, "application/json"),
     )
     .body(Full::new(Bytes::from(body.to_string())))
-    .expect("building a response from a fixed status/body never fails")
+    .expect("building a response from a fixed status/body never fails");
+    if let Some(kind) = refusal {
+        resp.extensions_mut()
+            .insert(crate::oauth_activity::RefusalKind(kind));
+    }
+    resp
 }
 
 pub(crate) fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<Bytes>> {
@@ -417,37 +442,68 @@ pub(crate) fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Respo
     resp
 }
 
-/// The unauthenticated surface, in full: the PRM document and `GET
-/// /api/health` (the site's static assets are served beside it). `None` means
-/// the request is not one of these and must authenticate. ADR-073's view, once
-/// served here too, is retired (ADR-119 Amendment 2 B4).
+/// Which branch of the listener a request takes, decided once from its
+/// method and path: [`dispatch`] serves it, and the activity record classes
+/// it (ADR-120 D1) from the same decision, so the two cannot disagree.
 ///
-/// @ai-caution: [security] Everything returned from here is served to ANY
-/// caller that can reach the port. Nothing added here may carry KB content, a
-/// credential, or anything that identifies this daemon (version, fingerprint,
-/// KB names) -- `health_opens_nothing_else` pins that.
-fn public_response(
-    req: &Request<Incoming>,
-    config: &ResourceServerConfig,
-) -> Option<Response<Full<Bytes>>> {
-    let path = req.uri().path();
-    if path == "/.well-known/oauth-protected-resource" {
-        return Some(json_response(
-            StatusCode::OK,
-            protected_resource_metadata(config),
-        ));
+/// The unauthenticated surface, in full: the PRM document, `GET /api/health`,
+/// and the site's static assets. ADR-073's view, once served here too, is
+/// retired (ADR-119 Amendment 2 B4).
+///
+/// @ai-caution: [security] Everything [`Route::Prm`], [`Route::Health`] and
+/// [`Route::SiteAsset`] return is served to ANY caller that can reach the
+/// port. Nothing added there may carry KB content, a credential, or anything
+/// that identifies this daemon (version, fingerprint, KB names) --
+/// `health_opens_nothing_else` pins that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// `/.well-known/oauth-protected-resource`.
+    Prm,
+    /// The platform health contract (ADR-111 P1, ADR-120 D13): status only.
+    /// Exactly one path and only the read methods -- a POST there falls
+    /// through to authentication like any other request, so a KB query aimed
+    /// at the health path cannot ride its exemption.
+    Health,
+    /// ADR-119 L1a: the site's static assets are public (no KB content, and a
+    /// `<link>` cannot carry a bearer token), served only when the site is on.
+    SiteAsset,
+    /// ADR-115: a KB's blob routes, when enabled.
+    Blob,
+    /// ADR-099: `/ws` and `/ws/ticket`, only when `ws_enabled`; otherwise
+    /// they are ordinary paths and fall through to the authenticated default.
+    Ws,
+    /// ADR-098 Amendment 1, C2: the proof-of-possession routes, only when
+    /// `identity_binding_enabled`.
+    Binding,
+    /// Everything else: the live site's pages and JSON-RPC, authenticated.
+    Authenticated,
+}
+
+impl Route {
+    pub(crate) fn of(req: &Request<Incoming>, listener: &Listener) -> Route {
+        let path = req.uri().path();
+        if listener.blobs.is_some() && crate::oauth_blobs::blob_path(path).is_some() {
+            return Route::Blob;
+        }
+        if path == "/.well-known/oauth-protected-resource" {
+            return Route::Prm;
+        }
+        if path == "/api/health"
+            && matches!(*req.method(), hyper::Method::GET | hyper::Method::HEAD)
+        {
+            return Route::Health;
+        }
+        if listener.config.site_enabled && path.starts_with(mae_site::assets::PREFIX) {
+            return Route::SiteAsset;
+        }
+        if crate::ws::is_ws_path(path) && listener.ws.is_some() {
+            return Route::Ws;
+        }
+        if listener.binding_routes.is_some() && crate::oauth_binding::is_binding_path(path) {
+            return Route::Binding;
+        }
+        Route::Authenticated
     }
-    // The platform health contract (ADR-111 P1): liveness of THIS listener,
-    // status only. Exactly one path and only the read methods -- a POST here
-    // falls through to authentication like any other request, so a KB query
-    // aimed at the health path cannot ride its exemption.
-    if path == "/api/health" && matches!(*req.method(), hyper::Method::GET | hyper::Method::HEAD) {
-        return Some(json_response(
-            StatusCode::OK,
-            serde_json::json!({"status": "ok"}),
-        ));
-    }
-    None
 }
 
 /// Validate `token` against whichever population it claims membership in:
@@ -480,12 +536,15 @@ pub(crate) async fn resolve_token(
     .await?;
     let resolved =
         mae_daemon::identity_binding::resolve_off_runtime(vp, listener.bindings.clone()).await;
-    resolved.map_err(|e| {
+    let vp = resolved.map_err(|e| {
         // Fail closed: a binding that cannot be read is not "unbound" (that
         // would silently demote a member), and never "bound".
         tracing::warn!(error = %e, "binding table unreadable");
         AuthFailure::Unavailable
-    })
+    })?;
+    // ADR-120 D4: the principal, its session and its sign-in, for the record.
+    crate::oauth_activity::established(&vp, token, listener);
+    Ok(vp)
 }
 
 /// Why a bearer token did not authenticate, before a transport renders it:
@@ -609,62 +668,71 @@ pub(crate) fn boxed(r: Response<Full<Bytes>>) -> Response<ResponseBody> {
     r.map(|b| b.map_err(|never| match never {}).boxed())
 }
 
-/// The listener's service: a KB's blob routes (ADR-115), when enabled, and
-/// everything else through [`handle_request`].
+/// The listener's service. With the activity record on (ADR-120), every
+/// recorded route runs inside its scope and is answered only once its event
+/// has committed; the public surface is not recorded (D1).
 pub(crate) async fn serve(
     req: Request<Incoming>,
     listener: Arc<Listener>,
     conn: Arc<ConnGuard>,
 ) -> Result<Response<ResponseBody>, std::convert::Infallible> {
-    if let Some(routes) = listener.blobs.as_ref() {
-        if crate::oauth_blobs::blob_path(req.uri().path()).is_some() {
-            return Ok(crate::oauth_blobs::handle(req, &listener, routes).await);
+    let route = Route::of(&req, &listener);
+    if let Some(record) = listener.activity.clone() {
+        if let Some(class) = crate::oauth_activity::class_of(route, &req, &listener) {
+            return Ok(
+                crate::oauth_activity::recorded(req, listener, conn, record, route, class).await,
+            );
         }
     }
-    handle_request(req, listener, conn).await.map(boxed)
+    Ok(dispatch(route, req, listener, conn).await)
 }
 
-/// Per-request handler: serves the public surface (`public_response`)
-/// unauthenticated, gates everything else on a valid bearer token. Once a token
-/// validates: if the request carries a parseable JSON-RPC body AND
-/// `kb_query_enabled` AND a `DocStore` is available, dispatch it as a
-/// `kb/query.*` call (ADR-053/Phase G); otherwise fall back to the plain
-/// diagnostic response (ADR-052) — keeps `mae-daemon doctor`-style bare
-/// bearer-verification working unchanged for callers that never send a body.
-async fn handle_request(
+/// Serve `req` on the branch [`Route::of`] chose for it.
+pub(crate) async fn dispatch(
+    route: Route,
     req: Request<Incoming>,
     listener: Arc<Listener>,
     conn: Arc<ConnGuard>,
-) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+) -> Response<ResponseBody> {
+    match route {
+        Route::Prm => boxed(json_response(
+            StatusCode::OK,
+            protected_resource_metadata(&listener.config),
+        )),
+        Route::Health => boxed(crate::oauth_activity::health(&listener)),
+        Route::SiteAsset => boxed(site_asset(&req, &listener.config.site_components)),
+        Route::Blob => {
+            let routes = listener.blobs.clone().expect("Route::Blob only with blobs");
+            crate::oauth_blobs::handle(req, &listener, &routes).await
+        }
+        Route::Ws => boxed(crate::ws::handle(req, Arc::clone(&listener), conn).await),
+        Route::Binding => {
+            let routes = listener
+                .binding_routes
+                .as_ref()
+                .expect("Route::Binding only with the routes");
+            boxed(crate::oauth_binding::handle(req, &listener, routes).await)
+        }
+        Route::Authenticated => boxed(handle_request(req, &listener).await),
+    }
+}
+
+/// An authenticated request that is not one of the other routes: the live
+/// site, when enabled, or JSON-RPC. Once a token validates: if the request
+/// carries a parseable JSON-RPC body AND `kb_query_enabled` AND a `DocStore`
+/// is available, dispatch it as a `kb/query.*` call (ADR-053/Phase G);
+/// otherwise fall back to the plain diagnostic response (ADR-052) — keeps
+/// `mae-daemon doctor`-style bare bearer-verification working unchanged for
+/// callers that never send a body.
+async fn handle_request(req: Request<Incoming>, listener: &Listener) -> Response<Full<Bytes>> {
     let config = &listener.config;
     let doc_store = listener.doc_store.as_ref();
-    if let Some(resp) = public_response(&req, config) {
-        return Ok(resp);
-    }
-    // ADR-119 L1a: the site's static assets are public (no KB content, and a
-    // `<link>` cannot carry a bearer token), served only when the site is on.
-    if config.site_enabled && req.uri().path().starts_with(mae_site::assets::PREFIX) {
-        return Ok(site_asset(&req, &config.site_components));
-    }
-    // ADR-099: `/ws` and `/ws/ticket` exist only when `ws_enabled`; otherwise
-    // they are ordinary paths and fall through to the authenticated default.
-    if crate::ws::is_ws_path(req.uri().path()) && listener.ws.is_some() {
-        return Ok(crate::ws::handle(req, Arc::clone(&listener), conn).await);
-    }
-    // ADR-098 Amendment 1, C2: the proof-of-possession routes exist only when
-    // `identity_binding_enabled`; otherwise they fall through like any path.
-    if let Some(routes) = listener.binding_routes.as_ref() {
-        if crate::oauth_binding::is_binding_path(req.uri().path()) {
-            return Ok(crate::oauth_binding::handle(req, &listener, routes).await);
-        }
-    }
-
     let Some(token) = extract_bearer_token(&req).map(str::to_string) else {
-        return Ok(unauthorized(config, "missing bearer token"));
+        return unauthorized(config, "missing bearer token");
     };
-    let principal = match authenticate(&token, &listener).await {
+    let principal = match authenticate(&token, listener).await {
         Ok(p) => p,
-        Err(resp) => return Ok(*resp),
+        Err(resp) => return *resp,
     };
 
     // ADR-119 L1a: the live KB site, read-only, when enabled. Authenticated
@@ -672,9 +740,10 @@ async fn handle_request(
     if config.site_enabled {
         match site_request(req.uri().path()) {
             Some(Some((kb_id, view))) => {
-                return Ok(site_route(&req, &listener, &principal, &kb_id, &view).await);
+                crate::oauth_activity::target(&kb_id, None, None);
+                return site_route(&req, listener, &principal, &kb_id, &view).await;
             }
-            Some(None) => return Ok(site_response(StatusCode::NOT_FOUND, "not found".into())),
+            Some(None) => return site_response(StatusCode::NOT_FOUND, "not found".into()),
             None => {}
         }
     }
@@ -688,7 +757,7 @@ async fn handle_request(
     // sending an oversized body, regardless of `kb_query_enabled`.
     let body_bytes = match read_limited_body(req, config).await {
         Ok(b) => b,
-        Err(resp) => return Ok(*resp),
+        Err(resp) => return *resp,
     };
 
     let rpc_request: Option<mae_mcp::protocol::JsonRpcRequest> = if body_bytes.is_empty() {
@@ -696,6 +765,10 @@ async fn handle_request(
     } else {
         serde_json::from_slice(&body_bytes).ok()
     };
+    if let Some(rpc) = &rpc_request {
+        let params = rpc.params.clone().unwrap_or(serde_json::Value::Null);
+        crate::oauth_activity::rpc(&rpc.method, &params);
+    }
 
     let body = route_authenticated_request(
         rpc_request,
@@ -705,7 +778,8 @@ async fn handle_request(
         listener.quota.as_ref(),
     )
     .await;
-    Ok(json_response(StatusCode::OK, body))
+    crate::oauth_activity::rpc_answer(&body);
+    json_response(StatusCode::OK, body)
 }
 
 /// Whether `path` is the site's (`Some`), and if so which view (`Some(None)`:
@@ -873,6 +947,7 @@ async fn site_route(
         components,
     )
     .await;
+    crate::oauth_activity::site_target(kb_id, &view, &page);
     site_answer(page, chrome)
 }
 
@@ -988,7 +1063,7 @@ fn site_response(status: StatusCode, body: String) -> Response<Full<Bytes>> {
     } else {
         "text/plain; charset=utf-8"
     };
-    Response::builder()
+    let mut resp = Response::builder()
         .status(status)
         .header("content-type", ctype)
         .header("content-security-policy", mae_daemon::site::CSP)
@@ -996,7 +1071,13 @@ fn site_response(status: StatusCode, body: String) -> Response<Full<Bytes>> {
         .header("referrer-policy", "no-referrer")
         .header("cache-control", "private, no-store")
         .body(Full::new(Bytes::from(body)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())));
+    if !status.is_success() {
+        let kind = crate::oauth_activity::status_kind(status);
+        resp.extensions_mut()
+            .insert(crate::oauth_activity::RefusalKind(kind));
+    }
+    resp
 }
 
 /// Read an authenticated request's body under `max_request_body_bytes`,
@@ -1212,6 +1293,9 @@ pub(crate) struct Listener {
     /// ADR-115: a KB's attachments, `Some` only when `attachments_enabled`
     /// and a `DocStore` exists.
     pub blobs: Option<Arc<crate::oauth_blobs::BlobRoutes>>,
+    /// ADR-120: the activity record, `Some` only when `[activity] enabled`.
+    /// `None`: nothing is recorded and no response carries a session id.
+    pub activity: Option<Arc<mae_daemon::activity::writer::ActivityRecord>>,
 }
 
 impl Listener {
@@ -1224,6 +1308,15 @@ impl Listener {
     ) -> Self {
         self.binding_routes = routes.filter(|_| bindings.is_some());
         self.bindings = bindings;
+        self
+    }
+
+    /// Attach the activity record (ADR-120).
+    pub(crate) fn with_activity(
+        mut self,
+        activity: Option<Arc<mae_daemon::activity::writer::ActivityRecord>>,
+    ) -> Self {
+        self.activity = activity;
         self
     }
 
@@ -1257,6 +1350,7 @@ impl Listener {
             bindings: None,
             binding_routes: None,
             blobs: None,
+            activity: None,
         })
     }
 }
@@ -1318,18 +1412,53 @@ pub async fn run_oauth_listener(
                     return;
                 }
             };
-            let io = hyper_util::rt::TokioIo::new(tls_stream);
-            let service = hyper::service::service_fn(move |req| {
-                serve(req, Arc::clone(&state), Arc::clone(&guard))
-            });
-            if let Err(e) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection_with_upgrades(io, service)
-                    .await
-            {
-                tracing::debug!(error = %e, %peer_addr, "connection error");
-            }
+            serve_connection(tls_stream, peer_addr, state, guard).await;
         });
+    }
+}
+
+/// How many requests one connection may have in flight: HTTP/2's
+/// `SETTINGS_MAX_CONCURRENT_STREAMS`, and the limit on a connection's recorded
+/// requests still running (ADR-120 D5).
+///
+/// A recorded request runs to its commit even after its stream is reset, so
+/// without a limit of its own a client could open a stream, reset it, and
+/// repeat, each time leaving a request holding a commit wait. A client that
+/// keeps to the advertised stream limit never meets this one, because its
+/// requests end before their streams close; only a client resetting streams
+/// is refused, `429`. 100 is the smallest value RFC 9113 §6.5.2 recommends
+/// advertising, so no conforming client is held back further than that.
+pub(crate) const MAX_REQUESTS_PER_CONNECTION: u32 = 100;
+
+/// Serve one accepted connection (HTTP/1.1, or HTTP/2 with prior knowledge),
+/// with each request's peer address and the connection's request limiter put
+/// on it. `guard` is the connection's slot under the listener's cap.
+pub(crate) async fn serve_connection<I>(
+    io: I,
+    peer_addr: std::net::SocketAddr,
+    state: Arc<Listener>,
+    guard: Arc<ConnGuard>,
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let requests =
+        crate::oauth_activity::ConnRequests(ConnLimiter::new(MAX_REQUESTS_PER_CONNECTION as usize));
+    let service = hyper::service::service_fn(move |mut req: Request<Incoming>| {
+        req.extensions_mut()
+            .insert(crate::oauth_activity::PeerAddr(peer_addr));
+        req.extensions_mut().insert(requests.clone());
+        serve(req, Arc::clone(&state), Arc::clone(&guard))
+    });
+    let mut builder =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    builder
+        .http2()
+        .max_concurrent_streams(MAX_REQUESTS_PER_CONNECTION);
+    if let Err(e) = builder
+        .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(io), service)
+        .await
+    {
+        tracing::debug!(error = %e, %peer_addr, "connection error");
     }
 }
 

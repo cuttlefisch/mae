@@ -798,6 +798,17 @@ impl McpError {
 
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
+    /// ADR-120 D5: the activity record could not take the request's event in
+    /// time, so nothing of its answer is sent. Retry after `Retry-After`.
+    pub fn activity_record_unavailable(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "activity_record_unavailable",
+            serde_json::json!({}),
+        )
+    }
+
     pub fn internal_fault(message: String) -> Self {
         Self::kinded(-32603, message, "internal", serde_json::json!({}))
     }
@@ -877,6 +888,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "agent_forbidden",
     "set_incomplete",
     "signed_pdf_required",
+    "activity_record_unavailable",
     "internal",
 ];
 
@@ -1090,6 +1102,7 @@ mod tests {
             McpError::agent_forbidden(m()),
             McpError::set_incomplete(m(), vec!["r".into()]),
             McpError::signed_pdf_required(m(), vec!["r".into()]),
+            McpError::activity_record_unavailable(m()),
             McpError::internal_fault(m()),
         ]
     }

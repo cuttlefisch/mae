@@ -146,7 +146,7 @@ fn entry(r: &Revision, src: Option<&[u8]>, body_format: Option<&str>) -> Value {
     if hex::encode(&node.digest()[..16]) != r.version {
         return unavailable();
     }
-    let mut m: Map<String, Value> = crate::kb_query::content_fields(&node, body_format);
+    let mut m: Map<String, Value> = crate::kb_query::content_fields(&node, body_format, &r.kb_id);
     m.insert("id".into(), json!(r.node_id));
     m.insert("version".into(), json!(r.version));
     m.insert(

@@ -1072,3 +1072,91 @@ fn the_theme_box_carries_the_es_es_labels() {
     }
     assert!(!box_.contains(" lang="), "{box_}");
 }
+
+/// ADR-115 E3 on the live site: a NAME whose blob the KB's store holds is an
+/// `<img>` at the blob's route; a NAME bound to a blob the store lacks, and a
+/// link naming no attachment of the node, are the labelled `missing`
+/// placeholder, which carries no hash. Kills: resolving from the node's map
+/// without asking the store, a URL other than the blob route, or a page's
+/// NAMEs leaking into another page.
+#[tokio::test]
+async fn an_attachment_the_store_holds_is_an_image_and_one_it_lacks_is_a_placeholder() {
+    use mae_daemon::blob_store::{process, upload, BlobStore};
+    use mae_sync::kb::AttachmentRef;
+
+    let store = fresh_doc_store().await;
+    let dir = tempfile::tempdir().unwrap();
+    let blobs = Arc::new(BlobStore::open(&dir.path().join("blobs")).unwrap());
+    store.set_blob_store(Arc::clone(&blobs));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(6, 3, image::Rgb([9, 99, 199])))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let limits = process::ProcessLimits {
+        max_pixels: 1_000_000,
+        max_frames: 1,
+    };
+    let kb_id = "kb-img";
+    let held = Arc::clone(&blobs);
+    let meta = tokio::task::spawn_blocking(move || {
+        upload::store_bytes(
+            &held,
+            kb_id,
+            png,
+            &limits,
+            None,
+            &process::process,
+            &upload::Job::new(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let ghost = "ab".repeat(32);
+    seed(
+        &store,
+        kb_id,
+        &[
+            (
+                "pic",
+                "Pic",
+                "[[attachment:shown.png]] [[attachment:gone.png]] [[attachment:unbound.png]]\n",
+            ),
+            // Another page binds `unbound.png`: it must not resolve on `pic`.
+            ("other", "Other", "[[attachment:unbound.png]]\n"),
+        ],
+    )
+    .await;
+    let bind = |id: &'static str, entries: Vec<(&'static str, String)>| {
+        let store = Arc::clone(&store);
+        async move {
+            let name = mae_sync::kb_node_doc_name(kb_id, id);
+            let mut doc = KbNodeDoc::from_bytes(&store.encode_state(&name).await.unwrap()).unwrap();
+            for (n, sha) in entries {
+                let update = doc
+                    .set_attachment(n, &AttachmentRef::new(sha, 10, "image/png").unwrap())
+                    .unwrap();
+                store.apply_update(&name, &update, None, BY).await.unwrap();
+            }
+        }
+    };
+    bind(
+        "pic",
+        vec![
+            ("shown.png", meta.sha256.clone()),
+            ("gone.png", ghost.clone()),
+        ],
+    )
+    .await;
+    bind("other", vec![("unbound.png", meta.sha256.clone())]).await;
+
+    let SitePage::Found { html, .. } = site::page(&store, kb_id, "pic", Some(READER), LIMITS).await
+    else {
+        panic!("the page is readable");
+    };
+    let img = format!("<img src=\"/kb/{kb_id}/blobs/{}\"", meta.sha256);
+    assert_eq!(html.matches(&img).count(), 1, "{html}");
+    assert!(html.contains("width=\"6\" height=\"3\""), "{html}");
+    assert_eq!(html.matches("data-state=\"missing\"").count(), 2, "{html}");
+    assert!(!html.contains(&ghost), "{html}");
+}

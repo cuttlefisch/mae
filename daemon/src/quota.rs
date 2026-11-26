@@ -64,6 +64,12 @@ pub trait QuotaCharger: Send + Sync {
     fn storage_quota(&self, _principal: &str) -> Option<crate::blob_store::StorageQuota> {
         None
     }
+
+    /// The tenant `principal` belongs to, if any: the activity record's
+    /// `tenant` (ADR-120 D3). `None`, the default, for no configured tenant.
+    fn tenant_of(&self, _principal: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Admits everything. The default for surfaces with no tenant configuration, and

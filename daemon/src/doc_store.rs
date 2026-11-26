@@ -105,6 +105,12 @@ pub struct DocStore {
     /// binds IdP subjects: publication review asks it whether a named
     /// performer is a person (ADR-113 E11, `performer_not_person`).
     bindings: std::sync::OnceLock<Arc<crate::identity_binding::BindingStore>>,
+    /// The KB attachment store (ADR-115), when `oauth.attachments_enabled`
+    /// opened one. Set once at startup, beside the signer, so every reader
+    /// that is handed this store (the live site, `kb/node.attach`) can ask
+    /// whether a KB holds a blob without a second handle being threaded
+    /// through the listener. Absent: no attachment resolves.
+    blob_store: std::sync::OnceLock<Arc<crate::blob_store::BlobStore>>,
     /// Per-KB content trust anchor (ADR-026): the owner pubkey a peer verifies the
     /// op-log genesis against. Registered for a KB JOINED from a relay we don't
     /// trust (the join-ticket node-id, by the dialer), and — ADR-036 Amendment 1
@@ -349,6 +355,7 @@ impl DocStore {
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
             bindings: std::sync::OnceLock::new(),
+            blob_store: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
@@ -841,6 +848,17 @@ impl DocStore {
     /// key-auth mode; idempotent (a second call is ignored).
     pub fn set_signer(&self, identity: Arc<mae_mcp::identity::Identity>) {
         let _ = self.signer.set(identity);
+    }
+
+    /// Install the attachment store (ADR-115). Called once at startup;
+    /// idempotent (a second call is ignored).
+    pub fn set_blob_store(&self, blobs: Arc<crate::blob_store::BlobStore>) {
+        let _ = self.blob_store.set(blobs);
+    }
+
+    /// The attachment store, if this daemon serves attachments.
+    pub fn blob_store(&self) -> Option<&Arc<crate::blob_store::BlobStore>> {
+        self.blob_store.get()
     }
 
     /// Wire the projector change feed (ADR-029 B2). Called once at startup; idempotent.

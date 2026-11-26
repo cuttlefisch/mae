@@ -119,6 +119,12 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         // ADR-113: a request freezes nodes and cuts history; each is signed.
         | "kb/review.request"
         | "kb/review.withdraw"
+        // PR-5's acts: each writes a signed event and moves revision state.
+        | "kb/review.act"
+        | "kb/review.approve"
+        | "kb/review.reject"
+        | "kb/review.enter_into_force"
+        | "kb/review.derogate"
         | "kb/review.set_policy"
         | "kb/review.set_code" => RequestCost::Mutation,
         // ADR-113: pages over a KB's requests and its event chain.
@@ -344,6 +350,11 @@ impl TenantRegistry {
             name,
             cfg.quota.max_storage_bytes,
         ))
+    }
+
+    /// The tenant `principal` is configured under, if any.
+    pub fn tenant_of(&self, principal: &str) -> Option<String> {
+        self.by_principal.get(principal).cloned()
     }
 
     /// Manual eviction (the `daemon/evict_tenant` RPC — the rust-analyzer/
@@ -700,6 +711,10 @@ pub struct TenantQuota(pub Arc<TenantRegistry>);
 impl mae_daemon::quota::QuotaCharger for TenantQuota {
     fn storage_quota(&self, principal: &str) -> Option<mae_daemon::blob_store::StorageQuota> {
         self.0.storage_quota(principal)
+    }
+
+    fn tenant_of(&self, principal: &str) -> Option<String> {
+        self.0.tenant_of(principal)
     }
 
     fn charge(

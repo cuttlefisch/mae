@@ -45,6 +45,10 @@ const BYTES_PER_PIXEL_BOUND: u64 = 8;
 /// it is decoded, so a decompression bomb stops at the bound.
 pub const ANIMATION_PIXEL_FACTOR: u64 = 4;
 
+/// Frames an animation may have (`ProcessLimits::max_frames`), for every way
+/// into the store.
+pub const MAX_FRAMES: u32 = 1000;
+
 /// The quality a rotated JPEG is re-encoded at: the only lossy step, applied
 /// once, since the result carries no orientation tag to apply again.
 const ROTATED_JPEG_QUALITY: u8 = 90;

@@ -38,6 +38,9 @@ pub struct SignIn {
     /// The groups in the configured `groups_claim`, read exactly as the D4
     /// session gate reads them ([`groups_from_claims`]).
     pub groups: Vec<String>,
+    /// The IdP's session id (`sid`), when the token carries one: recorded
+    /// beside the daemon's own session id as a second join key (ADR-120 D4).
+    pub sid: Option<String>,
 }
 
 /// The operator's second-factor rule: the `amr` values, and the `acr` values,
@@ -95,6 +98,11 @@ impl SignIn {
                 .map(String::from),
             auth_time: claims.get("auth_time").and_then(|v| v.as_u64()),
             groups: groups_from_claims(claims, groups_claim),
+            sid: claims
+                .get("sid")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from),
         }
     }
 

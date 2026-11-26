@@ -70,6 +70,9 @@ pub struct DaemonState {
     /// many documents it carries (ADR-099 D2), so this counts sessions, not
     /// documents.
     pub oauth_conn: Option<crate::conn_limit::ConnLimiter>,
+    /// ADR-120: the activity record, when enabled. Read only by
+    /// `daemon/activity_status` (counters and chain tips, never an event).
+    pub activity: Option<Arc<mae_daemon::activity::writer::ActivityRecord>>,
 }
 
 /// How many clients are attached to this daemon right now, per listener.
@@ -158,6 +161,7 @@ impl DaemonState {
             kb_conn: None,
             collab_conn: None,
             oauth_conn: None,
+            activity: None,
         }
     }
 
@@ -583,45 +587,11 @@ pub async fn dispatch(
         }
 
         // --- Lifecycle ---
-        "daemon/status" => {
-            // Snapshot the fields, then drop the lock before the async doc_store scan
-            // (don't hold the state mutex across an await).
-            let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants, connections) = {
-                let state = state.lock().await;
-                (
-                    state.started_at.elapsed(),
-                    1 + state.instance_stores.len(),
-                    state.query_layer.is_some(),
-                    state.registry.instances.len(),
-                    state.doc_store.clone(),
-                    state.tenants.live_tenant_count(),
-                    connection_report(&state),
-                )
-            };
-            // Phase D introspection: which KB collections does the daemon host, and
-            // does it host the primary (kbc:default)? Lets a connecting editor skip
-            // warming its own store and host/route the primary through the daemon.
-            let (kb_collections, storage) = doc_store_status(doc_store.as_deref()).await;
-            // "default" = KB_DEFAULT_NAME (the primary's canonical collab id).
-            let primary_exists = kb_collections
-                .iter()
-                .any(|c| c == "default" || c == "primary");
-            Ok(json!({
-                // Daemon crate version — the version-skew signal an editor compares
-                // against its own before attaching (ADR-035 supervision guardrail;
-                // a co-located on-demand daemon must match the editor that spawned
-                // it). A finer build-id can layer on later if semver proves coarse.
-                "version": env!("CARGO_PKG_VERSION"),
-                "uptime_secs": uptime.as_secs(),
-                "stores": store_count,
-                "has_query_layer": has_ql,
-                "registered_instances": reg_count,
-                "kb_collections": kb_collections,
-                "primary_exists": primary_exists,
-                "live_tenants": live_tenants,
-                "connections": connections,
-                "storage": storage,
-            }))
+        "daemon/status" => daemon_status(state).await,
+        // ADR-120 D13: what `mae-daemon activity status` prints.
+        "daemon/activity_status" => {
+            let record = { state.lock().await.activity.clone() };
+            Ok(crate::activity_cli::status_value(record.as_deref()))
         }
 
         // ADR-060 Phase C: the operator-triggered eviction escape hatch (the
@@ -1248,6 +1218,48 @@ impl DaemonError {
             DaemonError::TenantAtCapacity(_) => -32002,
         }
     }
+}
+
+/// `daemon/status`: version, uptime, stores, KB collections and connections.
+async fn daemon_status(state: &Arc<Mutex<DaemonState>>) -> Result<Value, DaemonError> {
+    // Snapshot the fields, then drop the lock before the async doc_store scan
+    // (don't hold the state mutex across an await).
+    let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants, connections) = {
+        let state = state.lock().await;
+        (
+            state.started_at.elapsed(),
+            1 + state.instance_stores.len(),
+            state.query_layer.is_some(),
+            state.registry.instances.len(),
+            state.doc_store.clone(),
+            state.tenants.live_tenant_count(),
+            connection_report(&state),
+        )
+    };
+    // Phase D introspection: which KB collections does the daemon host, and
+    // does it host the primary (kbc:default)? Lets a connecting editor skip
+    // warming its own store and host/route the primary through the daemon.
+    let (kb_collections, storage) = doc_store_status(doc_store.as_deref()).await;
+    // "default" = KB_DEFAULT_NAME (the primary's canonical collab id).
+    let primary_exists = kb_collections
+        .iter()
+        .any(|c| c == "default" || c == "primary");
+    Ok(json!({
+        // Daemon crate version — the version-skew signal an editor compares
+        // against its own before attaching (ADR-035 supervision guardrail;
+        // a co-located on-demand daemon must match the editor that spawned
+        // it). A finer build-id can layer on later if semver proves coarse.
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": uptime.as_secs(),
+        "stores": store_count,
+        "has_query_layer": has_ql,
+        "registered_instances": reg_count,
+        "kb_collections": kb_collections,
+        "primary_exists": primary_exists,
+        "live_tenants": live_tenants,
+        "connections": connections,
+        "storage": storage,
+    }))
 }
 
 #[cfg(test)]

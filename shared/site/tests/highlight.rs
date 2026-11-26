@@ -14,6 +14,7 @@ use mae_site::{
 
 fn page(id: &str, body: &str) -> SourcePage {
     SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n"),
     }

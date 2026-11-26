@@ -830,6 +830,7 @@ mod tests {
         let mut config = base_config();
         config.site_hidden_namespaces = vec!["internal".into()];
         let page = mae_site::SourcePage {
+ attachments: Default::default(),
             origin: "p".into(),
             text: ":PROPERTIES:\n:ID: p\n:END:\n#+title: P\n\nSee internal:x.\n\n#+begin_src sh\necho \"hi\" # c\n#+end_src\n".into(),
         };

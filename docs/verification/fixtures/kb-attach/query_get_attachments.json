@@ -1,0 +1,55 @@
+{
+  "aliases": [],
+  "attachments": [
+    {
+      "media_type": "image/png",
+      "name": "diagram.png",
+      "sha256": "77a82e813802c8cee3a4a50f8171052290aecd42abf3e1b4edb5e290ad1ce987",
+      "size": 144,
+      "url": "/kb/seeded/blobs/77a82e813802c8cee3a4a50f8171052290aecd42abf3e1b4edb5e290ad1ce987"
+    },
+    {
+      "media_type": "image/jpeg",
+      "name": "photo.jpg",
+      "sha256": "36702ba11ec652daa7ff23bc9aa133ec07614fb8a4d27ca9a9efd1c9c1b88fa3",
+      "size": 693,
+      "url": "/kb/seeded/blobs/36702ba11ec652daa7ff23bc9aa133ec07614fb8a4d27ca9a9efd1c9c1b88fa3"
+    },
+    {
+      "media_type": "application/pdf",
+      "name": "spec.pdf",
+      "sha256": "4e3fa972d69620ed656d8b80afe95816f7da8e65ae4369a392870096f70bdaed",
+      "size": 333,
+      "url": "/kb/seeded/blobs/4e3fa972d69620ed656d8b80afe95816f7da8e65ae4369a392870096f70bdaed"
+    }
+  ],
+  "body": "A photo [[attachment:photo.jpg]] and [[attachment:diagram.png]].\n* Section\n:PROPERTIES:\n:ID: 0b000000-0000-4000-8000-0000000000f2\n:END:\n** Deeper\nThe spec: [[attachment:spec.pdf]]\n",
+  "body_truncated": false,
+  "created_at": "2020-09-13T12:26:40Z",
+  "encryption": "none",
+  "kb_id": "seeded",
+  "kind": null,
+  "links": [],
+  "modified_at": "2020-09-13T12:26:40Z",
+  "modified_at_basis": "seed",
+  "node_id": "0a000000-0000-4000-8000-0000000000f1",
+  "org_header": {
+    "has_filetags_line": false,
+    "has_title_line": true,
+    "property_order": [
+      "ID"
+    ]
+  },
+  "priority": null,
+  "properties": {
+    "ID": "0a000000-0000-4000-8000-0000000000f1"
+  },
+  "property_order": [
+    "ID"
+  ],
+  "schema_v": 2,
+  "tags": [],
+  "title": "One",
+  "todo_state": null,
+  "version": "486bcfdc711f6f63e2ea1bb6d7c22dc2"
+}

@@ -4,9 +4,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use mae_sync::kb::AttachmentRef;
 
 use sha2::{Digest, Sha256};
 
+use super::attach::{self, AttachmentLimits, BlobReader, GitBlobs, PlannedAttachment, Wanted};
 use super::git::{GitRepo, TreeEntry};
 use super::glob::Glob;
 use super::history::{self, History};
@@ -30,6 +34,9 @@ pub struct PlanOptions {
     /// `--allow-received-times`: accept a node whose time had to be the time
     /// the plan was made. Such times are listed and left out of `plan_hash`.
     pub allow_received_times: bool,
+    /// The bounds attachment files are read and processed under (ADR-115
+    /// D7): the daemon's own upload limits.
+    pub attachment_limits: AttachmentLimits,
 }
 
 impl PlanOptions {
@@ -62,8 +69,10 @@ pub struct CheckoutAttr {
 
 /// Everything [`plan_entries`] needs besides the options: the tree, the blob
 /// bytes by sha, and the checkout attributes of the selected paths.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PlanInput {
+    /// Where attachment files are read from. `None`: from `blobs`.
+    pub reader: Option<Arc<dyn BlobReader>>,
     pub source: Source,
     pub entries: Vec<TreeEntry>,
     pub blobs: HashMap<String, Vec<u8>>,
@@ -78,6 +87,17 @@ pub struct PlanInput {
     pub objects_verified: usize,
     /// When the plan was made: both times of a file git has no history for.
     pub received_at: i64,
+}
+
+impl std::fmt::Debug for PlanInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanInput")
+            .field("source", &self.source)
+            .field("entries", &self.entries.len())
+            .field("blobs", &self.blobs.len())
+            .field("reader", &self.reader.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Where a node's time came from.
@@ -122,6 +142,18 @@ pub struct PlannedNode {
     pub modified_source: TimeSource,
     /// The value of `--code-property` in the file drawer, if set and non-empty.
     pub code: Option<String>,
+    /// The files its `[[attachment:NAME]]` links name, by NAME (ADR-115 D7).
+    pub attachments: Vec<PlannedAttachment>,
+}
+
+impl PlannedNode {
+    /// The node's `attachments` map.
+    pub fn attachment_map(&self) -> BTreeMap<String, AttachmentRef> {
+        self.attachments
+            .iter()
+            .map(|a| (a.name.clone(), a.entry()))
+            .collect()
+    }
 }
 
 /// A reason the plan cannot be applied, attached to a path (`""` for the run).
@@ -180,6 +212,16 @@ impl SeedPlan {
     pub fn anchor_count(&self) -> usize {
         self.nodes.iter().map(|n| n.file.anchors.len()).sum()
     }
+
+    /// Every attachment of the plan, each processed file once (two NAMEs
+    /// may bind the same file), in order of its sha256.
+    pub fn unique_attachments(&self) -> Vec<&PlannedAttachment> {
+        let mut seen = BTreeMap::new();
+        for a in self.nodes.iter().flat_map(|n| &n.attachments) {
+            seen.entry(a.sha256.as_str()).or_insert(a);
+        }
+        seen.into_values().collect()
+    }
 }
 
 /// Plan the seed of `opts.rev` in `opts.repo`. Reads git only.
@@ -223,6 +265,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
+    let reader: Arc<dyn BlobReader> = Arc::new(GitBlobs::open(&opts.repo, &commit)?);
     let source = Source {
         repo: opts.repo.display().to_string(),
         rev: opts.rev.clone(),
@@ -231,6 +274,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
     };
     plan_entries(
         PlanInput {
+            reader: Some(reader),
             source,
             entries,
             blobs,
@@ -258,7 +302,18 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
             a.attr, a.value
         ),
     }));
-    let nodes = plan_files(&selection.selected, &input, opts, &mut refusals)?;
+    let mut nodes = plan_files(&selection.selected, &input, opts, &mut refusals)?;
+    let reader: &dyn BlobReader = match &input.reader {
+        Some(r) => r.as_ref(),
+        None => &input.blobs,
+    };
+    plan_attachments(
+        &mut nodes,
+        &input.entries,
+        reader,
+        &opts.attachment_limits,
+        &mut refusals,
+    )?;
     refusals.extend(duplicate_ids(&nodes));
     refusals.extend(path_collisions(&nodes));
     let received_times = received_times(&nodes, opts, &mut refusals);
@@ -552,6 +607,7 @@ fn plan_file(
         modified_at: 0,
         modified_source: TimeSource::Received,
         code: None,
+        attachments: Vec::new(),
     })
 }
 
@@ -636,10 +692,19 @@ fn line_diff(a: &str, b: &str) -> (Vec<String>, Vec<String>) {
     )
 }
 
-/// @ai-caution: [kb-truth] Digests every input the apply writes into a node.
-/// A planned node carries no attachments yet; when seeding does (ADR-115 P4,
-/// D7), each node's processed NAME → sha256 map must be digested here, or two
-/// plans differing only in an image's bytes would share a hash.
+/// @ai-caution: [kb-truth] Digests every input the apply writes into a node,
+/// each node's attachments included (ADR-115 D7): NAME, path, and the sha256,
+/// size and media type of the PROCESSED bytes, so two plans differing only in
+/// one image's bytes have different hashes. Processing is deterministic for
+/// one daemon build (a pure function of the bytes; the limits only refuse),
+/// so planning twice gives one hash; a build whose processing writes other
+/// bytes gives another, and the apply refuses rather than store what was not
+/// reviewed.
+///
+/// A node without attachments adds nothing, so every plan made before P4
+/// keeps its hash. A node with some adds [`ATTACHMENTS_TAG`] first: eight
+/// bytes no field's length prefix can be, so the block cannot be read as the
+/// next node's path.
 fn plan_hash(nodes: &[PlannedNode]) -> String {
     let mut h = Sha256::new();
     field(&mut h, b"mae-seed-plan");
@@ -661,9 +726,23 @@ fn plan_hash(nodes: &[PlannedNode]) -> String {
         optional(&mut h, f.title.as_ref().map(|t| vec![t.clone()]));
         optional(&mut h, f.filetags.clone());
         field(&mut h, f.body.as_bytes());
+        if !n.attachments.is_empty() {
+            h.update(ATTACHMENTS_TAG.to_le_bytes());
+            count(&mut h, n.attachments.len());
+            for a in &n.attachments {
+                field(&mut h, a.name.as_bytes());
+                field(&mut h, a.path.as_bytes());
+                field(&mut h, a.sha256.as_bytes());
+                h.update(a.size.to_le_bytes());
+                field(&mut h, a.media_type.as_bytes());
+            }
+        }
     }
     hex::encode(h.finalize())
 }
+
+/// Marks a node's attachment block in `plan_hash`: a length no field has.
+const ATTACHMENTS_TAG: u64 = u64::MAX;
 
 fn time(h: &mut Sha256, t: i64, source: TimeSource) {
     match source {
@@ -700,4 +779,153 @@ fn optional(h: &mut Sha256, v: Option<Vec<String>>) {
 /// SHA-256 of `bytes`, hex.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// One file a node wants, found in the tree: `(node index, NAME and path,
+/// git blob)`.
+type Found = (usize, Wanted, String);
+
+/// ADR-115 D7: every `[[attachment:NAME]]` file of every planned node, found
+/// in the commit's tree, read once each, and processed as an upload would be.
+/// A file that cannot be carried is a refusal at its page, naming the file.
+fn plan_attachments(
+    nodes: &mut [PlannedNode],
+    entries: &[TreeEntry],
+    reader: &dyn BlobReader,
+    limits: &AttachmentLimits,
+    refusals: &mut Vec<Refusal>,
+) -> Result<(), SeedError> {
+    let tree: HashMap<&str, &TreeEntry> = entries
+        .iter()
+        .filter_map(|e| e.path.as_ref().ok().map(|p| (p.as_str(), e)))
+        .collect();
+    let mut found: Vec<Found> = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let (wanted, problems) = attach::wanted(&n.path, &regen(&n.file));
+        refusals.extend(problems.into_iter().map(|p| at(&n.path, p)));
+        for w in wanted.into_values() {
+            match locate(&tree, &w) {
+                Ok(sha) => found.push((i, w, sha)),
+                Err(p) => refusals.push(at(&n.path, p)),
+            }
+        }
+    }
+    let attrs =
+        reader.checkout_attributes(&found.iter().map(|f| f.1.path.clone()).collect::<Vec<_>>())?;
+    found.retain(|(i, w, _)| {
+        let set: Vec<String> = attrs
+            .iter()
+            .filter(|a| a.path == w.path)
+            .map(|a| format!("{}={}", a.attr, a.value))
+            .collect();
+        if !set.is_empty() {
+            refusals.push(refusal(
+                &nodes[*i].path,
+                ProblemKind::CheckoutAttribute,
+                &format!(
+                    "{}: {} is set by the commit's own .gitattributes: the commit holds other \
+                     bytes than a checkout (a Git LFS pointer, a converted file)",
+                    w.path,
+                    set.join(", ")
+                ),
+            ));
+        }
+        set.is_empty()
+    });
+    let outcomes = describe_files(&found, reader, limits)?;
+    for (i, w, sha) in found {
+        match &outcomes[&sha] {
+            Ok((sha256, size, media_type)) => nodes[i].attachments.push(PlannedAttachment {
+                name: w.name,
+                path: w.path,
+                blob: sha,
+                sha256: sha256.clone(),
+                size: *size,
+                media_type: media_type.clone(),
+            }),
+            Err(p) => refusals.push(refusal(
+                &nodes[i].path,
+                p.kind,
+                &format!("{}: {}", w.path, p.detail),
+            )),
+        }
+    }
+    for n in nodes.iter_mut() {
+        n.attachments.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    Ok(())
+}
+
+/// The git blob of a wanted file, or why the tree has none the seed may read.
+fn locate(tree: &HashMap<&str, &TreeEntry>, w: &Wanted) -> Result<String, Problem> {
+    let link = format!("[[attachment:{}]]", w.name);
+    // A symlinked directory on the way hides the file from the tree.
+    let mut prefix = String::new();
+    for part in w.path.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        if tree
+            .get(prefix.as_str())
+            .is_some_and(|e| e.mode == "120000")
+        {
+            return Err(Problem::new(
+                ProblemKind::AttachmentSymlink,
+                format!("{link}: {prefix} is a symlink, which is never followed"),
+            ));
+        }
+    }
+    match tree.get(w.path.as_str()) {
+        None => Err(Problem::new(
+            ProblemKind::AttachmentMissing,
+            format!("{link}: no file at {} in the commit", w.path),
+        )),
+        Some(e) if e.kind != "blob" => Err(Problem::new(
+            ProblemKind::AttachmentMissing,
+            format!("{link}: {} is a submodule, not a file", w.path),
+        )),
+        Some(e) => Ok(e.sha.clone()),
+    }
+}
+
+/// Each distinct blob of `found` described once: refused from its size
+/// alone when over the cap (it is never read), else read and processed.
+fn describe_files(
+    found: &[Found],
+    reader: &dyn BlobReader,
+    limits: &AttachmentLimits,
+) -> Result<HashMap<String, attach::Outcome>, SeedError> {
+    let mut shas: Vec<String> = found.iter().map(|f| f.2.clone()).collect();
+    shas.sort();
+    shas.dedup();
+    let sizes = reader.sizes(&shas)?;
+    let mut out = HashMap::new();
+    let mut readable = Vec::new();
+    for (sha, size) in shas.into_iter().zip(sizes) {
+        if size > limits.max_bytes {
+            out.insert(
+                sha,
+                Err(Problem::new(
+                    ProblemKind::AttachmentTooLarge,
+                    format!(
+                        "the file is {size} bytes, over the attachment limit of {} \
+                         (oauth.max_attachment_bytes); it was not read",
+                        limits.max_bytes
+                    ),
+                )),
+            );
+        } else {
+            readable.push(sha);
+        }
+    }
+    reader.for_each(&readable, &mut |sha, bytes| {
+        out.insert(sha.to_string(), attach::describe(bytes, limits));
+    })?;
+    for sha in readable {
+        if !out.contains_key(&sha) {
+            return Err(SeedError(format!("no bytes were read for blob {sha}")));
+        }
+    }
+    Ok(out)
 }

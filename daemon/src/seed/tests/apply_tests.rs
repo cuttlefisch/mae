@@ -88,6 +88,7 @@ pub(super) fn target<'a>(owner: &'a Identity, hash: &'a str) -> ApplyTarget<'a> 
         now: T + 10,
         author: None,
         operator: "tester",
+        attach: None,
     }
 }
 

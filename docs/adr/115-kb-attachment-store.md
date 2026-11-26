@@ -528,6 +528,63 @@ built:
   out. That predates this store and applies to every route on the listener, so it is tracked as an
   issue of its own, not fixed here.
 
+## As built: P4 (2026-11-25)
+
+P4 (seeding, export and the read path) follows D7 and E1/E2. What it carries, and where it departs:
+
+### B8. What round-trips
+
+`kb seed`, then `kb export`, then `kb seed` again binds the same NAME → sha256 map on every node: the
+export writes the bytes the store holds at the directory the page's text names (E2), and processing is
+idempotent, so the second seed stores the same hashes. Pages come back as their normal form N(F). A
+PDF, any non-image file and an image that carried no metadata come back byte for byte. **An image with
+metadata does not**: what the seed stored, and so what the export writes, has its EXIF, GPS, XMP and
+comments stripped and an orientation tag applied to the pixels (a rotated JPEG is re-encoded, D3a). A
+repository that commits the export therefore changes such a photo once, and never again. Tested in
+`daemon/src/seed/tests/attach_tests.rs` with a generated JPEG carrying EXIF, GPS and orientation 6.
+
+### B9. The seed's refusals, each named
+
+A link is refused, at its page, when its NAME fails the NAME rule; when no `:ID:` is up the outline or
+a `:DIR:`/`:ATTACH_DIR:` is (`attachment_dir`); when the directory built from an ID is not a plain
+relative path, an ID such as `../../x` (`attachment_path`); when two links of the page are one NAME
+once case and normalization are ignored but name different files (`attachment_collision`); when the
+commit has no file there (`attachment_missing`), or a symlink on the way, which is never followed
+(`attachment_symlink`); when a checkout attribute (an LFS `filter` above all) is set on the path;
+when the file is over `max_attachment_bytes`, judged from its size before it is read
+(`attachment_too_large`); and when processing refuses it (too many pixels, undecodable, AVIF). The
+dry run lists every refusal; an apply of a plan with any writes nothing. The files are read from the
+commit's object store, never a working copy, each checked to hash to its name.
+
+### B10. The NAME rule refuses `%`
+
+Added to D4's rule after the Windows-forbidden characters: "contains a percent sign". A link target
+or URL may be percent-decoded on its way (`a%20b.png` read as `a b.png`), so one NAME could name two
+files, or a different one in a client than in the store. The rule in check order, with examples and
+the fold pairs `fold_key` gives (ß/ss, ẞ, ﬁ, ς/σ, a Cherokee pair, İ and ı), is
+`docs/verification/fixtures/kb-attach/name_rule.json`, generated from the code by a test that fails
+when the file drifts.
+
+### B11. The read shape
+
+`kb/query.get`, `kb/query.list`, `kb/history.get` and the revision read report a node's attachments
+as a list in NAME order, each `{name, sha256, size, media_type, url}`, with `url` the blob route
+`/kb/<kb-id>/blobs/<sha256>` (D3), which authorizes the reader again on every request. A reader who
+is not a member gets the refusal it always got, naming no hash. The live site (ADR-119) resolves each
+page's `[[attachment:NAME]]` links itself (E3): resolved, with the image's size, when the KB's store
+holds the blob; `missing` when the node binds no such NAME or the store lacks the blob. Example:
+`docs/verification/fixtures/kb-attach/query_get_attachments.json`.
+
+### B12. Residuals, stated
+
+- **An update's dry run cannot list the fields of an edit to a node with attachments.** It rebuilds
+  what the seed wrote from the recorded page blob, which does not hold the attachment map, so the
+  rebuilt version differs from the recorded one and the edit is reported as "fields unknown". The
+  edit is still found and still needs `--discard-edits`. Fixing it means recording the map with the
+  seed row.
+- **The dry run processes every image** (to name its hash in `plan_hash`), so a repository of many
+  large photos makes a slow dry run; the apply processes them again.
+
 ## Rejected
 
 - **Base64 in node text**, for the measured reasons in Context.

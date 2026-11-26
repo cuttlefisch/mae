@@ -79,7 +79,7 @@ pub(crate) const RETRY_AFTER_SECS: u64 =
     (MEASURED_WORST_JOB.as_millis() as u64 * JOBS_PER_TENANT as u64).div_ceil(1000);
 
 /// Frames an animated GIF, APNG or WebP may have (D3a's frame limit).
-pub(crate) const MAX_FRAMES: u32 = 1000;
+pub(crate) const MAX_FRAMES: u32 = mae_daemon::blob_store::process::MAX_FRAMES;
 
 /// `Content-Security-Policy` on every blob: no script, no fetch, a unique
 /// origin. D3's header, exactly.
@@ -290,6 +290,7 @@ pub(crate) async fn handle(
     else {
         return boxed(blob_missing());
     };
+    crate::oauth_activity::target(&kb, None, blob.as_deref());
     let method = req.method().clone();
     let op = match (&method, blob.is_some()) {
         (&Method::POST, false) => BlobOp::Upload,
@@ -500,7 +501,11 @@ async fn upload(
     );
     let stored = process_and_commit(routes, kb, received, charge).await;
     boxed(match stored {
-        Ok(meta) => crate::oauth::json_response(StatusCode::OK, describe(&meta)),
+        Ok(meta) => {
+            // ADR-120: the blob the upload stored, by the address the daemon chose.
+            crate::oauth_activity::target(kb, None, Some(&meta.sha256));
+            crate::oauth::json_response(StatusCode::OK, describe(&meta))
+        }
         Err(resp) => *resp,
     })
 }

@@ -72,6 +72,7 @@ fn kb(rng: &mut Rng) -> (Vec<SourcePage>, BTreeMap<String, Vec<String>>) {
             format!("#+filetags: :{}:\n", tags.join(":"))
         };
         sources.push(SourcePage {
+            attachments: Default::default(),
             origin: format!("{i}.org"),
             text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {title}\n{filetags}\nBody.\n"),
         });
@@ -164,6 +165,7 @@ fn every_published_page_is_under_each_of_its_tags_once_and_untagged_ones_once() 
 fn the_tag_order_is_a_readers_not_the_bytes() {
     let live = Addressing::live("kb-1").unwrap();
     let src = |id: &str, tags: &str| SourcePage {
+        attachments: Default::default(),
         origin: format!("{id}.org"),
         text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n#+filetags: {tags}\n"),
     };

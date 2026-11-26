@@ -1,6 +1,6 @@
 [package]
 name = "mae-daemon"
-version = "0.14.200"
+version = "0.14.203"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MAE daemon — background KB persistence, maintenance, collaboration, and services"
@@ -127,6 +127,12 @@ roxmltree = "0.21"
 # Streams a stored blob to the client in constant memory. Already in this
 # binary's graph (hyper-util, iroh), so no new crate.
 tokio-util = { version = "0.7", features = ["io"] }
+# ADR-120 D4: session ids are HMAC-SHA256 of the token's hash. Already in this
+# binary through mae-mcp's PSK authentication (same version), so no new crate.
+hmac = "0.13"
+# ADR-120 D1: an operator command's principal is its OS user (`geteuid`,
+# `getpwuid_r`). Already in the graph through tokio and rustix; no new crate.
+libc = "0.2"
 
 [dev-dependencies]
 hex = "0.4"
@@ -187,3 +193,15 @@ harness = false
 # REMOVE THIS BLOCK (both workspaces) when #644 lands upstream and yrs releases it.
 [patch.crates-io]
 yrs = { git = "https://github.com/cuttlefisch/y-crdt", rev = "40a08982b4e95fe8d06c84e4df5a5713eca11c25" }
+
+# The listener tests mint a fresh 2048-bit RSA identity-provider key per test
+# (never a shared one: principle #14), and unoptimised prime generation takes
+# from one to more than ten seconds a key, so a single test could spend most of
+# ten seconds building its harness. Only these two crates, which only
+# dev-dependencies use, are optimised in dev/test builds (the root workspace
+# does the same for argon2 and blake2).
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

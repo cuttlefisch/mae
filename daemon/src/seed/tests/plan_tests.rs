@@ -28,6 +28,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         }
     }
     PlanInput {
+        reader: None,
         source: Source {
             repo: "/synthetic".into(),
             rev: "v1".into(),
@@ -54,6 +55,7 @@ fn opts() -> PlanOptions {
         require_canonical: false,
         code_property: None,
         allow_received_times: false,
+        attachment_limits: AttachmentLimits::default(),
     }
 }
 

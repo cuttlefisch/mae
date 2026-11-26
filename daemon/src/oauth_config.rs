@@ -291,11 +291,12 @@ pub struct OAuthConfig {
 /// phone photo with room to spare. It is also the most a processing worker
 /// reads into memory at once; `the_attachment_defaults_fit_adr_109s_memory_budget`
 /// pins what that and the pixel bound cost.
-pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
+pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = mae_daemon::blob_store::DEFAULT_MAX_ATTACHMENT_BYTES;
 
 /// [`OAuthConfig::max_attachment_pixels`]'s default: ADR-115 D3a's 40
 /// megapixels.
-pub const DEFAULT_MAX_ATTACHMENT_PIXELS: u64 = 40_000_000;
+pub const DEFAULT_MAX_ATTACHMENT_PIXELS: u64 =
+    mae_daemon::blob_store::DEFAULT_MAX_ATTACHMENT_PIXELS;
 
 /// [`OAuthConfig::attachment_idle_timeout_secs`]'s default: 30 seconds. A
 /// lossy mobile link's TCP retransmissions back off 1, 2, 4 and 8 seconds

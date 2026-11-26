@@ -287,12 +287,13 @@ fn content_json(
     e: &HistoryEntry,
     key: &HistoryKey,
     body_format: Option<&str>,
+    kb_id: &str,
 ) -> Option<serde_json::Value> {
     let node = e
         .node()?
         .ok()
         .filter(|n| key.content_hash(n) == e.content_hash)?;
-    let mut m = crate::kb_query::content_fields(&node, body_format);
+    let mut m = crate::kb_query::content_fields(&node, body_format, kb_id);
     m.insert("body".into(), serde_json::json!(node.body));
     m.insert("links".into(), serde_json::json!(node.links));
     m.insert(
@@ -322,7 +323,7 @@ async fn get(
     let key = kb_key(doc_store, &kb_id).await?;
     out["content"] = key
         .as_ref()
-        .and_then(|k| content_json(e, k, body_format.as_deref()))
+        .and_then(|k| content_json(e, k, body_format.as_deref(), &kb_id))
         .unwrap_or(serde_json::Value::Null);
     out["verification"] = chain_status(&kb_id, &node_id, &h, key.as_ref());
     Ok(out)

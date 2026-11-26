@@ -20,14 +20,16 @@
 //! [`SiteLimits`] and run off the async workers (`spawn_blocking`). The derivation cache and incremental re-derivation (D6) come with the
 //! change index (ADR-074 Amendment 1).
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::doc_store::DocStore;
 use crate::kb_query;
 use crate::site_components::{KbComponents, Slots};
+use mae_org::{AttachmentState, ResolvedAttachment};
 use mae_site::components::{PageData, Slot};
 use mae_site::{derive_with, Addressing, SourcePage};
-use mae_sync::kb::{Encryption, KbNodeDoc};
+use mae_sync::kb::{AttachmentRef, Encryption, KbNodeDoc};
 
 /// What the route answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +256,7 @@ async fn readable_sources(
         return Err(Refused::TooLarge);
     }
     let mut sources = Vec::with_capacity(nodes.len());
+    let mut entries = Vec::with_capacity(nodes.len());
     for (node_id, _) in nodes {
         let name = mae_sync::kb_node_doc_name(kb_id, &node_id);
         let Ok((state, _sv)) = doc_store.encode_state_and_sv(&name).await else {
@@ -275,13 +278,81 @@ async fn readable_sources(
             return Err(Refused::TooLarge);
         }
         if let Some(text) = page_source(&node_id, &doc) {
+            entries.push(doc.attachments());
             sources.push(SourcePage {
+                attachments: Default::default(),
                 origin: node_id,
                 text,
             });
         }
     }
+    let states = attachment_states(doc_store, kb_id, entries).await;
+    for (source, states) in sources.iter_mut().zip(states) {
+        source.attachments = states;
+    }
     Ok((sources, addressing, may_copy))
+}
+
+/// Each page's attachments as the page shows them (ADR-115 E3): a NAME whose
+/// blob the KB's store holds resolves to its route, `/kb/<kb_id>/blobs/
+/// <sha256>`, which authorizes the reader again; any other is missing (no
+/// attachment store, a blob gone or never stored). One blocking task asks the
+/// store about every distinct blob, off the async workers.
+async fn attachment_states(
+    doc_store: &DocStore,
+    kb_id: &str,
+    entries: Vec<BTreeMap<String, AttachmentRef>>,
+) -> Vec<BTreeMap<String, AttachmentState>> {
+    let shas: BTreeSet<String> = entries
+        .iter()
+        .flat_map(|m| m.values().map(|a| a.sha256.clone()))
+        .collect();
+    let held: HashMap<String, crate::blob_store::BlobMeta> = match doc_store.blob_store() {
+        Some(blobs) if !shas.is_empty() => {
+            let (blobs, kb) = (Arc::clone(blobs), kb_id.to_string());
+            tokio::task::spawn_blocking(move || {
+                shas.into_iter()
+                    .filter_map(|sha| match blobs.get(&kb, &sha) {
+                        Ok(meta) => meta.map(|m| (sha, m)),
+                        // Shown as missing, and said here: never silent.
+                        Err(e) => {
+                            tracing::warn!(kb_id = %kb, sha256 = %sha, error = %e, "site: attachment store unreadable");
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "site: attachment lookup stopped");
+                HashMap::new()
+            })
+        }
+        _ => HashMap::new(),
+    };
+    entries
+        .into_iter()
+        .map(|m| {
+            m.into_iter()
+                .map(|(name, a)| {
+                    let state = match held.get(&a.sha256) {
+                        Some(meta) => {
+                            let mut file = ResolvedAttachment::new(
+                                kb_query::blob_url(kb_id, &a.sha256),
+                                meta.media_type.as_str(),
+                            );
+                            if let (Some(w), Some(h)) = (meta.width, meta.height) {
+                                file = file.with_width(w).with_height(h);
+                            }
+                            AttachmentState::Resolved(file)
+                        }
+                        None => AttachmentState::Missing,
+                    };
+                    (name, state)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// The answer to `view` from a derived KB. A reader who may not have the
@@ -1010,6 +1081,7 @@ mod tests {
     fn kb() -> (mae_site::Site, Addressing) {
         let live = Addressing::live("kb-1").unwrap();
         let src = |id: &str, extra: &str| SourcePage {
+            attachments: Default::default(),
             origin: format!("{id}.org"),
             text: format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n{extra}\n"),
         };
@@ -1097,6 +1169,7 @@ mod tests {
         // Another KB, another version.
         let other = mae_site::derive(
             &[SourcePage {
+                attachments: Default::default(),
                 origin: "c.org".into(),
                 text: ":PROPERTIES:\n:ID: c\n:END:\n#+title: c\n".into(),
             }],

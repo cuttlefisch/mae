@@ -2884,7 +2884,7 @@ dependencies = [
 
 [[package]]
 name = "mae-daemon"
-version = "0.14.200"
+version = "0.14.203"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2895,6 +2895,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "hex",
+ "hmac 0.13.0",
  "http-body-util",
  "humantime",
  "hyper",
@@ -2902,6 +2903,7 @@ dependencies = [
  "image",
  "iroh",
  "jsonwebtoken",
+ "libc",
  "mae-effect-sandbox",
  "mae-kb",
  "mae-mcp",
@@ -2935,11 +2937,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.200"
+version = "0.14.203"
 
 [[package]]
 name = "mae-kb"
-version = "0.14.200"
+version = "0.14.203"
 dependencies = [
  "cozo",
  "hex",
@@ -2962,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.200"
+version = "0.14.203"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3010,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.14.200"
+version = "0.14.203"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek 2.2.0",

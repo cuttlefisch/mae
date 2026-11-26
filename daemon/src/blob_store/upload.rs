@@ -158,6 +158,22 @@ pub fn store_upload(
     let raw =
         std::fs::read(received.path.path()).map_err(|e| UploadError::Store(BlobError::from(e)))?;
     drop(received);
+    store_bytes(store, kb_id, raw, limits, quota, processor, job)
+}
+
+/// Process `raw` and commit the result to `kb_id`, unless `job` is cancelled
+/// first: the one pipeline every way into the store takes (an HTTPS upload,
+/// `kb seed`), so what is stored has always been through
+/// [`super::process::process`]. Synchronous: run it on a blocking worker.
+pub fn store_bytes(
+    store: &BlobStore,
+    kb_id: &str,
+    raw: Vec<u8>,
+    limits: &ProcessLimits,
+    quota: Option<&StorageQuota>,
+    processor: &Processor,
+    job: &Job,
+) -> Result<BlobMeta, UploadError> {
     let processed = processor(raw, limits).map_err(UploadError::Process)?;
     let staged = store.stage(&processed.bytes).map_err(UploadError::Store)?;
     // The last moment to stop: past it the blob is renamed into place and

@@ -122,6 +122,12 @@ fn side_files(config: &DaemonConfig, data_dir: &Path) -> Vec<Source> {
             ),
             format!("collab/{}", mae_daemon::identity_binding::BINDINGS_FILE),
         ),
+        // ADR-120 D3: the activity record, snapshotted like the others.
+        (
+            Kind::Sqlite,
+            Some(paths.collab_data_dir.join(mae_daemon::activity::DB_FILE)),
+            format!("collab/{}", mae_daemon::activity::DB_FILE),
+        ),
         (Kind::Plain, in_id("id_ed25519"), identity("id_ed25519")),
         (
             Kind::Plain,

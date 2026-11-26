@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 
 #[path = "kb_query_node_fields.rs"]
 mod node_fields;
-pub(crate) use node_fields::content_fields;
+pub(crate) use node_fields::{blob_url, content_fields};
 
 /// Default cap on one `kb/query.get` body: the node size backstop
 /// (`[collab.sync] max_document_size_bytes`, ADR-109 D6), so a stock daemon
@@ -77,6 +77,24 @@ impl Default for KbQueryLimits {
         }
     }
 }
+
+/// Every method [`dispatch`] serves. The activity record classes each one
+/// (ADR-120 D1), and a test holds this list to the dispatcher's own arms.
+pub const METHODS: &[&str] = &[
+    "kb/query.my_kbs",
+    "kb/query.capabilities",
+    "kb/query.get",
+    "kb/query.revisions",
+    "kb/query.search",
+    "kb/query.graph",
+    "kb/query.my_wrapped_key",
+    "kb/query.links",
+    "kb/query.titles",
+    "kb/query.list",
+    "kb/query.neighborhood",
+    "kb/query.agenda",
+    "kb/query.health",
+];
 
 /// Dispatch one `kb/query.*` method. `principal` is always `Some` in
 /// practice — the caller has already validated a bearer token before
