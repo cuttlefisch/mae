@@ -2,6 +2,7 @@
 
 **Status:** Proposed. Phased (A–E); Phase A is a prerequisite fix, not new design. Amendment 1
 (2026-11-14) brings Phase C forward for the read path and defines who counts as a person.
+Amendment 2 (2026-11-26) confirms D1 for Browser MAE's signing and drops a per-device-key detour.
 **Depends on:** ADR-097 (Browser MAE is a KB surface), ADR-017/018 (asymmetric peer auth +
 identity-anchored access control), ADR-026 (signed, hash-chained membership op-log), ADR-036/037
 (signed content ops + E2E content encryption), ADR-040/041 (identity rotation/rebind + key
@@ -365,3 +366,32 @@ On top of Phase C's existing list:
   to an unflagged fingerprint is an agent; only an IdP session on a flagged binding is a person. No
   network method changes a flag (a raw-byte scan of every method's refusal, as Phase C requires).
 - **Unbinding.** After an unbind, the next request with the same IdP token is an unbound subject.
+
+## Amendment 2 (2026-11-26): the browser signs with the member key; no per-device keys
+
+The browser client does not sign its content ops today, and the hub cannot enforce signed ops
+(ADR-036 Amendment 1 F6, #727) until every writer signs. A plan of 2026-11-25 assumed the browser
+would sign with a key of its own per device, bound to the person, with the binding table accepting
+several device keys per person. That reverses D1, D5 and C2, and it was weighed against them before
+any code was written. **Owner decision, 2026-11-26: D1 stands. The browser signs with the person's
+member key.**
+
+- **How.** The browser imports the member key as a non-extractable WebCrypto Ed25519 key (D2) and
+  signs each content op with mae-crypto's `sign_op`, over ADR-036 D1's canonical bytes, with
+  `author_pubkey` and `author` its fingerprint (ADR-036 Amendment 1 F5).
+- **Why not per-device keys now.** No protocol or binding change is needed, and the binding stays
+  one `(iss, sub)` to one fingerprint (C2). With several device keys per person, an edit would name
+  a device fingerprint while an approval names the person, so ADR-113's author rule could not see
+  that the same person edited and approved without a device-to-person mapping it does not have, and
+  every new device would need the owner to admit it as a member (D4 forbids the daemon doing so).
+  Per-device keys stay Phase E, with its own ADR, as D5 says.
+- **A second device** obtains the member key from Phase B's key-blind sealed storage, which the
+  pilot does not need. Phase B's block on #176 applies only to end-to-end encrypted KBs, whose
+  content a rotation could strand; a plaintext KB (every KB under publication review) is not
+  affected.
+- **A lost device** is D5's member-key rotation (ADR-040 `Rebind`), one owner act.
+
+Enforcement on the hub is ADR-036 Amendment 1, already built behind
+`require_signed_content_ops`; it is turned on once the browser signs and the unsigned-op count
+stays at zero.
+
