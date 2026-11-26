@@ -76,8 +76,8 @@ filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
 ref = "G3 on sync/update"
 [[mutant.edit]]
 file = "daemon/src/collab_handler/sync_methods.rs"
-find = '''        if let Err(e) = raw(doc_store, &kb_id, &update_bytes, transport).await {'''
-replace = '''        if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
+find = '''    if let Err(e) = raw(doc_store, &doc_name, &update_bytes, transport).await {'''
+replace = '''    if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
 
 [[mutant]]
 id = "manifest-op/raw-guard-off-on-collection-op"

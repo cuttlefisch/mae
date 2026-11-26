@@ -223,6 +223,22 @@ pub(crate) async fn refuse_raw_node_list_change(
 
 /// A manifest op header's fields: author, key, epoch (a number, or canonical
 /// decimal text as a browser sends it), issue time, signature.
+/// [`refuse_raw_node_list_change`] for a write named by document: only a KB
+/// collection document is checked (`sync/update` of any document).
+pub(crate) async fn refuse_raw_collection_list_change(
+    doc_store: &DocStore,
+    doc_name: &str,
+    update: &[u8],
+    transport: Transport,
+) -> Result<(), Refusal> {
+    match mae_sync::DocAddress::parse(doc_name) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+            refuse_raw_node_list_change(doc_store, &kb_id, update, transport).await
+        }
+        _ => Ok(()),
+    }
+}
+
 /// A manifest op header: author, key, epoch, issue time, signature.
 type ManifestHeader = (String, [u8; 32], u64, u64, Vec<u8>);
 
