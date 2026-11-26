@@ -254,8 +254,10 @@ async fn derive_kb(
     (addressing, limits): (Addressing, SiteLimits),
     opts: &mae_site::SiteOptions,
 ) -> Derived {
-    let Ok(sources) = readable_sources(doc_store, kb_id, &coll, limits).await else {
-        return Derived::TooLarge;
+    let sources = match readable_sources(doc_store, kb_id, &coll, limits).await {
+        Ok(sources) => sources,
+        Err(Refused::Unreadable) => return Derived::Failed,
+        Err(_) => return Derived::TooLarge,
     };
     let (opts, kb_id) = (opts.clone(), kb_id.to_string());
     let started = std::time::Instant::now();
@@ -285,6 +287,9 @@ async fn derive_kb(
 enum Refused {
     NotFound,
     TooLarge,
+    /// A listed node's document could not be read for a reason other than
+    /// its absence: the derivation fails, and is not held (`site_cache`).
+    Unreadable,
 }
 
 impl From<Refused> for SitePage {
@@ -292,6 +297,7 @@ impl From<Refused> for SitePage {
         match r {
             Refused::NotFound => SitePage::NotFound,
             Refused::TooLarge => SitePage::TooLarge,
+            Refused::Unreadable => SitePage::NotFound,
         }
     }
 }
@@ -330,8 +336,15 @@ async fn readable_sources(
     let mut entries = Vec::with_capacity(nodes.len());
     for (node_id, _) in nodes {
         let name = mae_sync::kb_node_doc_name(kb_id, &node_id);
-        let Ok((state, _sv)) = doc_store.encode_state_and_sv(&name).await else {
-            continue;
+        // Absent is the KB's state, held like any other; any other read error
+        // may pass, so this derivation is not held.
+        let state = match doc_store.encode_state_and_sv(&name).await {
+            Ok((state, _sv)) => state,
+            Err(crate::storage::StorageError::DurableDocMissing(_)) => continue,
+            Err(e) => {
+                tracing::warn!(kb_id = %kb_id, node_id = %node_id, error = %e, "site: a node could not be read");
+                return Err(Refused::Unreadable);
+            }
         };
         let Ok(doc) = KbNodeDoc::from_bytes(&state) else {
             continue;

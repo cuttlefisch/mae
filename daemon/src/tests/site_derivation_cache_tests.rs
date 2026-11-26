@@ -107,3 +107,25 @@ async fn one_kbs_site_never_answers_for_another() {
     assert!(theirs.contains("The other KB"), "{theirs}");
     assert!(!theirs.contains("Alpha links"), "{theirs}");
 }
+
+/// A node document replaced whole (`share_doc`, a reseal or restore's path)
+/// shows on the next request.
+#[tokio::test]
+async fn a_replaced_node_shows_on_the_next_request() {
+    let store = kb().await;
+    assert!(body_of(&store, "beta")
+        .await
+        .unwrap()
+        .contains("Beta's body"));
+    let node = KbNodeDoc::new("beta", "Beta", "A replaced body.\n", &[]);
+    store
+        .share_doc(
+            &mae_sync::kb_node_doc_name("kb-site", "beta"),
+            &node.encode_state(),
+            BY,
+        )
+        .await
+        .unwrap();
+    let html = body_of(&store, "beta").await.unwrap();
+    assert!(html.contains("A replaced body"), "{html}");
+}

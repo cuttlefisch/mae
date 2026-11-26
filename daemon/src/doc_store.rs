@@ -879,7 +879,6 @@ impl DocStore {
     /// Emit a durable KB doc's name to the projector change feed (no-op if no projector
     /// is wired, or for ephemeral docs). Non-blocking unbounded send.
     fn emit_change(&self, doc_name: &str) {
-        self.note_kb_write(doc_name);
         if is_durable_doc(doc_name) {
             if let Some(tx) = self.change_tx.get() {
                 let _ = tx.send(doc_name.to_string());
@@ -890,7 +889,9 @@ impl DocStore {
     /// After a committed write to `doc_name`: if it is one of a KB's documents,
     /// move that KB's generation. Called after the write is visible, so a
     /// generation read before a read of content never names newer content
-    /// than it read (a race costs a needless re-read, never a stale one).
+    /// than it read (a race costs a needless re-read, never a stale one), and
+    /// before any later step that can fail (a compaction), so a failure there
+    /// never leaves changed content under an unmoved generation.
     fn note_kb_write(&self, doc_name: &str) {
         let kb = match mae_sync::DocAddress::parse(doc_name) {
             Some(mae_sync::DocAddress::KbCollection { kb_id }) => kb_id,
@@ -1492,6 +1493,7 @@ impl DocStore {
             (forced || doc.update_count >= self.compact_threshold, wal_id)
         };
         drop((gate, switch)); // before compacting, which takes the gate again
+        self.note_kb_write(doc_name); // committed: before anything below can fail
 
         if should_compact {
             self.compact(doc_name).await?;
@@ -1897,6 +1899,19 @@ impl DocStore {
         self.replace_doc(doc_name, update, by.into(), true).await
     }
 
+    /// The first destructive step of a replace: the old document leaves
+    /// storage and memory. From here it has changed whatever fails after, so
+    /// its KB's generation moves now (and again once the new one is in place).
+    async fn remove_for_replace(&self, doc_name: &str) {
+        // Delete old doc from storage. Log errors — silent swallow could
+        // lead to corrupted recovery if WAL append succeeds but old data remains.
+        if let Err(e) = self.storage.delete_document(doc_name).await {
+            warn!(doc = doc_name, error = %e, "share_doc: failed to delete old document from storage");
+        }
+        self.docs.write().await.remove(doc_name);
+        self.note_kb_write(doc_name);
+    }
+
     async fn replace_doc(
         &self,
         doc_name: &str,
@@ -1939,17 +1954,7 @@ impl DocStore {
         #[cfg(test)]
         Self::pause_at(&self.pauses.replace).await;
 
-        // Delete old doc from storage. Log errors — silent swallow could
-        // lead to corrupted recovery if WAL append succeeds but old data remains.
-        if let Err(e) = self.storage.delete_document(doc_name).await {
-            warn!(doc = doc_name, error = %e, "share_doc: failed to delete old document from storage");
-        }
-
-        // Remove old in-memory entry.
-        {
-            let mut docs = self.docs.write().await;
-            docs.remove(doc_name);
-        }
+        self.remove_for_replace(doc_name).await;
 
         // WAL append first (durability), with the editor record (ADR-113 D3).
         let mut stamp = self.stamp(by);
@@ -1981,6 +1986,7 @@ impl DocStore {
         );
 
         // Notify the projector (ADR-029 B2).
+        self.note_kb_write(doc_name);
         self.emit_change(doc_name);
 
         Ok(ApplyResult {

@@ -9,9 +9,25 @@ filter = "test(an_edit_shows_on_the_next_request)"
 ref = "a committed write moves the KB's generation"
 [[mutant.edit]]
 file = "daemon/src/doc_store.rs"
+find = '''        self.note_kb_write(doc_name); // committed: before anything below can fail'''
+replace = ''''''
+
+[[mutant]]
+id = "site-cache/replace-not-noted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_replaced_node_shows_on_the_next_request)"
+ref = "a replace moves the KB's generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        self.docs.write().await.remove(doc_name);
+        self.note_kb_write(doc_name);'''
+replace = '''        self.docs.write().await.remove(doc_name);'''
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
 find = '''        self.note_kb_write(doc_name);
-        if is_durable_doc(doc_name) {'''
-replace = '''        if is_durable_doc(doc_name) {'''
+        self.emit_change(doc_name);'''
+replace = '''        self.emit_change(doc_name);'''
 
 [[mutant]]
 id = "site-cache/delete-not-noted"
