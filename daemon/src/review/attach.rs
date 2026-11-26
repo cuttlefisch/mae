@@ -325,12 +325,15 @@ pub(super) async fn attach_signed_pdf(
     if let Some(e) = state_refusal(&rev, "signed_pdf") {
         return Err(e);
     }
+    let sha = required_str(params, "blob_sha256")?;
+    // The binding lock first: attaches to one KB then run one at a time from
+    // this check to their commit, so of two approvers attaching a set's last
+    // two signed PDFs at once, the second sees the first's and completes it.
+    let (meta, guard) = pdf_blob(store, kb_id, sha).await?;
     let completes = match completing_members(store, kb_id, &rev).await? {
         Some(members) => Some(author_gate(store, &members, who, params).await?),
         None => None,
     };
-    let sha = required_str(params, "blob_sha256")?;
-    let (meta, guard) = pdf_blob(store, kb_id, sha).await?;
     let input = AttachInput {
         kb: kb_id.to_string(),
         kind: "signed_pdf",

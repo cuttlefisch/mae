@@ -597,3 +597,47 @@ async fn the_signed_pdf_and_revision_read_answer_in_their_fixtures_shape() {
     assert_shape("query_get_revision", &want["revision"], &read["revision"]);
     assert_eq!(read["revision"]["attachments"].as_array().unwrap().len(), 2);
 }
+
+/// E3 under a race: two approvers attach a set's last two signed PDFs at
+/// once. The set must still enter into force, by exactly one of them. Kills a
+/// completion check read before the attaches serialize (both see the other's
+/// PDF missing, and the set is left waiting).
+#[tokio::test]
+async fn the_last_two_signed_pdfs_at_once_put_the_set_in_force() {
+    let env = env().await;
+    let _dir = with_blobs(&env);
+    policy(
+        &env,
+        json!({"approval_record": "signed_pdf", "in_force_on_approval": true,
+        "reason": "The signed original is the record."}),
+    )
+    .await;
+    let (_, revs) = requested(&env, &["n1", "n2"]).await;
+    for r in &revs {
+        let p = json!({"kb_id": KB, "revision_id": r});
+        as_(&env, &approver(&env), "kb/review.approve", p)
+            .await
+            .unwrap();
+    }
+    let (s1, s2) = (put(&env, &pdf("s1")).await, put(&env, &pdf("s2")).await);
+    let (y, z) = (
+        approver(&env),
+        signed_in(&env.owner, &["approvers"], PrincipalKind::Person),
+    );
+    let (a, b) = tokio::join!(
+        attach_signed(&env, &y, &revs[0], &s1),
+        attach_signed(&env, &z, &revs[1], &s2)
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    let entered = [&a, &b]
+        .iter()
+        .filter(|r| r["in_force_since"].is_string())
+        .count();
+    assert_eq!(entered, 1, "{a} {b}");
+    for n in ["n1", "n2"] {
+        assert!(
+            status(&env, n).await["in_force"].is_object(),
+            "{n} in force"
+        );
+    }
+}

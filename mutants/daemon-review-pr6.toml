@@ -113,6 +113,10 @@ ref = "O19: the set enters into force with its last signed PDF"
 file = "daemon/src/review/attach.rs"
 find = '''        && without_signed_pdf(c, &members)?.is_empty();'''
 replace = '''        && true;'''
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                && without_signed_pdf(c, &others)?.is_empty();'''
+replace = '''                && true;'''
 
 [[mutant]]
 id = "daemon-review-pr6/anyone-annuls"
