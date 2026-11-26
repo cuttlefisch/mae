@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.204] - 2026-11-26
+
+
+
+
+### Features
+
+- *(daemon)* ADR-113 PR-5 step 1, the reviewer and approver lists ([8cd88f2](https://github.com/cuttlefisch/mae/commit/8cd88f2428af223a8c67714ecdaed69a3246cf5e))
+- *(daemon)* ADR-113 PR-5 step 2, the acts ([bdedc79](https://github.com/cuttlefisch/mae/commit/bdedc79bdba05dcc1156de89847995d2b2653a34))
+- *(daemon)* ADR-113 PR-5 step 3, the author rule as a soft block ([753e385](https://github.com/cuttlefisch/mae/commit/753e385f3aa962b8727c2653d3417bfc17d80989))
+- *(review)* Kb seed --author attests who wrote seeded content ([5f929a3](https://github.com/cuttlefisch/mae/commit/5f929a335537c25839cd77a6cf17b43a8371581b))
+- *(review)* The delete guard (E7) and the published view (D5) ([511dd78](https://github.com/cuttlefisch/mae/commit/511dd782b9f324426316c41424793617048bc45e))
+
+### Bug Fixes
+
+- *(review)* The approval that completes a set checks every member's authors ([131ec81](https://github.com/cuttlefisch/mae/commit/131ec8135927a3bc77538c86bbe8ccb119bdb6de))
+
+### Testing
+
+- *(review)* The signed-PDF mutant covers both the pre-check and the write ([5801a10](https://github.com/cuttlefisch/mae/commit/5801a106b9eba46f607d5d9eb6ebd1bbef1214af))
+
 ## [0.14.203] - 2026-11-25
 
 
@@ -10,6 +31,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - Keep the images tests under the function-length ceiling, and re-anchor two mutants ([3a4e5ab](https://github.com/cuttlefisch/mae/commit/3a4e5abcb78c682da68a6c31f85b479c63d972ab))
+
+### Miscellaneous
+
+- Bump version to 0.14.203 ([dc4b3f3](https://github.com/cuttlefisch/mae/commit/dc4b3f37036e229672b03c43ef7010febf8656e2))
 
 ## [0.14.202] - 2026-11-25
 
