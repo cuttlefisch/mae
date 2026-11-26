@@ -376,13 +376,14 @@ several device keys per person. That reverses D1, D5 and C2, and it was weighed 
 any code was written. **Owner decision, 2026-11-26: D1 stands. The browser signs with the person's
 member key.**
 
-- **How.** The browser imports the member key once as a non-extractable WebCrypto Ed25519 key (D2)
-  and never exports it again. mae-crypto builds the exact bytes ADR-036 D1 signs
-  (`op_canonical_bytes`, the same Rust function the daemon verifies against), the browser signs
-  them with `crypto.subtle.sign("Ed25519", key, bytes)`, and sends `author_pubkey`, `author` (its
-  fingerprint) and `sig` (ADR-036 Amendment 1 F5). mae-crypto's `sign_op`, which signs with a key
-  loaded into the module, stays for a client that holds the seed there; the browser does not, so
-  the secret is never extractable.
+- **How (as the browser client builds it, owner decision 2026-11-26).** Each session, the browser
+  opens the member key from its passphrase-sealed backup inside mae-crypto's module, in its shared
+  worker, and signs each content op with `sign_op` (ADR-036 Amendment 1 F5), which signs only the
+  canonical messages it builds itself. The key is forgotten after an idle period or a session
+  limit, and nothing is stored in the browser. The alternative, a non-extractable WebCrypto key
+  kept in browser storage and signing `op_canonical_bytes`' output, is built in mae-crypto 0.3.0
+  and stays open as a later hardening; it trades the module's restriction on what is signed for a
+  key that persists without a passphrase (`docs/E2E_ENCRYPTION.md` §10).
 - **Why not per-device keys now.** No protocol or binding change is needed, and the binding stays
   one `(iss, sub)` to one fingerprint (C2). With several device keys per person, an edit would name
   a device fingerprint while an approval names the person, so ADR-113's author rule could not see
