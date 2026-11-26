@@ -376,9 +376,13 @@ several device keys per person. That reverses D1, D5 and C2, and it was weighed 
 any code was written. **Owner decision, 2026-11-26: D1 stands. The browser signs with the person's
 member key.**
 
-- **How.** The browser imports the member key as a non-extractable WebCrypto Ed25519 key (D2) and
-  signs each content op with mae-crypto's `sign_op`, over ADR-036 D1's canonical bytes, with
-  `author_pubkey` and `author` its fingerprint (ADR-036 Amendment 1 F5).
+- **How.** The browser imports the member key once as a non-extractable WebCrypto Ed25519 key (D2)
+  and never exports it again. mae-crypto builds the exact bytes ADR-036 D1 signs
+  (`op_canonical_bytes`, the same Rust function the daemon verifies against), the browser signs
+  them with `crypto.subtle.sign("Ed25519", key, bytes)`, and sends `author_pubkey`, `author` (its
+  fingerprint) and `sig` (ADR-036 Amendment 1 F5). mae-crypto's `sign_op`, which signs with a key
+  loaded into the module, stays for a client that holds the seed there; the browser does not, so
+  the secret is never extractable.
 - **Why not per-device keys now.** No protocol or binding change is needed, and the binding stays
   one `(iss, sub)` to one fingerprint (C2). With several device keys per person, an edit would name
   a device fingerprint while an approval names the person, so ADR-113's author rule could not see
