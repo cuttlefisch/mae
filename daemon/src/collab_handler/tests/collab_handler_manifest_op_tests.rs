@@ -244,6 +244,61 @@ async fn with_the_switch_on_a_raw_write_may_not_change_the_node_list() {
     );
 }
 
+/// G3 against a split update (the independent review's attack): the
+/// node-list change goes first, its origin (an earlier entry for the same
+/// key) missing, so yrs holds it pending and the list does not change; then
+/// the update holding that origin, which on its own adds and removes the
+/// entry and so changes nothing either. The second write integrates the held
+/// change, so it is refused, and the node never appears. Kills a guard that
+/// judges anything but the document the write leaves.
+#[tokio::test]
+async fn a_node_list_change_held_pending_is_refused_when_it_lands() {
+    let (mut h, k) = hv(true, false, true).await;
+    let kbc = format!("kbc:{KB}");
+    let state = h.store.encode_state(&kbc).await.unwrap();
+    let mut attacker = KbCollectionDoc::from_bytes(&state).unwrap();
+    let sv = attacker.state_vector();
+    let _ = attacker.add_node("concept:split", "Gone");
+    let _ = attacker.remove_node("concept:split");
+    let releaser = attacker.encode_diff(&sv).unwrap();
+    let change = attacker.add_node("concept:split", "Split");
+    let send = |update: &[u8]| {
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "sync/update",
+            "params": {"doc": kbc, "kb_id": KB, "update": update_to_base64(update)}})
+    };
+    let listed_split = |l: Vec<(String, String)>| l.iter().any(|(id, _)| id == "concept:split");
+    let first = h.call(k.owner.mtls(), send(&change)).await;
+    assert!(
+        first.error.is_none(),
+        "held pending, it changes nothing yet: {:?}",
+        first.error
+    );
+    assert!(
+        !listed_split(listed(&h.store).await),
+        "the change was not held back"
+    );
+    let second = h.call(k.owner.mtls(), send(&releaser)).await;
+    expect_kind(&second, "signature_required", "the write that lands it");
+    assert!(
+        !listed_split(listed(&h.store).await),
+        "the held-back node landed"
+    );
+    // Another member's signed add still applies beside what is held.
+    let epoch = h.epoch(&k.bob).await;
+    let add = manifest(&k.bob, "concept:ok", true, "Ok", epoch);
+    let r = h
+        .call(
+            k.bob.mtls(),
+            node_msg(true, "concept:ok", "Ok", Some(signed(&k.bob, &add))),
+        )
+        .await;
+    assert!(r.error.is_none(), "signed add after: {:?}", r.error);
+    assert!(
+        !listed_split(listed(&h.store).await),
+        "a later write landed it"
+    );
+}
+
 /// The key a test session would use is real; a sanity check that the
 /// helpers sign what the verifier checks.
 #[test]

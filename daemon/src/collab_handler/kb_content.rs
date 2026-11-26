@@ -831,14 +831,9 @@ pub(super) async fn handle_kb_collection_op(
     // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
     // node doc under #171.) Additive flag — an old daemon ignores it.
     let scrub = params["scrub"].as_bool().unwrap_or(false);
-    // ADR-036 Amendment 2 (G3): the node list changes only through a signed
-    // manifest op once the switch is on.
-    let raw = super::content_verify::refuse_raw_node_list_change;
-    if let Err(e) = raw(doc_store, &kb_id, &update, transport).await {
-        return JsonRpcResponse::error(id, e.into());
-    }
-    // A switch to E2E over plaintext is refused inside the write itself, on
-    // every path (`doc_store_e2e_switch`); here it only keeps its kind.
+    // A switch to E2E over plaintext (`doc_store_e2e_switch`) and an unsigned
+    // node-list change (`doc_store_node_list_guard`) are refused inside the
+    // write itself, on every path; here they only keep their kind.
     match super::persist_and_broadcast_collection_typed(
         doc_store,
         broadcaster,
@@ -890,7 +885,8 @@ pub(super) async fn handle_kb_collection_op(
         }
         Err(
             e @ (crate::storage::StorageError::E2eSwitchRefused { .. }
-            | crate::storage::StorageError::NodeHasRevisions { .. }),
+            | crate::storage::StorageError::NodeHasRevisions { .. }
+            | crate::storage::StorageError::UnsignedNodeListChange { .. }),
         ) => JsonRpcResponse::error(id, super::storage_error(e)),
         Err(e) => JsonRpcResponse::error(
             id,
@@ -954,20 +950,27 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     };
     let sender = super::content_verify::OpSender::session(auth_principal, transport);
     let change = (kb_id.as_str(), node_id.as_str(), action, signed_title);
-    if let Err(r) =
-        super::content_verify::verify_manifest_op(doc_store, change, params, sender, &coll).await
-    {
-        return JsonRpcResponse::error(id, r.into());
-    }
+    let verified =
+        super::content_verify::verify_manifest_op(doc_store, change, params, sender, &coll).await;
+    let signer = match verified {
+        Ok(signer) => signer,
+        Err(r) => return JsonRpcResponse::error(id, r.into()),
+    };
     let update = if add {
         coll.add_node(&node_id, title)
     } else {
         coll.remove_node(&node_id)
     };
+    // A verified manifest op's update may change the node list (G3); an
+    // unsigned one, accepted while the switch is off, is the session's own.
+    let by = match signer.as_deref() {
+        Some(author) => crate::doc_editors::Writer::manifest_op(who.1, author),
+        None => who.1.into(),
+    };
     match super::persist_and_broadcast_collection_typed(
         doc_store,
         broadcaster,
-        who,
+        (who.0, by),
         &kb_id,
         &update,
     )

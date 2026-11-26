@@ -58,37 +58,59 @@ find = '''        return accept_unsigned(doc_store, (kb_id, node_id), sender.tra
 replace = '''        return Ok(None);'''
 
 [[mutant]]
-id = "manifest-op/raw-list-change-allowed"
+id = "manifest-op/list-guard-off"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
-ref = "G3: a raw write may not change the node list"
+filter = "test(with_the_switch_on_only_a_manifest_op_changes_the_list)"
+ref = "G3: a session write may not change the node list"
 [[mutant.edit]]
-file = "daemon/src/collab_handler/content_verify.rs"
-find = '''    if list(&before) == list(&after) {'''
-replace = '''    if list(&before) != list(&after) || true {'''
+file = "daemon/src/doc_store_node_list_guard.rs"
+find = '''        if KbCollectionDoc::nodes_in(after.doc()) == base.nodes {'''
+replace = '''        if KbCollectionDoc::nodes_in(after.doc()) != base.nodes || true {'''
 
 [[mutant]]
-id = "manifest-op/raw-guard-off-on-sync-update"
+id = "manifest-op/list-guard-off-on-apply"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
-ref = "G3 on sync/update"
+filter = "test(a_node_list_change_held_pending_is_refused_when_it_lands)"
+ref = "G3 on apply, judged on the document the write leaves"
 [[mutant.edit]]
-file = "daemon/src/collab_handler/sync_methods.rs"
-find = '''    if let Err(e) = raw(doc_store, &doc_name, &update_bytes, transport).await {'''
-replace = '''    if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
+file = "daemon/src/doc_store.rs"
+find = '''        refused = refused.or_else(|| Self::list_refusal(list, &doc.sync));'''
+replace = '''        refused = refused.or_else(|| list.and(None));'''
 
 [[mutant]]
-id = "manifest-op/raw-guard-off-on-collection-op"
+id = "manifest-op/list-guard-off-on-replace"
 runner = "daemon"
 targets = ["--lib"]
-filter = "test(with_the_switch_on_a_raw_write_may_not_change_the_node_list)"
-ref = "G3 on kb/collection_op"
+filter = "test(with_the_switch_on_only_a_manifest_op_changes_the_list)"
+ref = "G3 on replace"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        self.refuse_replacing_list(kb, &by, state_before.as_deref(), &probe)?;'''
+replace = '''        let _ = (&by, &probe);'''
+
+[[mutant]]
+id = "manifest-op/manifest-flag-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_only_a_manifest_op_changes_the_list)"
+ref = "G3: a verified manifest op's update may change the list"
+[[mutant.edit]]
+file = "daemon/src/doc_editors.rs"
+find = '''        ) && !self.manifest_op'''
+replace = '''        )'''
+
+[[mutant]]
+id = "manifest-op/signed-change-applied-as-session"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_the_switch_on_a_node_list_change_must_be_signed)"
+ref = "G1 then G3: the handler applies a verified op as a manifest op"
 [[mutant.edit]]
 file = "daemon/src/collab_handler/kb_content.rs"
-find = '''    if let Err(e) = raw(doc_store, &kb_id, &update, transport).await {'''
-replace = '''    if let Err(e) = Ok::<(), Refusal>(()).map(|_| raw) {'''
+find = '''        Some(author) => crate::doc_editors::Writer::manifest_op(who.1, author),'''
+replace = '''        Some(_) => who.1.into(),'''
 
 [[mutant]]
 id = "manifest-op/editor-signs-removal-title"

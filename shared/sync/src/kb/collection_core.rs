@@ -165,6 +165,21 @@ impl KbCollectionDoc {
         }
     }
 
+    /// The node list of the collection held in `doc`: node id to title. Reads
+    /// the document as it stands, so a caller holding a live document sees what
+    /// it has integrated, not a re-encoded copy.
+    pub fn nodes_in(doc: &yrs::Doc) -> std::collections::BTreeMap<String, String> {
+        let root = doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = doc.transact();
+        match root.get(&txn, COLL_NODES_KEY) {
+            Some(Out::YMap(nodes)) => nodes
+                .iter(&txn)
+                .map(|(k, v)| (k.to_string(), v.to_string(&txn)))
+                .collect(),
+            _ => std::collections::BTreeMap::new(),
+        }
+    }
+
     /// List all nodes in the collection: (node_id, title) pairs.
     pub fn list_nodes(&self) -> Vec<(String, String)> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);

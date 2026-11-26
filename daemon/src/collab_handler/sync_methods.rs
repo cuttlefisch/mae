@@ -195,10 +195,6 @@ pub(super) async fn handle_sync_update(
         Ok(b) => b,
         Err(e) => return JsonRpcResponse::error(id, e),
     };
-    let raw = super::content_verify::refuse_raw_collection_list_change;
-    if let Err(e) = raw(doc_store, &doc_name, &update_bytes, transport).await {
-        return JsonRpcResponse::error(id, e.into());
-    }
     let client_id = params["client_id"].as_u64();
     let by = Attribution::session(auth_principal, transport);
 

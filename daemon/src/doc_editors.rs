@@ -114,11 +114,19 @@ pub struct Writer<'a> {
     pub by: Attribution<'a>,
     /// A verified signer. Never set from an unverified header.
     pub signer: Option<&'a str>,
+    /// The write is the daemon's own update for a VERIFIED signed manifest op
+    /// (ADR-036 Amendment 2, G1), so it may change a KB's node list while
+    /// `require_signed_content_ops` is on. Never set anywhere else.
+    pub manifest_op: bool,
 }
 
 impl<'a> From<Attribution<'a>> for Writer<'a> {
     fn from(by: Attribution<'a>) -> Self {
-        Writer { by, signer: None }
+        Writer {
+            by,
+            signer: None,
+            manifest_op: false,
+        }
     }
 }
 
@@ -127,7 +135,28 @@ impl<'a> Writer<'a> {
         Writer {
             by,
             signer: signer.filter(|s| !s.is_empty()),
+            manifest_op: false,
         }
+    }
+
+    /// The daemon's update for a manifest op whose signature by `author` it
+    /// VERIFIED (`verify_manifest_op` returned the author). Call it nowhere else.
+    pub fn manifest_op(by: Attribution<'a>, author: &'a str) -> Self {
+        Writer {
+            manifest_op: true,
+            ..Writer::signed(by, Some(author))
+        }
+    }
+
+    /// ADR-036 Amendment 2 (G3): whether this write must leave a KB's node list
+    /// as it was once the hub requires signed ops. A session's own write must;
+    /// the daemon's update for a verified manifest op need not. A mesh relay
+    /// (#727 part 3) and the daemon acting for no session are not covered.
+    pub(crate) fn keeps_node_list(&self) -> bool {
+        matches!(
+            self.by,
+            Attribution::Principal(_) | Attribution::Unauthenticated
+        ) && !self.manifest_op
     }
 
     /// Every `(kind, editor)` this write is recorded under. A relay whose

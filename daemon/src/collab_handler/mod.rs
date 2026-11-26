@@ -1247,7 +1247,7 @@ async fn persist_and_broadcast_collection(
 async fn persist_and_broadcast_collection_typed(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    (session_id, by): (u64, Attribution<'_>),
+    (session_id, by): (u64, impl Into<crate::doc_editors::Writer<'_>>),
     kb_id: &str,
     update: &[u8],
 ) -> Result<u64, crate::storage::StorageError> {

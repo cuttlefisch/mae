@@ -176,6 +176,9 @@ pub(crate) fn storage_error(e: crate::storage::StorageError) -> McpError {
         crate::storage::StorageError::NodeHasRevisions { ref nodes, .. } if !nodes.is_empty() => {
             McpError::node_has_revisions(e.to_string())
         }
+        crate::storage::StorageError::UnsignedNodeListChange { .. } => {
+            McpError::signature_required(e.to_string())
+        }
         crate::storage::StorageError::TooLarge { size, limit, .. } => {
             McpError::document_too_large(e.to_string(), size, limit)
         }

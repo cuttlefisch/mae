@@ -354,10 +354,32 @@ any setting.
 With the switch on, a raw collection write (`kb/collection_op`, `sync/update` of `kbc:<kb>`) that
 adds, removes or retitles a node is refused `signature_required`: the node list
 changes only through G1, so every change to it has an author's signature. The owner's signed
-membership and encryption ops through `kb/collection_op` are unaffected. The check compares the node
-list before and after the write, as the E7 delete guard does, in the store, under the same gate.
-`kb/share`, which creates the KB with its node list in the owner's own session, is not a change to an
-existing list and stays as it is (F3's open item); the mesh join and push stay with part 3.
+membership and encryption ops through `kb/collection_op` are unaffected.
+
+**Where.** In the store, beside the E7 delete guard: `DocStore::apply_update` and `replace_doc`
+compare the node list before the write with the list of the document the write leaves, under the
+document's lock, and refuse and roll back on a difference. So every session route into a collection
+is covered, including one added later, and the judgement is of what actually landed. The first
+version checked in the handler, on a copy rebuilt from the stored state with the update applied. The
+independent review found two holes in it: it ran outside the lock, so it raced the write it judged;
+and a copy can differ from what the real apply integrates. yrs holds back an update whose origin is
+missing, and a later write integrates it, so a change can land in a write that does not carry it.
+The test `a_node_list_change_held_pending_is_refused_when_it_lands` sends exactly that pair.
+
+**Who.** A session's write, authenticated or not. The daemon's own update for a verified G1 op is
+marked as such (`Writer::manifest_op`) and may change the list. Two writers stay outside G3. A mesh
+relay stays with part 3, because a relayed change carries no manifest signature to check. The daemon
+acting for no session (seed, migration, the operator's control socket) stays outside because it is
+the operator.
+
+**Creation.** `kb/share`, which creates the KB with its node list in the owner's own session, is not
+a change to an existing list and stays as it is (F3's open item).
+
+**Replay.** A captured op replays only as itself. Its KB, node, action and title are signed. On a
+session, F4 limits it to the author's own session. Within one epoch, a replayed add can restore a
+node the author later removed, and a replayed remove can drop one they re-added. `issued_at` is
+audit only (D1), so nothing refuses either. The same holds for content ops (D1), and the fence for
+both is the epoch.
 
 ### G4. Signers
 
@@ -379,4 +401,8 @@ existing list and stays as it is (F3's open item); the mesh join and push stay w
 - With the switch off an unsigned call is accepted and counted; on, refused.
 - With the switch on, a raw collection write by the owner that adds, removes or retitles a node is
   refused and changes nothing; one that only appends a signed membership op is accepted.
+- A change held pending (its origin missing) is accepted unchanged, and the later write that lands it
+  is refused; at the store, a session's add, removal or retitle is refused on apply and on replace,
+  the same update as a verified manifest op lands, and a mesh relay and the daemon itself are not
+  guarded.
 - The editor's network task sends a signed header on both methods, and the daemon accepts it.
