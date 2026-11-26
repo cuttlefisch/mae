@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.209] - 2026-11-26
+
+
+
+
+### Bug Fixes
+
+- *(release)* Keep only release tags before git-cliff ([157c5b0](https://github.com/cuttlefisch/mae/commit/157c5b019e0f4700f92d634c4cde382757348f98))
+
+### Documentation
+
+- *(adr-098)* Amendment 2's How is the browser's: sign_op over a per-session key ([9f6e41c](https://github.com/cuttlefisch/mae/commit/9f6e41cd43c06dd025b3681bbc50d9c4264f840d))
+
+### Miscellaneous
+
+- ADR KB checksum after merging main ([c77b7fb](https://github.com/cuttlefisch/mae/commit/c77b7fbcb7e70e3d13154d5cb658808a181030c9))
+
 ## [0.14.208] - 2026-11-26
 
 
@@ -18,6 +35,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(import)* An in-force revision that is not the last, with no ended_at, is refused ([a88e353](https://github.com/cuttlefisch/mae/commit/a88e35383d462a2ab094f1c26c321f91bd16f4d5))
+
+### Miscellaneous
+
+- Bump version to 0.14.208 ([4a949d0](https://github.com/cuttlefisch/mae/commit/4a949d02ded6c3262a23a47c642cea9e4d89fddc))
 
 ## [0.14.207] - 2026-11-26
 
