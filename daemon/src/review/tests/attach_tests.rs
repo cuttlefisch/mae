@@ -308,6 +308,13 @@ async fn under_signed_pdf_the_last_signed_pdf_puts_the_set_in_force() {
         .await
         .unwrap();
     assert!(a2["in_force_since"].is_string(), "{a2}");
+    let again = attach_signed(&env, &approver(&env), &revs[1], &s2)
+        .await
+        .unwrap();
+    assert_eq!(
+        again, a2,
+        "a retry answers as the attach that completed the set"
+    );
     for n in ["n1", "n2"] {
         assert!(
             status(&env, n).await["in_force"].is_object(),

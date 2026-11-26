@@ -20,7 +20,15 @@
 //! (ADR-115 D5) from the check that the KB holds the blob until the binding
 //! is committed, so a sweep, which marks under the same lock, can never
 //! collect a blob between the two. The sweep's live set reads the binding
-//! (`attach_store::hashes`).
+//! (`attach_store::hashes`). A request dropped mid-attach releases the lock
+//! safely only because `SqliteBackend::review_txn` runs the op and its
+//! `COMMIT` with no await between them: the drop lands before the op (nothing
+//! written) or after the commit. Keep it so, or move the guard into the job.
+//!
+//! Who attaches is B3 and O13 as written: a signed PDF is not author-checked
+//! (the approval it records was, and whoever holds the signed original must
+//! be able to file it, owner decision 2026-11-25), except when it completes a
+//! set, which is an entry into force.
 
 use mae_mcp::protocol::McpError;
 use serde_json::{json, Value};
@@ -175,9 +183,13 @@ fn record_attach(
     }
     if let Some(cur) = attach_store::current(c, &r.revision_id, i.kind)? {
         if cur.sha256 == i.meta.sha256 {
-            // A retry of the same bytes answers the first attach (B1).
+            // A retry of the same bytes answers the first attach (B1),
+            // including whether it put the set in force: that entry is
+            // stamped with the attach's own time (`complete_signed_set`).
+            let since =
+                (i.kind == "signed_pdf" && r.in_force_since == Some(cur.at)).then(|| time(cur.at));
             return Ok(Ok(json!({ "event_id": store::event_id(cur.event_seq),
-                "in_force_since": null })));
+                "in_force_since": since })));
         }
         return Ok(Err(McpError::attachment_exists(
             format!("this revision already holds a {}", i.kind),

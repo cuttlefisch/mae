@@ -185,3 +185,14 @@ ref = "B1: the database allows one current attachment per kind"
 file = "daemon/src/review/attach_store.rs"
 find = '''     ON kb_review_attachments(revision_id, kind) WHERE state = 'current';'''
 replace = '''     ON kb_review_attachments(revision_id, kind, seq) WHERE state = 'current';'''
+
+[[mutant]]
+id = "daemon-review-pr6/retry-forgets-entry-into-force"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_the_last_signed_pdf_puts_the_set_in_force)"
+ref = "B1: a retry answers as the first attach, entry into force included"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                (i.kind == "signed_pdf" && r.in_force_since == Some(cur.at)).then(|| time(cur.at));'''
+replace = '''                (i.kind == "none" && r.in_force_since == Some(cur.at)).then(|| time(cur.at));'''
