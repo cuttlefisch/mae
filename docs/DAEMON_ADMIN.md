@@ -1310,6 +1310,40 @@ The attestation covers only the writes it was given on. An `--update` without `-
 authors of every node it writes unknown again, until the next approval. Attest only what you know:
 the record says who attested it, and it cannot be withdrawn.
 
+### Importing signed documents: `mae-daemon kb import`
+
+A document approved and signed before MAE enters with its signed original and its history (ADR-113 E4,
+B6). Stop the daemon first; the import holds the store lock, as `kb seed` does.
+
+```sh
+mae-daemon kb import --dry-run --kb-id <id> --dir <import-dir> [--json]   # verifies; prints import_hash
+mae-daemon kb import --kb-id <id> --dir <import-dir> --import-hash <hash> [--json]
+```
+
+`<import-dir>` holds `import.json` (`format: "mae-import/1"`, see
+`docs/verification/fixtures/review-api/cli_import.json`), the files it names, and `SHA256SUMS` as
+`sha256sum` writes it (`sha256sum src/*.org signed/*.pdf > SHA256SUMS`). Each page names a node the
+KB already holds (seed it first), its document code (optional) and its revisions in order: `rev`, `state`
+(`in_force`, `superseded` or `derogated`; at most one in force, the last), the org `source`, the
+`signed_pdf` (required), an optional `rendered_pdf`, `effective_at`, `ended_at` for an ended revision,
+`approved_by_name` (required) and optionally `approved_on` (`YYYY-MM-DD`).
+
+The manifest is exact: every file the import names has its line with the right sha256, and every line is
+used. Otherwise the whole import is refused, `manifest_mismatch` with the `path` and a `reason` (`hash`
+with `expected` and `actual`, `missing_line`, `unused_line`, `malformed_line`, `duplicate`,
+`missing_file`), and nothing is written. Each PDF must begin `%PDF-` (`attachment_type`), each source
+must split as `kb seed` would split it and name the page's node (`invalid_params`), and each must fit
+`oauth.max_attachment_bytes` (`quota_exceeded`). The PDFs need `oauth.attachments_enabled`
+(`attachments_disabled`).
+
+The apply re-checks everything and refuses `import_hash_mismatch` if anything changed since the dry run.
+An import never lands at or before a revision a node already holds, nor beside one in review, approved or
+in force (`import_overlap`, with `latest_existing`); a code another node holds is `doc_code_taken`.
+Running the same import twice is therefore refused the second time. The approver is recorded by name, as
+an attested fact (no one approved in MAE), and the import is one signed `import` event in the KB's review
+chain naming you (`$USER`), the `import_hash` and the manifest's sha256. Imported revisions are recorded
+with `approval_record: "signed_pdf"`.
+
 ### Members of a seeded KB: `mae-daemon kb member`
 
 ```bash

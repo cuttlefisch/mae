@@ -21,6 +21,7 @@ mod chain_store_tests;
 mod fixture_shape_tests;
 mod freeze_race_tests;
 mod gate_tests;
+mod import_tests;
 mod limits_tests;
 mod method_tests;
 mod published_view_tests;

@@ -64,7 +64,10 @@ fn revision_entry(
     all: &[Revision],
     req: Option<&Request>,
     notes: &EndNotes,
-    signed: &std::collections::HashMap<String, String>,
+    (signed, imports): (
+        &std::collections::HashMap<String, String>,
+        &std::collections::HashMap<String, super::import::ImportRecord>,
+    ),
 ) -> Value {
     let (reason, with) = notes.get(&r.revision_id).cloned().unwrap_or_default();
     let superseded_by = all
@@ -88,7 +91,11 @@ fn revision_entry(
         "rejected_with": with,
         "replaces": r.replaces,
         "superseded_by": superseded_by,
-        "imported": null,
+        "imported": imports.get(&r.revision_id).map(|i| json!({
+            "approved_by_name": i.approved_by_name,
+            "approved_on": i.approved_on,
+            "event_id": store::event_id(i.event_seq),
+        })),
         "signed_pdf_sha256": signed.get(&r.revision_id),
         "approval_record": r.approval_record,
     })
@@ -106,6 +113,8 @@ struct NodeRecord {
     members: std::collections::HashMap<String, Vec<Revision>>,
     /// The current signed PDF of each revision above that holds one (B1).
     signed: std::collections::HashMap<String, String>,
+    /// The attested approval of each imported revision (E4).
+    imports: std::collections::HashMap<String, super::import::ImportRecord>,
 }
 
 async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<NodeRecord, McpError> {
@@ -142,7 +151,14 @@ async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<Nod
                     signed.insert(r.revision_id.clone(), a.sha256);
                 }
             }
+            let mut imports = std::collections::HashMap::new();
+            for r in &revs {
+                if let Some(i) = super::import::record(c, &r.revision_id)? {
+                    imports.insert(r.revision_id.clone(), i);
+                }
+            }
             Ok(NodeRecord {
+                imports,
                 signed,
                 code: store::node_code(c, &kb, &n)?,
                 notes: store::end_notes(c, &kb, &n)?,
@@ -207,6 +223,7 @@ pub(super) async fn status(
         done,
         members,
         signed,
+        imports,
     } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
         return Err(node_not_in_kb());
@@ -247,7 +264,7 @@ pub(super) async fn status(
     });
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, &signed))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, (&signed, &imports)))
         .collect();
     Ok(json!({
         "kb_id": kb_id,
@@ -466,6 +483,7 @@ pub(super) async fn revisions(
         code,
         notes,
         signed,
+        imports,
         ..
     } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
@@ -473,7 +491,7 @@ pub(super) async fn revisions(
     }
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, &signed))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, (&signed, &imports)))
         .collect();
     Ok(json!({ "kb_id": kb_id, "node_id": node_id, "doc_code": code, "revisions": entries }))
 }
