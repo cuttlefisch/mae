@@ -390,9 +390,9 @@ member key.**
   every new device would need the owner to admit it as a member (D4 forbids the daemon doing so).
   Per-device keys stay Phase E, with its own ADR, as D5 says.
 - **A second device** obtains the member key from Phase B's key-blind sealed storage, which the
-  pilot does not need. Phase B's block on #176 applies only to end-to-end encrypted KBs, whose
-  content a rotation could strand; a plaintext KB (every KB under publication review) is not
-  affected.
+  pilot does not need. *This amends D6 and the header's "Blocked on":* Phase B's block on #176
+  applies only to end-to-end encrypted KBs, whose content a rotation could strand; for a plaintext
+  KB (every KB under publication review) Phases B and D are not blocked.
 - **A lost device** is D5's member-key rotation (ADR-040 `Rebind`), one owner act.
 
 Enforcement on the hub is ADR-036 Amendment 1, already built behind

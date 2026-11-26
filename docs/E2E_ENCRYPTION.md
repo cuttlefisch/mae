@@ -357,7 +357,9 @@ built by the same `ContentOp::canonical_bytes`, and the header fields to send. T
 fields plus `sig`, exactly as `sign_op`'s result. For the same op, that header is byte-identical to
 `sign_op`'s (Ed25519 is deterministic); `tests/outside_op.rs` and `js/test.mjs` hold both to the pinned
 vector, the latter with a real non-extractable WebCrypto key. `verify_op` answers `valid: true` exactly when
-the daemon's check would pass: the signature, the author being the key's fingerprint, encodable ids.
+the daemon's *signature* check would pass: the signature, the author being the key's fingerprint, encodable
+ids. It does not know the KB, so the daemon's admission (membership, role, epoch) can still refuse an op it
+calls valid.
 
 What this moves, stated plainly: with `sign_op`, the module signs only the canonical messages it builds
 itself. A WebCrypto key signs whatever bytes the page's code hands it, so that guarantee now rests on the
