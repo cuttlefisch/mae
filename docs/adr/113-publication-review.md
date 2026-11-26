@@ -1617,6 +1617,16 @@ record and as `attach` and `annul_attachment` events; D5's `attachments` list on
 **Does not build:** deletion and retention (PR-7), `controlled_copy` (PR-9), the second factor
 (PR-8), signature verification.
 
+*(As built: a blob reaches the KB through ADR-115's upload route and is bound by hash (O3), with
+the KB's binding lock held from the check that the KB holds it to the commit. Write-once is held by
+the database itself: a partial unique index allows one current attachment per revision and kind,
+deletes are refused, and the only update allowed is annulment. A retry of the same bytes answers the
+first attach and records nothing. Annulling a kind with nothing current is `invalid_transition` with
+`reason: "no_attachment"`. Under `signed_pdf` and `in_force_on_approval`, the attach that completes a
+set checks every member's authors, as an entry into force does. `approval_record` joins the revision
+read, and `signed_pdf_sha256`, `waiting_for: "signed_pdf"` and `signed_pdf_required`'s `missing` are
+read from the attachments, no longer assumed.)*
+
 **Prerequisites:** PR-1 and PR-5. O2, O3, O4 and O13 settled.
 
 **Data:** revision attachments (revision, kind, sequence within the kind, sha256, size, content

@@ -23,6 +23,8 @@
 //! must never get a method here (principle #16).
 
 mod acts;
+mod attach;
+pub(crate) mod attach_store;
 pub mod chain;
 mod methods;
 pub mod published;
@@ -54,6 +56,9 @@ pub const METHODS: &[&str] = &[
     "kb/review.reject",
     "kb/review.enter_into_force",
     "kb/review.derogate",
+    "kb/review.attach_rendered_pdf",
+    "kb/review.attach_signed_pdf",
+    "kb/review.annul_attachment",
     "kb/review.set_policy",
     "kb/review.set_code",
     "kb/review.status",
@@ -83,6 +88,13 @@ pub async fn dispatch(
         "kb/review.reject" => acts::reject(store, &kb_id, who, params).await,
         "kb/review.enter_into_force" => acts::enter_into_force(store, &kb_id, who, params).await,
         "kb/review.derogate" => acts::derogate(store, &kb_id, who, params).await,
+        "kb/review.attach_rendered_pdf" => {
+            attach::attach_rendered_pdf(store, &kb_id, who, params).await
+        }
+        "kb/review.attach_signed_pdf" => {
+            attach::attach_signed_pdf(store, &kb_id, who, params).await
+        }
+        "kb/review.annul_attachment" => attach::annul_attachment(store, &kb_id, who, params).await,
         "kb/review.set_policy" => methods::set_policy(store, &kb_id, who, params).await,
         "kb/review.set_code" => methods::set_code(store, &kb_id, who, params).await,
         "kb/review.status" => reads::status(store, &kb_id, who, params).await,

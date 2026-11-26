@@ -334,7 +334,10 @@ pub(crate) fn classify_method(method: &str) -> Option<EventKind> {
         | "kb/review.approve"
         | "kb/review.reject"
         | "kb/review.enter_into_force"
-        | "kb/review.derogate" => EventKind::ReviewAct,
+        | "kb/review.derogate"
+        | "kb/review.attach_rendered_pdf"
+        | "kb/review.attach_signed_pdf"
+        | "kb/review.annul_attachment" => EventKind::ReviewAct,
         "kb/review.set_policy" | "kb/review.set_code" => EventKind::Admin,
         // Everything else returns KB content, a key, or the review record.
         _ => EventKind::Read,

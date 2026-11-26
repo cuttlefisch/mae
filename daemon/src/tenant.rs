@@ -125,6 +125,9 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         | "kb/review.reject"
         | "kb/review.enter_into_force"
         | "kb/review.derogate"
+        | "kb/review.attach_rendered_pdf"
+        | "kb/review.attach_signed_pdf"
+        | "kb/review.annul_attachment"
         | "kb/review.set_policy"
         | "kb/review.set_code" => RequestCost::Mutation,
         // ADR-113: pages over a KB's requests and its event chain.

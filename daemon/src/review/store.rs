@@ -133,6 +133,18 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
 
 pub(crate) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
     conn.execute(SCHEMA)?;
+    conn.execute(super::attach_store::SCHEMA)?;
+    // PR-6: B7's switch, off on a KB PR-5 left; and the rendered PDF an
+    // approval bound (B7), which annulment then refuses.
+    if !has_column(conn, "kb_review_policy", "approval_requires_rendered_pdf")? {
+        conn.execute(
+            "ALTER TABLE kb_review_policy ADD COLUMN approval_requires_rendered_pdf \
+             INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    if !has_column(conn, "kb_review_acts", "rendered_pdf_sha256")? {
+        conn.execute("ALTER TABLE kb_review_acts ADD COLUMN rendered_pdf_sha256 TEXT")?;
+    }
     // PR-5 adds the performer lists to a table PR-4 shipped: an existing
     // database gains the columns, empty (no performer: fail-closed, D3).
     for col in ["reviewers", "approvers"] {
@@ -233,6 +245,8 @@ pub struct Policy {
     /// Who may approve, put into force, derogate and withdraw an approval
     /// (D3, C2). Empty: nobody (fail-closed).
     pub approvers: Vec<Performer>,
+    /// B7: `approve` must carry the revision's current rendered PDF's hash.
+    pub approval_requires_rendered_pdf: bool,
 }
 
 impl Default for Policy {
@@ -247,6 +261,7 @@ impl Default for Policy {
             code_prefixes: Vec::new(),
             reviewers: Vec::new(),
             approvers: Vec::new(),
+            approval_requires_rendered_pdf: false,
         }
     }
 }
@@ -254,7 +269,8 @@ impl Default for Policy {
 pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT review_enabled, in_force_on_approval, required_acts, approval_record,
-                code_prefixes, reviewers, approvers FROM kb_review_policy WHERE kb_id = ?1",
+                code_prefixes, reviewers, approvers, approval_requires_rendered_pdf
+         FROM kb_review_policy WHERE kb_id = ?1",
     )?;
     stmt.bind((1, kb_id))?;
     if stmt.next()? != sqlite::State::Row {
@@ -273,6 +289,7 @@ pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, S
             .ok_or_else(|| bad("reviewers"))?,
         approvers: performers_from(&stmt.read::<String, _>("approvers")?)
             .ok_or_else(|| bad("approvers"))?,
+        approval_requires_rendered_pdf: stmt.read::<i64, _>("approval_requires_rendered_pdf")? != 0,
     })
 }
 
@@ -284,8 +301,8 @@ pub(crate) fn put_policy(
     let mut stmt = conn.prepare(
         "INSERT OR REPLACE INTO kb_review_policy
          (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes,
-          reviewers, approvers)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+          reviewers, approvers, approval_requires_rendered_pdf)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?;
     stmt.bind((1, kb_id))?;
     stmt.bind((2, i64::from(p.review_enabled)))?;
@@ -305,6 +322,7 @@ pub(crate) fn put_policy(
     ))?;
     stmt.bind((7, performers_json(&p.reviewers).as_str()))?;
     stmt.bind((8, performers_json(&p.approvers).as_str()))?;
+    stmt.bind((9, i64::from(p.approval_requires_rendered_pdf)))?;
     stmt.next()?;
     Ok(())
 }
@@ -1018,6 +1036,38 @@ pub(crate) fn insert_act(
     st.bind((7, opt_text(note.as_deref())))?;
     st.next()?;
     Ok(())
+}
+
+/// B7: record on a revision's approval the rendered PDF it was given.
+pub(crate) fn bind_rendered_pdf(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+    sha256: &str,
+) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "UPDATE kb_review_acts SET rendered_pdf_sha256 = ?2
+         WHERE revision_id = ?1 AND act = 'approved'",
+    )?;
+    st.bind((1, revision_id))?;
+    st.bind((2, sha256))?;
+    st.next()?;
+    Ok(())
+}
+
+/// The rendered PDF a revision's approval bound (B7), if it bound one.
+pub(crate) fn bound_rendered_pdf(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+) -> Result<Option<String>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT rendered_pdf_sha256 FROM kb_review_acts
+         WHERE revision_id = ?1 AND act = 'approved' AND rendered_pdf_sha256 IS NOT NULL",
+    )?;
+    st.bind((1, revision_id))?;
+    if st.next()? != sqlite::State::Row {
+        return Ok(None);
+    }
+    Ok(Some(st.read::<String, _>(0)?))
 }
 
 /// Mark a revision approved: its state, time and revision number.

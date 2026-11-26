@@ -64,6 +64,7 @@ fn revision_entry(
     all: &[Revision],
     req: Option<&Request>,
     notes: &EndNotes,
+    signed: &std::collections::HashMap<String, String>,
 ) -> Value {
     let (reason, with) = notes.get(&r.revision_id).cloned().unwrap_or_default();
     let superseded_by = all
@@ -88,7 +89,7 @@ fn revision_entry(
         "replaces": r.replaces,
         "superseded_by": superseded_by,
         "imported": null,
-        "signed_pdf_sha256": null,
+        "signed_pdf_sha256": signed.get(&r.revision_id),
         "approval_record": r.approval_record,
     })
 }
@@ -103,6 +104,8 @@ struct NodeRecord {
     done: std::collections::HashMap<String, Vec<String>>,
     /// Each request's members, for the approved revision's `waiting_for`.
     members: std::collections::HashMap<String, Vec<Revision>>,
+    /// The current signed PDF of each revision above that holds one (B1).
+    signed: std::collections::HashMap<String, String>,
 }
 
 async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<NodeRecord, McpError> {
@@ -132,7 +135,15 @@ async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<Nod
                     );
                 }
             }
+            let mut signed = std::collections::HashMap::new();
+            let all = revs.iter().chain(members.values().flatten());
+            for r in all {
+                if let Some(a) = super::attach_store::current(c, &r.revision_id, "signed_pdf")? {
+                    signed.insert(r.revision_id.clone(), a.sha256);
+                }
+            }
             Ok(NodeRecord {
+                signed,
                 code: store::node_code(c, &kb, &n)?,
                 notes: store::end_notes(c, &kb, &n)?,
                 revs,
@@ -147,10 +158,16 @@ async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<Nod
 
 /// What an approved revision waits for (E9): the rest of its set, its signed
 /// PDF (E3, O19), or an entry into force.
-fn approved_waits_for(r: &Revision, members: &[Revision]) -> &'static str {
+fn approved_waits_for(
+    members: &[Revision],
+    signed: &std::collections::HashMap<String, String>,
+) -> &'static str {
     if members.iter().any(|m| m.state != "approved") {
         "set"
-    } else if r.approval_record == "signed_pdf" {
+    } else if members
+        .iter()
+        .any(|m| m.approval_record == "signed_pdf" && !signed.contains_key(&m.revision_id))
+    {
         "signed_pdf"
     } else {
         "enter_into_force"
@@ -189,6 +206,7 @@ pub(super) async fn status(
         notes,
         done,
         members,
+        signed,
     } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
         return Err(node_not_in_kb());
@@ -212,7 +230,10 @@ pub(super) async fn status(
             "revision_id": r.revision_id,
             "rev": r.rev_no,
             "approved_at": t(r.approved_at),
-            "waiting_for": approved_waits_for(r, members.get(&r.request_id).map_or(&[], |v| v)),
+            "waiting_for": approved_waits_for(
+                members.get(&r.request_id).map_or(&[], |v| v),
+                &signed,
+            ),
         })
     });
     let in_force = latest_in("in_force").map(|r| {
@@ -221,12 +242,12 @@ pub(super) async fn status(
             "rev": r.rev_no,
             "since": t(r.in_force_since),
             "approval_record": r.approval_record,
-            "signed_pdf_sha256": null,
+            "signed_pdf_sha256": signed.get(&r.revision_id),
         })
     });
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, &signed))
         .collect();
     Ok(json!({
         "kb_id": kb_id,
@@ -444,6 +465,7 @@ pub(super) async fn revisions(
         reqs,
         code,
         notes,
+        signed,
         ..
     } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
@@ -451,7 +473,7 @@ pub(super) async fn revisions(
     }
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes, &signed))
         .collect();
     Ok(json!({ "kb_id": kb_id, "node_id": node_id, "doc_code": code, "revisions": entries }))
 }
@@ -493,12 +515,13 @@ pub(super) async fn revision_reply(
             };
             let src = store::source(c, &kb, &r.source_sha256)?;
             let acts = store::act_records(c, &r.revision_id)?;
-            Ok(Some((r, src, acts)))
+            let files = super::attach_store::of_revision(c, &r.revision_id)?;
+            Ok(Some((r, src, (acts, files))))
         })
         .await
         .map_err(storage_fault)?;
     let unknown = || McpError::unknown_revision("no such revision in this KB".into());
-    let (r, src, acts) = found.ok_or_else(unknown)?;
+    let (r, src, (acts, files)) = found.ok_or_else(unknown)?;
     if named_node.is_some_and(|n| n != r.node_id.as_str()) {
         return Err(unknown());
     }
@@ -539,11 +562,12 @@ pub(super) async fn revision_reply(
                 "doc_code": r.doc_code,
                 "rev": r.rev_no,
                 "state": r.state,
+                "approval_record": r.approval_record,
                 "approved_at": t(r.approved_at),
                 "in_force_at": t(r.in_force_since),
                 "superseded_at": t(ended("superseded")),
                 "acts": acts,
-                "attachments": [],
+                "attachments": super::attach::attachments_json(kb_id, &files),
             },
         })
         .as_object()

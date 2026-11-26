@@ -392,11 +392,10 @@ fn record_withdrawal(
     Ok(Ok(json!({ "event_id": store::event_id(seq) })))
 }
 
-/// The policy fields PR-4 builds, and those a later PR adds (refused until
-/// then, never silently ignored).
+/// The policy fields a later PR adds (refused until then, never silently
+/// ignored).
 const LATER_FIELDS: &[&str] = &[
     "approval_requires_mfa",
-    "approval_requires_rendered_pdf",
     "reauth_max_age_secs",
     "attachment_retention_days",
 ];
@@ -492,6 +491,9 @@ fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<S
     if let Some(b) = optional_bool(params, "review_enabled")? {
         p.review_enabled = b;
     }
+    if let Some(b) = optional_bool(params, "approval_requires_rendered_pdf")? {
+        p.approval_requires_rendered_pdf = b;
+    }
     if let Some(b) = optional_bool(params, "in_force_on_approval")? {
         p.in_force_on_approval = b;
     }
@@ -567,7 +569,7 @@ fn policy_json(p: &Policy) -> Value {
         "reviewers": p.reviewers.iter().map(Performer::to_json).collect::<Vec<_>>(),
         "approvers": p.approvers.iter().map(Performer::to_json).collect::<Vec<_>>(),
         "approval_requires_mfa": false,
-        "approval_requires_rendered_pdf": false,
+        "approval_requires_rendered_pdf": p.approval_requires_rendered_pdf,
         "approval_record": p.approval_record,
         "reauth_max_age_secs": null,
         "attachment_retention_days": null,
