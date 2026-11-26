@@ -15,12 +15,15 @@ use crate::kb_query::{self, KbQueryLimits};
 use crate::oauth_self_issue::{Credential, PrincipalKind, ValidatedPrincipal};
 use crate::storage::SqliteBackend;
 
+mod act_tests;
 mod chain_store_tests;
 mod fixture_shape_tests;
 mod freeze_race_tests;
 mod gate_tests;
 mod limits_tests;
 mod method_tests;
+mod published_view_tests;
+mod seed_author_tests;
 mod switch_race_tests;
 
 pub(super) const KB: &str = "kb-review";

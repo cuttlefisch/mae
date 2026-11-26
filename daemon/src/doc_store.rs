@@ -101,6 +101,10 @@ pub struct DocStore {
     /// daemon signs membership ops for KBs it owns (`signer.fingerprint() == owner`)
     /// into the op-log; absent (psk/none) ⇒ legacy unsigned membership only.
     signer: std::sync::OnceLock<Arc<mae_mcp::identity::Identity>>,
+    /// The identity bindings (ADR-098 Amendment 1), when the OAuth listener
+    /// binds IdP subjects: publication review asks it whether a named
+    /// performer is a person (ADR-113 E11, `performer_not_person`).
+    bindings: std::sync::OnceLock<Arc<crate::identity_binding::BindingStore>>,
     /// The KB attachment store (ADR-115), when `oauth.attachments_enabled`
     /// opened one. Set once at startup, beside the signer, so every reader
     /// that is handed this store (the live site, `kb/node.attach`) can ask
@@ -350,6 +354,7 @@ impl DocStore {
             max_update_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
+            bindings: std::sync::OnceLock::new(),
             blob_store: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
@@ -877,6 +882,16 @@ impl DocStore {
         self.signer.get()
     }
 
+    /// Install the identity bindings. Called once at startup; idempotent.
+    pub fn set_bindings(&self, bindings: Arc<crate::identity_binding::BindingStore>) {
+        let _ = self.bindings.set(bindings);
+    }
+
+    /// The identity bindings, when the listener binds IdP subjects.
+    pub fn bindings(&self) -> Option<&Arc<crate::identity_binding::BindingStore>> {
+        self.bindings.get()
+    }
+
     /// Install the daemon's `authorized_keys` path (ADR-018, #73). Called once at
     /// startup in key-auth mode; idempotent (a second call is ignored).
     pub fn set_authorized_keys_path(&self, path: std::path::PathBuf) {
@@ -1321,13 +1336,17 @@ impl DocStore {
     /// to what storage holds: one that grows it past the size limit (ADR-109
     /// D6), or, for a collection whose encryption inputs it changed
     /// (`coll_touched`: its KB), one that switches the KB to E2E over
-    /// plaintext (`doc_store_e2e_switch`).
+    /// plaintext (`doc_store_e2e_switch`), or one that removes a node holding
+    /// a revision (`removal`: the node list before, `doc_store_delete_guard`).
     async fn refuse_applied(
         &self,
         doc_name: &str,
         doc: &mut DocEntry,
-        size_before: usize,
-        coll_touched: Option<&str>,
+        (size_before, coll_touched, removal): (
+            usize,
+            Option<&str>,
+            Option<delete_guard::RemovalBaseline>,
+        ),
     ) -> Result<(), StorageError> {
         let after = doc.sync.payload_bytes();
         let mut refused = self.size_refusal(doc_name, size_before, after);
@@ -1345,7 +1364,7 @@ impl DocStore {
                 self.restore_from_storage(doc_name, doc).await?;
                 Err(refused)
             }
-            None => Ok(()),
+            None => self.refuse_applied_removal(doc_name, doc, removal).await,
         }
     }
 
@@ -1394,9 +1413,11 @@ impl DocStore {
             let mut stamp = self.stamp(by.into());
             stamp.checkpoint = self.handoff(doc_name, &doc.sync, &stamp.editors).await?;
             let (before, pending_before) = (doc.sync.payload_bytes(), doc.sync.pending_digest());
+            let kb = switch.as_ref().map(|(k, _)| k.as_str());
+            let removal = self.removal_baseline(kb, &doc.sync).await;
             let touched = apply_in_memory(&mut doc, update, switch.is_some())?;
-            let coll_touched = switch.as_ref().filter(|_| touched).map(|(k, _)| k.as_str());
-            self.refuse_applied(doc_name, &mut doc, before, coll_touched)
+            let coll_touched = kb.filter(|_| touched);
+            self.refuse_applied(doc_name, &mut doc, (before, coll_touched, removal))
                 .await?;
 
             // WAL append (durability) before the update is acknowledged or relayed.
@@ -1868,8 +1889,9 @@ impl DocStore {
         if let Some(refused) = self.size_refusal(doc_name, before, probe.payload_bytes()) {
             return Err(refused);
         }
-        // ADR-116 Amendment 1, ADR-113 O17: on the whole state it would leave.
-        self.refuse_replacing_switch(kb, state_before.as_deref(), &probe)
+        // On the whole state it would leave: no switch to E2E over plaintext
+        // (ADR-116 Amendment 1, O17), no node with a revision dropped (E7).
+        self.refuse_replacing(kb, state_before.as_deref(), &probe)
             .await?;
         #[cfg(test)]
         Self::pause_at(&self.pauses.replace).await;
@@ -2004,6 +2026,10 @@ pub use attachment_refs::ReferencedBlobs;
 // ADR-116 Amendment 1, ADR-113 O17: the one guard on a switch to E2E.
 #[path = "doc_store_e2e_switch.rs"]
 mod e2e_switch;
+
+// ADR-113 E7: a node holding a revision is never removed from its KB.
+#[path = "doc_store_delete_guard.rs"]
+mod delete_guard;
 
 // ADR-113 D1/D2: the review tables, and the freeze of a node for a request.
 #[path = "doc_store_review.rs"]

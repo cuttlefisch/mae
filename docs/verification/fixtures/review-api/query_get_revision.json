@@ -1,7 +1,7 @@
 {
   "$comment": "ADR-113 Amendment 4 fixture. JSON-RPC 2.0 POSTed to the daemon's OAuth listener with a bearer token, exactly as kb/query.* is. Clients branch on error.data.kind only; error.code is informative. Identifiers, hashes and times are examples; times are RFC 3339 UTC with milliseconds. Field names and kinds are normative.",
   "method": "kb/query.get",
-  "description": "A revision read (ADR-113 D5): kb/query.get with `revision` returns the node's frozen revision, with its acts and attachments. Use it to read a revision's rendered_pdf hash (to pass as approve's rendered_pdf_sha256) and its signed_pdf. `attachments` lists every attachment in upload order, annulled ones included: `annulled` is null for a current one, else {at, by, reason} (B1). The current attachment of a kind is the newest one whose `annulled` is null. `url` is the blob route (GET/HEAD, bearer token, the KB's read access). Built in PR-4 (the revision read) and PR-6 (the attachments list).",
+  "description": "A revision read (ADR-113 D5): kb/query.get with `revision` returns the node's frozen revision, with its acts and attachments. Use it to read a revision's rendered_pdf hash (to pass as approve's rendered_pdf_sha256) and its signed_pdf. `attachments` lists every attachment in upload order, annulled ones included: `annulled` is null for a current one, else {at, by, reason} (B1). The current attachment of a kind is the newest one whose `annulled` is null. `url` is the blob route (GET/HEAD, bearer token, the KB's read access). Built in PR-4 (the revision read) and PR-6 (the attachments list). `acts` lists the capacity acts performed on the revision, in order, named as kb/review.act names them (`reviewed`, `approved`); the request and the attachments are in the event chain and in `attachments`. Each act carries `override`: null, or, when the actor acted past the soft block (D3, A3), {self_approval: [revision_id...], unknown_authors: [revision_id...], reason}: the revisions of the act it covered where the actor was an author, or whose authors could not be established, and the actor's override_reason.",
   "transport": {
     "http": "POST /",
     "headers": {
@@ -45,29 +45,16 @@
             "superseded_at": null,
             "acts": [
               {
-                "act": "request",
-                "principal": "member:requester",
-                "at": "2000-01-05T10:00:00.000Z"
-              },
-              {
-                "act": "attach",
-                "principal": "member:requester",
-                "at": "2000-01-05T10:05:00.000Z"
-              },
-              {
-                "act": "annul_attachment",
-                "principal": "member:requester",
-                "at": "2000-01-05T10:20:00.000Z"
-              },
-              {
-                "act": "attach",
-                "principal": "member:requester",
-                "at": "2000-01-05T10:25:00.000Z"
-              },
-              {
-                "act": "approve",
+                "act": "approved",
                 "principal": "member:approver",
-                "at": "2000-01-06T09:00:00.000Z"
+                "at": "2000-01-06T09:00:00.000Z",
+                "override": {
+                  "self_approval": [
+                    "rv-01a7c2-1"
+                  ],
+                  "unknown_authors": [],
+                  "reason": "The only approver on duty wrote the change; the signed copy follows."
+                }
               }
             ],
             "attachments": [
@@ -131,14 +118,10 @@
             "superseded_at": null,
             "acts": [
               {
-                "act": "approve",
+                "act": "approved",
                 "principal": "member:approver",
-                "at": "2000-01-06T09:00:00.000Z"
-              },
-              {
-                "act": "attach",
-                "principal": "member:approver",
-                "at": "2000-01-06T11:00:00.000Z"
+                "at": "2000-01-06T09:00:00.000Z",
+                "override": null
               }
             ],
             "attachments": [

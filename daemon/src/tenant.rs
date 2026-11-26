@@ -119,6 +119,12 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         // ADR-113: a request freezes nodes and cuts history; each is signed.
         | "kb/review.request"
         | "kb/review.withdraw"
+        // PR-5's acts: each writes a signed event and moves revision state.
+        | "kb/review.act"
+        | "kb/review.approve"
+        | "kb/review.reject"
+        | "kb/review.enter_into_force"
+        | "kb/review.derogate"
         | "kb/review.set_policy"
         | "kb/review.set_code" => RequestCost::Mutation,
         // ADR-113: pages over a KB's requests and its event chain.

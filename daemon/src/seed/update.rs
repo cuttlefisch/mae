@@ -472,6 +472,7 @@ async fn begin(
             done: false,
         });
     }
+    refuse_removing_revisions(store, t.kb_id, &nodes).await?;
     let intent = SeedUpdate {
         kb_id: t.kb_id.to_string(),
         plan_hash: hash.to_string(),
@@ -487,6 +488,42 @@ async fn begin(
         .await
         .map_err(storage)?;
     Ok(nodes)
+}
+
+/// ADR-113 E7: a page whose file left the source is removed from the KB, but
+/// a node holding a publication-review revision is never deleted. Refused
+/// before the update records its intent or writes anything, naming the nodes;
+/// the collection write is guarded again in the store (`delete_guard`).
+async fn refuse_removing_revisions(
+    store: &DocStore,
+    kb_id: &str,
+    nodes: &[SeedUpdateNode],
+) -> Result<(), ApplyError> {
+    let removed: Vec<String> = nodes
+        .iter()
+        .filter(|n| n.remove)
+        .map(|n| n.row.node_id.clone())
+        .collect();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    let kb = kb_id.to_string();
+    let held = store
+        .review_read(move |c| crate::review::store::nodes_with_revisions(c, &kb, &removed))
+        .await
+        .map_err(storage)?;
+    if held.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(
+        ApplyRefusalKind::HasRevisions,
+        format!(
+            "KB '{kb_id}': the new revision drops pages whose nodes hold publication-review \
+             revisions, which are never deleted ({}); restore their files, or derogate them \
+             and keep the files",
+            held.join(", ")
+        ),
+    ))
 }
 
 /// The recorded nodes of an update cut short: they must name this plan's
@@ -540,7 +577,7 @@ async fn write(
         crash::at(crash::Step::BeforeNode(i))?;
         let u = by_id[p.file.id.as_str()];
         if !u.done {
-            write_node(store, t, p, u, i, &mut count).await?;
+            write_node(store, t, &plan.source.commit, p, u, i, &mut count).await?;
         }
     }
     for u in nodes.iter().filter(|n| n.remove && !n.done) {
@@ -574,6 +611,7 @@ struct Counts {
 async fn write_node(
     store: &DocStore,
     t: &ApplyTarget<'_>,
+    rev: &str,
     p: &PlannedNode,
     u: &SeedUpdateNode,
     i: usize,
@@ -585,7 +623,9 @@ async fn write_node(
         None => {
             count.created += 1;
             let r = store.restore_doc(&name, &target.encode(), BY).await;
-            (r.map_err(storage)?.wal_seq, target.version())
+            let wal = r.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
+            (wal, target.version())
         }
         Some(doc) if same_content(&doc, &target) => {
             count.present += 1;
@@ -610,7 +650,9 @@ async fn write_node(
                 ));
             }
             let r = store.apply_update(&name, &update, None, BY).await;
-            (r.map_err(storage)?.wal_seq, doc.version())
+            let wal = r.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, rev, &p.file.id, wal).await?;
+            (wal, doc.version())
         }
     };
     crash::at(crash::Step::AfterWrite(i))?;

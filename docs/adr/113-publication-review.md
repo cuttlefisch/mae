@@ -113,7 +113,13 @@ across revisions. Each KB has a list of permitted prefixes; the number is unique
   principal not on the list cannot review, approve, put into force or withdraw an approval
   (`not_reviewer`, `not_approver`).
 - **No author acts on their own revision**: `approve`, `act` and `enter_into_force` by anyone in the
-  author set → `author_cannot_approve`.
+  author set → `author_cannot_approve`. *(Owner decision, 2026-11-25: a **soft** block. The refusal
+  stands unless the call acknowledges it, `acknowledge_self_approval: true` with an
+  `override_reason`; the act then goes ahead and its signed event and act row record the override,
+  the revisions it covers and the reason. The reason: an official document must never be stuck at an
+  important moment because the only available person wrote it; the record shows every exception.
+  Segregation of duties is then evidenced by the record, not guaranteed. Withdrawal by an author keeps
+  the requester's path. Agents and the performer lists stay hard.)*
 - **No agent acts at all**: a principal marked as an agent is refused even when listed
   (`agent_forbidden`).
 - **Policy cannot be loosened by a requester.** `in_force_on_approval` defaults from the KB policy.
@@ -157,6 +163,14 @@ After entry into force only a new revision supersedes (`invalid_transition`).
   same summary fields as the working view (title, kind, tags, properties, …) taken from that
   revision, its `version`, and its revision summary, with the same paging, byte order and parameter
   rules. A reader builds its structure from published revisions alone.
+
+  *(As built, PR-5: published is the node's `in_force` revision; publish-on-approval puts a set in
+  force at its last approval, so an approved revision waiting for entry into force is not
+  published. A node with none answers `node_not_in_kb` in this view. With review off, and on an E2E
+  KB, the published view is the working copy. Any other `view` is `invalid_params`. A list entry
+  carries the working view's summary fields from the frozen source, `version`, and
+  `revision: {revision_id, doc_code, rev, state, approved_at, in_force_at}`; the page also says
+  `view: "published"`.)*
 - `kb/query.revisions {kb_id, node_id}` lists a node's revisions with their dates.
 - **Deleting** a node that holds any revision, in any state, is refused on every delete path with
   `invalid_transition` (`data.act: "delete"`, `reason: "has_revisions"`), and such a node is never
@@ -296,7 +310,33 @@ for display only.
 
 `approve`, `act` and `enter_into_force` refuse with `author_cannot_approve` when the approver is a
 known author, and with **`authors_unknown`** when the set is unknown. Approval is never decided on
-an incomplete record.
+an incomplete record. *(Owner decision, 2026-11-25: both are soft blocks, D3. Unknown authors are
+acknowledged with `acknowledge_unknown_authors: true` and an `override_reason`, recorded alike.)*
+
+*(As built, PR-5: under `in_force_on_approval`, the approval that completes a set puts every member
+in force, so its author check covers every member, as `enter_into_force` does, and an acknowledged
+override is recorded on the entry into force too. A set completed by a concurrent approval after
+that check stays `approved` and waits for an explicit `enter_into_force`.)*
+
+**Attested seed authorship** *(owner decision, 2026-11-25: new documents enter either through the
+browser or through a seed, and both must record who wrote them)*. A seed writes as the daemon, so on
+its own seeded content has unknown authors. `kb seed --author <fingerprint>` lets the operator
+attest who wrote it. Every seed write to a node is logged (outside the CRDT and the editor record,
+which keep their formats) with its WAL id and the attested author, or none, and an attested write
+appends an `authorship_attested` event (actor `{principal: "operator:local", kind: "operator",
+os_user}`, as E4's `import`; payload `node_id, author, commit, wal_id`) to the KB's signed chain. `authors_since` then counts the seed's writes
+in the window as the attested members', on three conditions, each failing to **unknown**:
+
+- the log accounts for every seed write: as many entries as the editor record's seed row counts
+  updates. The log is written after the document, so a crash between the two leaves a write
+  unlogged, and a seed's re-run skips the node it already wrote; a seed from before the log fails
+  the same way;
+- every seed write in the window is attested;
+- when the seed's first write (a whole-document restore) reset the record's origin, the logged,
+  attested write at the origin stands for the content before it, which it replaced.
+
+An `--update` therefore adds its author to the window since the last approval; it never restarts
+the window, and an unattested update makes the authors unknown again.
 
 ### A4. Seeded content enters as an imported, in-force revision
 
@@ -910,6 +950,15 @@ successor.
     naming the node).
 
   The refusal is `invalid_transition` with `act: "delete"` and `reason: "has_revisions"`.
+
+  *(As built, PR-5: deleting a node is removing it from the KB's collection, and every write to a
+  collection passes the document store, so the guard sits there, on the state a write would
+  leave, beside the E2E-switch guard and under the same gate as a review request. It therefore
+  also covers a client's raw collection update, `sync/update` and `sync/share`, a mesh peer's
+  update (whose session then ends, as at a refused switch) and a replace. A write that removes a
+  guarded node is refused whole. Seed removal is checked again before the update records its
+  intent, so it writes nothing. There is no node purge to guard: the one purge, an E2E reseal's
+  replace, needs a switch to E2E, which O17 refuses while any revision is held.)*
 - **What it supersedes.** D5's rule allowed deleting a node with only ended revisions, and purging a
   node while keeping its revisions. Both are superseded: such a node is neither deleted nor purged.
 - **Out of scope.** Deleting drafts and mistakes (a node with no revision, or a revision made in
@@ -1037,7 +1086,7 @@ wire (storage column names are the build's to choose):
 |---|---|---|---|
 | `kb/review.request` | `kb_id, nodes:[{node_id, version}], set_name?, in_force_on_approval?, reason` | `{request_id, event_id, state:"in_review", revisions:[{revision_id, node_id, rev, source_sha256}]}` (`event_id`: the `request` event, D7) | a member with Edit |
 | `kb/review.act` | `kb_id, revision_id, act:"reviewed", comment?` | `{event_id, at}` | a listed reviewer |
-| `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?` | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
+| `kb/review.approve` | `kb_id, revision_id, rendered_pdf_sha256?`; and on every act (`act`, `approve`, `reject`, `enter_into_force`, `derogate`), the soft block's `acknowledge_self_approval?, acknowledge_unknown_authors?, override_reason?` (D3, A3) | `{event_id, revision_state, in_force_since}` (`in_force_since` set only when this approval completed an `in_force_on_approval` set) | a listed approver |
 | `kb/review.reject` | `kb_id, request_id, revision_id, reason` | `{event_id}` | a listed reviewer or approver |
 | `kb/review.withdraw` | `kb_id, request_id, reason` | `{event_id}` | the requester, or a listed approver |
 | `kb/review.enter_into_force` | `kb_id, request_id, effective_at` | `{event_id}` | C2's publisher |
@@ -1063,7 +1112,9 @@ Field notes:
 - **`status`.** Its `revisions` entries carry: `revision_id, rev, state, request_id, set_name,
   source_sha256, version, created_at, approved_at, in_force_since, ended_at, reason, rejected_with,
   replaces, superseded_by, imported, signed_pdf_sha256`. Its `in_review.waiting_for` names
-  capacities and a group or a label, never the members of a group (ADR-117 D1).
+  capacities and a group or a label, never the members of a group (ADR-117 D1). *(PR-5: each entry
+  is a required act not yet performed; `performers` is the whole list that may perform it, and
+  `performer` its first entry, what a one-entry list shows.)*
 - **`pending`.** It is per KB. The proposal sent to the client had `kb_id` optional and "the caller's
   open requests". That is ADR-117 D1's `kb/review.my_pending`, which spans KBs; this method stays
   the KB's own list, as ADR-117 states.
@@ -1099,7 +1150,8 @@ D7's chain, made precise enough that a third party can verify it without MAE.
 - `member_sig` is `null` until #727.
 
 **Kinds.** `import`, `policy_changed`, `code_set`, `request`, `act`, `approve`, `reject`, `withdraw`,
-`enter_into_force`, `derogate`, `attach`, `annul_attachment`, `delete_attachment`. C9's agent kinds
+`enter_into_force`, `derogate`, `attach`, `annul_attachment`, `delete_attachment`,
+`authorship_attested` (A3). C9's agent kinds
 are ADR-118's. A verifier needs no payload semantics, and carries an unknown kind through.
 
 **Canonical bytes** are the event's RFC 8785 (JSON Canonicalization Scheme) serialization. The values

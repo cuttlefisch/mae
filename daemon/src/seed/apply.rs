@@ -75,6 +75,11 @@ pub struct ApplyTarget<'a> {
     pub owner: &'a Identity,
     /// Unix seconds, recorded as the apply's start and finish.
     pub now: i64,
+    /// The member the operator attests wrote the seeded content (ADR-113 A3,
+    /// `kb seed --author`), or none: the seed's writes then have no author.
+    pub author: Option<&'a str>,
+    /// Who ran the seed (the OS user), recorded with every seed write.
+    pub operator: &'a str,
     /// Where a plan's attachment files are read from, and the bounds and
     /// quota they are stored under (ADR-115 D7). `None`: a plan with any
     /// attachment is refused ([`ApplyRefusalKind::AttachmentsOff`]). The
@@ -135,6 +140,9 @@ pub enum ApplyRefusalKind {
     /// `--update` with a plan read from a repository other than the
     /// recorded one.
     DifferentRepo,
+    /// `--update` would remove nodes that hold publication-review revisions,
+    /// which are never deleted (ADR-113 E7).
+    HasRevisions,
     /// `--update` of an end-to-end encrypted KB, whose content the daemon
     /// cannot read or write.
     Encrypted,
@@ -199,7 +207,7 @@ pub async fn apply(
         }
     };
     store_attachments(store, plan, t).await?;
-    let (created, present) = write_nodes(store, t.kb_id, plan, &rows).await?;
+    let (created, present) = write_nodes(store, t, plan, &rows).await?;
     #[cfg(test)]
     crash::at(plan.nodes.len())?;
     write_collection(store, plan, t).await?;
@@ -378,10 +386,11 @@ pub(super) async fn existing_state(
 /// Write every absent node; keep every equal one. Returns (created, present).
 async fn write_nodes(
     store: &DocStore,
-    kb_id: &str,
+    t: &ApplyTarget<'_>,
     plan: &SeedPlan,
     rows: &HashMap<String, SeedNodeRow>,
 ) -> Result<(usize, usize), ApplyError> {
+    let kb_id = t.kb_id;
     let (mut created, mut present) = (0, 0);
     for (i, n) in plan.nodes.iter().enumerate() {
         #[cfg(test)]
@@ -400,7 +409,9 @@ async fn write_nodes(
         } else {
             created += 1;
             let result = store.restore_doc(&name, &doc.encode(), BY).await;
-            result.map_err(storage)?.wal_seq
+            let wal = result.map_err(storage)?.wal_seq;
+            super::attest::log_write(store, t, &plan.source.commit, &n.file.id, wal).await?;
+            wal
         };
         let version = doc.version();
         let set = store.seed_set_node_wal(kb_id, &n.file.id, wal, &version);

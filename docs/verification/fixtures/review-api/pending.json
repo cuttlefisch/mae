@@ -63,14 +63,24 @@
                   "revision_id": "rv-01a7c2-2",
                   "performer": {
                     "group": "quality-approvers"
-                  }
+                  },
+                  "performers": [
+                    {
+                      "group": "quality-approvers"
+                    }
+                  ]
                 },
                 {
                   "capacity": "approve",
                   "revision_id": "rv-01a7c2-3",
                   "performer": {
                     "group": "quality-approvers"
-                  }
+                  },
+                  "performers": [
+                    {
+                      "group": "quality-approvers"
+                    }
+                  ]
                 }
               ]
             }

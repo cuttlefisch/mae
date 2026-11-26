@@ -9,7 +9,7 @@ use mae_mcp::protocol::McpError;
 use mae_sync::kb::Role as SyncRole;
 use serde_json::{json, Map, Value};
 
-use super::store::{self, NewEvent, Policy, Request, Revision};
+use super::store::{self, NewEvent, Performer, Policy, Request, Revision};
 use super::{
     actor, gate, optional_bool, optional_str, over_limit, require_role, required_str,
     required_text, signer, storage_fault, time, within_bytes, MAX_CODE_PREFIXES, MAX_REASON_BYTES,
@@ -22,10 +22,10 @@ use crate::storage::StorageError;
 
 /// A revision is open while its request can still move: in review, or
 /// approved and not yet in force.
-const OPEN_STATES: &[&str] = &["in_review", "approved"];
+pub(super) const OPEN_STATES: &[&str] = &["in_review", "approved"];
 /// States a withdrawal can no longer end (E1): only a successor or a
 /// derogation ends a revision in force.
-const ENDED_BY_FORCE: &[&str] = &["in_force", "superseded", "derogated"];
+pub(super) const ENDED_BY_FORCE: &[&str] = &["in_force", "superseded", "derogated"];
 
 /// An opaque identifier (E9): `prefix-` and 16 random hex digits.
 fn new_id(prefix: &str) -> String {
@@ -39,9 +39,9 @@ fn node_not_in_kb() -> McpError {
 }
 
 /// A refusal decided inside a transaction, or the transaction's own failure.
-type TxnResult<T> = Result<Result<T, McpError>, StorageError>;
+pub(super) type TxnResult<T> = Result<Result<T, McpError>, StorageError>;
 
-fn flatten<T>(r: TxnResult<T>) -> Result<T, McpError> {
+pub(super) fn flatten<T>(r: TxnResult<T>) -> Result<T, McpError> {
     r.map_err(storage_fault)?
 }
 
@@ -300,20 +300,36 @@ pub(super) async fn withdraw(
     who: &ValidatedPrincipal,
     params: &Value,
 ) -> Result<Value, McpError> {
-    gate(store, kb_id, Some(&who.principal), true).await?;
+    let g = gate(store, kb_id, Some(&who.principal), true).await?;
     let request_id = required_str(params, "request_id")?.to_string();
     let reason = required_text(params, "reason")?.to_string();
     within_bytes("reason", &reason, MAX_REASON_BYTES)?;
+    // E2: a listed approver who is a person and an author of no member may
+    // withdraw too; anyone else gets the requester's refusal.
+    let approver =
+        super::acts::approver_may_withdraw(store, kb_id, &request_id, who, &g.policy.approvers)
+            .await?;
     let signer = signer(store)?;
     let (kb, principal, actor) = (kb_id.to_string(), who.principal.clone(), actor(who));
     let at = store.now_ms() as i64;
     flatten(
         store
             .review_write(move |c| {
-                record_withdrawal(c, &signer, &kb, &request_id, &reason, &principal, actor, at)
+                let who = Withdrawer {
+                    principal: &principal,
+                    approver,
+                };
+                record_withdrawal(c, &signer, &kb, &request_id, &reason, who, actor, at)
             })
             .await,
     )
+}
+
+/// Who is withdrawing: their principal, and whether they qualified as a
+/// listed approver (checked before the write, E2).
+struct Withdrawer<'a> {
+    principal: &'a str,
+    approver: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -323,7 +339,7 @@ fn record_withdrawal(
     kb_id: &str,
     request_id: &str,
     reason: &str,
-    principal: &str,
+    who: Withdrawer<'_>,
     actor: Value,
     at: i64,
 ) -> TxnResult<Value> {
@@ -334,9 +350,9 @@ fn record_withdrawal(
     };
     // Before anything about its state: a non-requester learns nothing of where
     // the request stands (open, ended or in force) from the refusal.
-    if req.requester != principal {
+    if req.requester != who.principal && !who.approver {
         return Ok(Err(McpError::not_approver(
-            "only the requester may withdraw this request".into(),
+            "only the requester or a listed approver may withdraw this request".into(),
         )));
     }
     let members = store::request_revisions(c, request_id)?;
@@ -379,8 +395,6 @@ fn record_withdrawal(
 /// The policy fields PR-4 builds, and those a later PR adds (refused until
 /// then, never silently ignored).
 const LATER_FIELDS: &[&str] = &[
-    "reviewers",
-    "approvers",
     "approval_requires_mfa",
     "approval_requires_rendered_pdf",
     "reauth_max_age_secs",
@@ -414,6 +428,58 @@ fn string_list(params: &Value, name: &str) -> Result<Option<Vec<String>>, McpErr
     }
 }
 
+/// Most performers one list may name, and the longest group or member
+/// string: a policy row is read on every act, so it stays small.
+const MAX_PERFORMERS: usize = 64;
+const MAX_PERFORMER_BYTES: usize = 256;
+
+/// A performer list from `params`, if present: objects with exactly one of
+/// `group` or `member`, distinct, a member a fingerprint (D3, Amendment 3).
+fn performer_list(params: &Value, name: &str) -> Result<Option<Vec<Performer>>, McpError> {
+    let Some(v) = params.get(name).filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let bad = || {
+        McpError::invalid_params(
+            name,
+            format!(
+                "{name} must be an array of {{\"group\": name}} or {{\"member\": fingerprint}}"
+            ),
+        )
+    };
+    let items = v.as_array().ok_or_else(bad)?;
+    if items.len() > MAX_PERFORMERS {
+        return Err(over_limit(
+            name,
+            format!("{name} names at most {MAX_PERFORMERS} performers"),
+            MAX_PERFORMERS,
+        ));
+    }
+    let list: Vec<Performer> = items
+        .iter()
+        .map(Performer::from_json)
+        .collect::<Option<_>>()
+        .ok_or_else(bad)?;
+    for p in &list {
+        let (Performer::Group(x) | Performer::Member(x)) = p;
+        within_bytes(name, x, MAX_PERFORMER_BYTES)?;
+        if let Performer::Member(m) = p {
+            if !crate::identity_binding::is_fingerprint(m) {
+                return Err(bad());
+            }
+        }
+    }
+    let unique: BTreeSet<_> = list
+        .iter()
+        .map(Performer::to_json)
+        .map(|j| j.to_string())
+        .collect();
+    if unique.len() != list.len() {
+        return Err(bad());
+    }
+    Ok(Some(list))
+}
+
 /// The policy as `params` would leave it, and the reason, if one is needed.
 fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<String>), McpError> {
     if let Some(f) = LATER_FIELDS.iter().find(|f| params.get(**f).is_some()) {
@@ -442,6 +508,12 @@ fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<S
             ));
         }
         p.required_acts = acts;
+    }
+    if let Some(l) = performer_list(params, "reviewers")? {
+        p.reviewers = l;
+    }
+    if let Some(l) = performer_list(params, "approvers")? {
+        p.approvers = l;
     }
     if let Some(r) = optional_str(params, "approval_record")? {
         if !RECORDS.contains(&r) {
@@ -492,8 +564,8 @@ fn policy_json(p: &Policy) -> Value {
         "review_enabled": p.review_enabled,
         "in_force_on_approval": p.in_force_on_approval,
         "required_acts": p.required_acts,
-        "reviewers": [],
-        "approvers": [],
+        "reviewers": p.reviewers.iter().map(Performer::to_json).collect::<Vec<_>>(),
+        "approvers": p.approvers.iter().map(Performer::to_json).collect::<Vec<_>>(),
         "approval_requires_mfa": false,
         "approval_requires_rendered_pdf": false,
         "approval_record": p.approval_record,
@@ -533,7 +605,8 @@ pub(super) async fn set_policy(
     }
     // Validated against the gate's read, and again against the row under the
     // writer, so a concurrent change is never silently overwritten.
-    proposed_policy(&g.policy, params)?;
+    let (proposed, _) = proposed_policy(&g.policy, params)?;
+    named_members_are_persons(store, &proposed)?;
     let signer = signer(store)?;
     let (kb, params, actor) = (kb_id.to_string(), params.clone(), actor(who));
     let at = store.now_ms() as i64;
@@ -571,6 +644,44 @@ pub(super) async fn set_policy(
             })
             .await,
     )
+}
+
+/// ADR-117 D8: a member named as a performer must be bound as a person, or no
+/// act of theirs could ever pass `agent_forbidden`. Without identity bindings
+/// nobody is a person, so a named member is refused.
+fn named_members_are_persons(store: &DocStore, p: &Policy) -> Result<(), McpError> {
+    let members: Vec<&String> = p
+        .reviewers
+        .iter()
+        .chain(&p.approvers)
+        .filter_map(|x| match x {
+            Performer::Member(m) => Some(m),
+            Performer::Group(_) => None,
+        })
+        .collect();
+    if members.is_empty() {
+        return Ok(());
+    }
+    let persons: BTreeSet<String> = match store.bindings() {
+        Some(b) => b
+            .list()
+            .map_err(|e| {
+                tracing::warn!(error = %e, "publication review: binding table unreadable");
+                McpError::internal_fault("the identity bindings could not be read".into())
+            })?
+            .into_iter()
+            .filter(|b| b.kind == crate::oauth_self_issue::PrincipalKind::Person)
+            .map(|b| b.fingerprint)
+            .collect(),
+        None => BTreeSet::new(),
+    };
+    match members.into_iter().find(|m| !persons.contains(*m)) {
+        Some(m) => Err(McpError::performer_not_person(
+            format!("{m} is not bound as a person"),
+            m,
+        )),
+        None => Ok(()),
+    }
 }
 
 /// `PREFIX-n`, `n` a positive integer without leading zeros.

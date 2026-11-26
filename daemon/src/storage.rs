@@ -66,6 +66,14 @@ pub enum StorageError {
         kb_id: String,
         held: PlaintextHeld,
     },
+    /// A write to `kbc:{kb_id}` would remove `nodes` from the KB, and each
+    /// holds a publication-review revision: a controlled document is never
+    /// deleted, only derogated (ADR-113 E7). Refused whole, before it is
+    /// logged. `nodes` empty: whether they hold one could not be read.
+    NodeHasRevisions {
+        kb_id: String,
+        nodes: Vec<String>,
+    },
 }
 
 /// What a refused switch to E2E would have left readable.
@@ -92,6 +100,16 @@ impl std::fmt::Display for StorageError {
                 f,
                 "{doc} would hold {size} bytes, over the {limit}-byte limit \
                  ([collab.sync] max_document_size_bytes)"
+            ),
+            Self::NodeHasRevisions { kb_id, nodes } if nodes.is_empty() => write!(
+                f,
+                "KB '{kb_id}': a node could not be removed: whether it holds a \
+                 publication-review revision could not be checked"
+            ),
+            Self::NodeHasRevisions { kb_id, nodes } => write!(
+                f,
+                "a node with a revision is never deleted; derogate it (KB '{kb_id}': {})",
+                nodes.join(", ")
             ),
             Self::E2eSwitchRefused { kb_id, held } => match held {
                 PlaintextHeld::Revisions => write!(

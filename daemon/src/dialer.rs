@@ -737,9 +737,10 @@ async fn apply_doc(
             }
         }
         // Counted and logged (rate-limited) by the store.
-        Err(e @ mae_daemon::storage::StorageError::E2eSwitchRefused { .. }) => {
-            return Err(Diverged(e.to_string()))
-        }
+        Err(
+            e @ (mae_daemon::storage::StorageError::E2eSwitchRefused { .. }
+            | mae_daemon::storage::StorageError::NodeHasRevisions { .. }),
+        ) => return Err(Diverged(e.to_string())),
         Err(e) => warn!(doc = %doc_name, error = %e, "mesh: failed to apply remote update"),
     }
     Ok(())

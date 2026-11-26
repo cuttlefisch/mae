@@ -703,6 +703,19 @@ impl McpError {
         Self::kinded(-32603, message, "unknown_revision", serde_json::json!({}))
     }
 
+    /// A node holding a publication-review revision is never deleted, only
+    /// derogated (ADR-113 E7): `invalid_transition` with act `delete`, reason
+    /// `has_revisions`, on every delete path. A second constructor of an
+    /// existing kind, so not in `every_kinded_error`.
+    pub fn node_has_revisions(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "invalid_transition",
+            serde_json::json!({ "act": "delete", "reason": "has_revisions" }),
+        )
+    }
+
     /// A KB cannot be switched to E2E while it holds publication-review
     /// revisions: their frozen sources are plaintext and are never deleted
     /// (ADR-113 D1, E7; O17).
@@ -722,6 +735,64 @@ impl McpError {
             message,
             "doc_code_taken",
             serde_json::json!({ "holder": holder }),
+        )
+    }
+
+    /// A member named as a review performer is not bound as a person
+    /// (ADR-113 E11, ADR-117 D8).
+    pub fn performer_not_person(message: String, member: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "performer_not_person",
+            serde_json::json!({ "member": member }),
+        )
+    }
+
+    /// The caller is not on the KB's reviewer list (ADR-113 D3).
+    pub fn not_reviewer(message: String) -> Self {
+        Self::kinded(-32603, message, "not_reviewer", serde_json::json!({}))
+    }
+
+    /// The caller is an author of the revision (ADR-113 D3).
+    pub fn author_cannot_approve(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "author_cannot_approve",
+            serde_json::json!({}),
+        )
+    }
+
+    /// The revision's authors cannot be established (ADR-113 A3).
+    pub fn authors_unknown(message: String) -> Self {
+        Self::kinded(-32603, message, "authors_unknown", serde_json::json!({}))
+    }
+
+    /// The caller is not a person; an agent never acts (ADR-113 D3, C3).
+    pub fn agent_forbidden(message: String) -> Self {
+        Self::kinded(-32603, message, "agent_forbidden", serde_json::json!({}))
+    }
+
+    /// A set cannot enter into force until every member is approved
+    /// (ADR-113 D4).
+    pub fn set_incomplete(message: String, missing: Vec<String>) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "set_incomplete",
+            serde_json::json!({ "missing": missing }),
+        )
+    }
+
+    /// Under `approval_record: signed_pdf`, entry into force waits for every
+    /// member's signed PDF (ADR-113 E3, O19).
+    pub fn signed_pdf_required(message: String, missing: Vec<String>) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "signed_pdf_required",
+            serde_json::json!({ "missing": missing }),
         )
     }
 
@@ -810,6 +881,13 @@ pub const ERROR_KINDS: &[&str] = &[
     "unknown_revision",
     "revisions_hold_plaintext",
     "doc_code_taken",
+    "performer_not_person",
+    "not_reviewer",
+    "author_cannot_approve",
+    "authors_unknown",
+    "agent_forbidden",
+    "set_incomplete",
+    "signed_pdf_required",
     "activity_record_unavailable",
     "internal",
 ];
@@ -1017,6 +1095,13 @@ mod tests {
             McpError::unknown_revision(m()),
             McpError::revisions_hold_plaintext(m()),
             McpError::doc_code_taken(m(), "n"),
+            McpError::performer_not_person(m(), "SHA256:x"),
+            McpError::not_reviewer(m()),
+            McpError::author_cannot_approve(m()),
+            McpError::authors_unknown(m()),
+            McpError::agent_forbidden(m()),
+            McpError::set_incomplete(m(), vec!["r".into()]),
+            McpError::signed_pdf_required(m(), vec!["r".into()]),
             McpError::activity_record_unavailable(m()),
             McpError::internal_fault(m()),
         ]

@@ -681,6 +681,10 @@ async fn spawn_oauth_listener(
     .await;
     state.lock().await.oauth_conn = Some(oauth_limiter.clone());
     let (bindings, binding_routes) = oauth_identity_binding(config);
+    // ADR-113: publication review checks a named performer against them.
+    if let (Some(ds), Some(b)) = (doc_store.as_ref(), bindings.as_ref()) {
+        ds.set_bindings(Arc::clone(b));
+    }
     let blobs = oauth_blob_routes(config, doc_store.is_some());
     if let (Some(routes), Some(store)) = (blobs.as_ref(), doc_store.as_ref()) {
         store.set_blob_store(Arc::clone(&routes.store));

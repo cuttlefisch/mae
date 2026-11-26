@@ -882,9 +882,10 @@ pub(super) async fn handle_kb_collection_op(
                 serde_json::json!({ "applied": true, "wal_seq": wal_seq, "scrubbed": scrub }),
             )
         }
-        Err(e @ crate::storage::StorageError::E2eSwitchRefused { .. }) => {
-            JsonRpcResponse::error(id, super::storage_error(e))
-        }
+        Err(
+            e @ (crate::storage::StorageError::E2eSwitchRefused { .. }
+            | crate::storage::StorageError::NodeHasRevisions { .. }),
+        ) => JsonRpcResponse::error(id, super::storage_error(e)),
         Err(e) => JsonRpcResponse::error(
             id,
             McpError::internal_fault(format!("failed to persist collection: {e}")),
@@ -943,7 +944,15 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     } else {
         coll.remove_node(&node_id)
     };
-    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
+    match super::persist_and_broadcast_collection_typed(
+        doc_store,
+        broadcaster,
+        who,
+        &kb_id,
+        &update,
+    )
+    .await
+    {
         Ok(_) => {
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, add, "kb collection-manifest change");
             JsonRpcResponse::success(
@@ -951,6 +960,6 @@ pub(super) async fn handle_kb_collection_node_add_remove(
                 serde_json::json!({ "kb_id": kb_id, "node_id": node_id, "added": add }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
+        Err(e) => JsonRpcResponse::error(id, super::storage_error(e)),
     }
 }

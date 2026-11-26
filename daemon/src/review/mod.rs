@@ -22,8 +22,10 @@
 //! collection's owner field. The import act (A4, E4) is an operator CLI and
 //! must never get a method here (principle #16).
 
+mod acts;
 pub mod chain;
 mod methods;
+pub mod published;
 mod reads;
 pub mod store;
 
@@ -47,6 +49,11 @@ use crate::storage::StorageError;
 pub const METHODS: &[&str] = &[
     "kb/review.request",
     "kb/review.withdraw",
+    "kb/review.act",
+    "kb/review.approve",
+    "kb/review.reject",
+    "kb/review.enter_into_force",
+    "kb/review.derogate",
     "kb/review.set_policy",
     "kb/review.set_code",
     "kb/review.status",
@@ -71,6 +78,11 @@ pub async fn dispatch(
     match method {
         "kb/review.request" => methods::request(store, &kb_id, who, params, limits).await,
         "kb/review.withdraw" => methods::withdraw(store, &kb_id, who, params).await,
+        "kb/review.act" => acts::act(store, &kb_id, who, params).await,
+        "kb/review.approve" => acts::approve(store, &kb_id, who, params).await,
+        "kb/review.reject" => acts::reject(store, &kb_id, who, params).await,
+        "kb/review.enter_into_force" => acts::enter_into_force(store, &kb_id, who, params).await,
+        "kb/review.derogate" => acts::derogate(store, &kb_id, who, params).await,
         "kb/review.set_policy" => methods::set_policy(store, &kb_id, who, params).await,
         "kb/review.set_code" => methods::set_code(store, &kb_id, who, params).await,
         "kb/review.status" => reads::status(store, &kb_id, who, params).await,

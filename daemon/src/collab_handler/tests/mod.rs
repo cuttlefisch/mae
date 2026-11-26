@@ -30,6 +30,7 @@ mod collab_handler_blocklist_operator_tests;
 mod collab_handler_connection_limits_tests;
 mod collab_handler_cross_kb_node_isolation_tests;
 mod collab_handler_cross_kb_role_isolation_tests;
+mod collab_handler_delete_guard_tests;
 mod collab_handler_derive_cache_tests;
 mod collab_handler_device_revocation_fence_tests;
 mod collab_handler_doc_address_guard_tests;

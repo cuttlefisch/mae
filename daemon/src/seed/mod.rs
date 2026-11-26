@@ -65,6 +65,7 @@
 
 mod apply;
 mod attach;
+mod attest;
 mod export;
 mod git;
 mod glob;

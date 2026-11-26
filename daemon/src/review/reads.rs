@@ -29,14 +29,25 @@ fn t(ms: Option<i64>) -> Value {
 }
 
 /// What a revision still waits for (D8): the capacities its KB's
-/// `required_acts` name. Performers come with the lists (PR-5) and the type
-/// policies (PR-9); until then each is `null`, never a member's identity.
-fn waiting_for(p: &Policy, revision_id: Option<&str>) -> Vec<Value> {
+/// `required_acts` name that no one has performed yet (`done`), each with the
+/// list that may perform it. `performer` is the list's first entry (what a
+/// one-entry list, the common case, shows) and `performers` the whole list.
+fn waiting_for(p: &Policy, revision_id: Option<&str>, done: &[String]) -> Vec<Value> {
     p.required_acts
         .iter()
+        .filter(|a| !done.contains(a))
         .map(|a| {
-            let capacity = if a == "reviewed" { "review" } else { "approve" };
-            let mut w = json!({ "capacity": capacity, "performer": null });
+            let (capacity, list) = if a == "reviewed" {
+                ("review", &p.reviewers)
+            } else {
+                ("approve", &p.approvers)
+            };
+            let all: Vec<Value> = list.iter().map(store::Performer::to_json).collect();
+            let mut w = json!({
+                "capacity": capacity,
+                "performer": all.first().cloned(),
+                "performers": all,
+            });
             if let Some(id) = revision_id {
                 w["revision_id"] = json!(id);
             }
@@ -45,8 +56,16 @@ fn waiting_for(p: &Policy, revision_id: Option<&str>) -> Vec<Value> {
         .collect()
 }
 
+use store::EndNotes;
+
 /// One revision as `status` and `kb/query.revisions` list it (E9).
-fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>) -> Value {
+fn revision_entry(
+    r: &Revision,
+    all: &[Revision],
+    req: Option<&Request>,
+    notes: &EndNotes,
+) -> Value {
+    let (reason, with) = notes.get(&r.revision_id).cloned().unwrap_or_default();
     let superseded_by = all
         .iter()
         .find(|o| o.replaces.as_deref() == Some(&r.revision_id) && o.state != "in_review")
@@ -64,8 +83,8 @@ fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>) -> Valu
         "approved_at": t(r.approved_at),
         "in_force_since": t(r.in_force_since),
         "ended_at": t(r.ended_at),
-        "reason": null,
-        "rejected_with": null,
+        "reason": reason,
+        "rejected_with": with,
         "replaces": r.replaces,
         "superseded_by": superseded_by,
         "imported": null,
@@ -74,26 +93,68 @@ fn revision_entry(r: &Revision, all: &[Revision], req: Option<&Request>) -> Valu
     })
 }
 
-/// A node's revisions and the requests they belong to, from one snapshot.
-async fn node_record(
-    store: &DocStore,
-    kb_id: &str,
-    node_id: &str,
-) -> Result<(Vec<Revision>, Vec<Request>, Option<String>), McpError> {
+/// A node's review record, from one snapshot.
+struct NodeRecord {
+    revs: Vec<Revision>,
+    reqs: Vec<Request>,
+    code: Option<String>,
+    notes: EndNotes,
+    /// The acts already done on each revision still in review.
+    done: std::collections::HashMap<String, Vec<String>>,
+    /// Each request's members, for the approved revision's `waiting_for`.
+    members: std::collections::HashMap<String, Vec<Revision>>,
+}
+
+async fn node_record(store: &DocStore, kb_id: &str, node_id: &str) -> Result<NodeRecord, McpError> {
     let (kb, n) = (kb_id.to_string(), node_id.to_string());
     store
         .review_read(move |c| {
             let revs = store::node_revisions(c, &kb, &n)?;
             let mut reqs = Vec::new();
+            let (mut done, mut members) = (Default::default(), Default::default());
             for r in &revs {
                 if !reqs.iter().any(|q: &Request| q.request_id == r.request_id) {
                     reqs.extend(store::request(c, &kb, &r.request_id)?);
                 }
+                if r.state == "in_review" {
+                    let acts = store::acts_of(c, &r.revision_id)?
+                        .into_iter()
+                        .map(|(a, _)| a)
+                        .collect();
+                    let d: &mut std::collections::HashMap<String, Vec<String>> = &mut done;
+                    d.insert(r.revision_id.clone(), acts);
+                }
+                if r.state == "approved" {
+                    let m: &mut std::collections::HashMap<String, Vec<Revision>> = &mut members;
+                    m.insert(
+                        r.request_id.clone(),
+                        store::request_revisions(c, &r.request_id)?,
+                    );
+                }
             }
-            Ok((revs, reqs, store::node_code(c, &kb, &n)?))
+            Ok(NodeRecord {
+                code: store::node_code(c, &kb, &n)?,
+                notes: store::end_notes(c, &kb, &n)?,
+                revs,
+                reqs,
+                done,
+                members,
+            })
         })
         .await
         .map_err(storage_fault)
+}
+
+/// What an approved revision waits for (E9): the rest of its set, its signed
+/// PDF (E3, O19), or an entry into force.
+fn approved_waits_for(r: &Revision, members: &[Revision]) -> &'static str {
+    if members.iter().any(|m| m.state != "approved") {
+        "set"
+    } else if r.approval_record == "signed_pdf" {
+        "signed_pdf"
+    } else {
+        "enter_into_force"
+    }
 }
 
 fn request_of<'a>(reqs: &'a [Request], r: &Revision) -> Option<&'a Request> {
@@ -121,7 +182,14 @@ pub(super) async fn status(
 ) -> Result<Value, McpError> {
     let g = gate(store, kb_id, Some(&who.principal), true).await?;
     let node_id = required_str(params, "node_id")?.to_string();
-    let (revs, reqs, code) = node_record(store, kb_id, &node_id).await?;
+    let NodeRecord {
+        revs,
+        reqs,
+        code,
+        notes,
+        done,
+        members,
+    } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
         return Err(node_not_in_kb());
     }
@@ -135,7 +203,7 @@ pub(super) async fn status(
             "request_id": r.request_id,
             "revision_id": r.revision_id,
             "set_name": request_of(&reqs, r).and_then(|q| q.set_name.clone()),
-            "waiting_for": waiting_for(&g.policy, None),
+            "waiting_for": waiting_for(&g.policy, None, done.get(&r.revision_id).map_or(&[], |v| v)),
         })
     });
     let approved = latest_in("approved").map(|r| {
@@ -144,8 +212,7 @@ pub(super) async fn status(
             "revision_id": r.revision_id,
             "rev": r.rev_no,
             "approved_at": t(r.approved_at),
-            // What it waits for (E9) is the acts' to say; no act exists before PR-5.
-            "waiting_for": null,
+            "waiting_for": approved_waits_for(r, members.get(&r.request_id).map_or(&[], |v| v)),
         })
     });
     let in_force = latest_in("in_force").map(|r| {
@@ -159,7 +226,7 @@ pub(super) async fn status(
     });
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r)))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes))
         .collect();
     Ok(json!({
         "kb_id": kb_id,
@@ -216,7 +283,7 @@ pub(super) async fn pending(
             let waiting: Vec<Value> = members
                 .iter()
                 .filter(|r| r.state == "in_review")
-                .flat_map(|r| waiting_for(&g.policy, Some(&r.revision_id)))
+                .flat_map(|r| waiting_for(&g.policy, Some(&r.revision_id), &[]))
                 .collect();
             let state = if members.iter().all(|r| r.state == "approved") {
                 "approved"
@@ -372,13 +439,19 @@ pub(super) async fn revisions(
 ) -> Result<Value, McpError> {
     let g = gate(store, kb_id, principal, false).await?;
     let node_id = required_str(params, "node_id")?.to_string();
-    let (revs, reqs, code) = node_record(store, kb_id, &node_id).await?;
+    let NodeRecord {
+        revs,
+        reqs,
+        code,
+        notes,
+        ..
+    } = node_record(store, kb_id, &node_id).await?;
     if !g.coll.has_node(&node_id) && revs.is_empty() {
         return Err(node_not_in_kb());
     }
     let entries: Vec<Value> = revs
         .iter()
-        .map(|r| revision_entry(r, &revs, request_of(&reqs, r)))
+        .map(|r| revision_entry(r, &revs, request_of(&reqs, r), &notes))
         .collect();
     Ok(json!({ "kb_id": kb_id, "node_id": node_id, "doc_code": code, "revisions": entries }))
 }
@@ -396,22 +469,37 @@ pub(super) async fn get_revision(
     max_body_bytes: usize,
 ) -> Result<Value, McpError> {
     let g = gate(store, kb_id, principal, false).await?;
-    let revision_id = required_str(params, "revision")?.to_string();
-    let named_node = optional_str(params, "node_id")?.map(str::to_string);
-    let (kb, id) = (kb_id.to_string(), revision_id.clone());
+    let revision_id = required_str(params, "revision")?;
+    let named_node = optional_str(params, "node_id")?;
+    revision_reply(store, &g, kb_id, revision_id, named_node, max_body_bytes).await
+}
+
+/// A revision's frozen content and record, as `kb/query.get` returns it, for
+/// a caller the gate admitted. `named_node`: the node the caller named, which
+/// the revision must be of.
+pub(super) async fn revision_reply(
+    store: &DocStore,
+    g: &super::Gated,
+    kb_id: &str,
+    revision_id: &str,
+    named_node: Option<&str>,
+    max_body_bytes: usize,
+) -> Result<Value, McpError> {
+    let (kb, id) = (kb_id.to_string(), revision_id.to_string());
     let found = store
         .review_read(move |c| {
             let Some(r) = store::revision(c, &kb, &id)? else {
                 return Ok(None);
             };
             let src = store::source(c, &kb, &r.source_sha256)?;
-            Ok(Some((r, src)))
+            let acts = store::act_records(c, &r.revision_id)?;
+            Ok(Some((r, src, acts)))
         })
         .await
         .map_err(storage_fault)?;
     let unknown = || McpError::unknown_revision("no such revision in this KB".into());
-    let (r, src) = found.ok_or_else(unknown)?;
-    if named_node.is_some_and(|n| n != r.node_id) {
+    let (r, src, acts) = found.ok_or_else(unknown)?;
+    if named_node.is_some_and(|n| n != r.node_id.as_str()) {
         return Err(unknown());
     }
     let fault = |what: &str| McpError::internal_fault(format!("revision {revision_id}: {what}"));
@@ -454,7 +542,7 @@ pub(super) async fn get_revision(
                 "approved_at": t(r.approved_at),
                 "in_force_at": t(r.in_force_since),
                 "superseded_at": t(ended("superseded")),
-                "acts": [],
+                "acts": acts,
                 "attachments": [],
             },
         })

@@ -328,7 +328,13 @@ pub(crate) fn classify_method(method: &str) -> Option<EventKind> {
     }
     Some(match method {
         "kb/query.capabilities" | "kb/query.my_kbs" | "kb/query.health" => EventKind::Request,
-        "kb/review.request" | "kb/review.withdraw" => EventKind::ReviewAct,
+        "kb/review.request"
+        | "kb/review.withdraw"
+        | "kb/review.act"
+        | "kb/review.approve"
+        | "kb/review.reject"
+        | "kb/review.enter_into_force"
+        | "kb/review.derogate" => EventKind::ReviewAct,
         "kb/review.set_policy" | "kb/review.set_code" => EventKind::Admin,
         // Everything else returns KB content, a key, or the review record.
         _ => EventKind::Read,

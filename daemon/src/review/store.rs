@@ -25,7 +25,9 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      in_force_on_approval INTEGER NOT NULL,
      required_acts TEXT NOT NULL,
      approval_record TEXT NOT NULL,
-     code_prefixes TEXT NOT NULL
+     code_prefixes TEXT NOT NULL,
+     reviewers TEXT NOT NULL DEFAULT '[]',
+     approvers TEXT NOT NULL DEFAULT '[]'
  );
  CREATE TABLE IF NOT EXISTS kb_review_requests (
      ord INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +98,30 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
      member_sig TEXT,
      PRIMARY KEY (kb_id, seq)
  );
+ CREATE TABLE IF NOT EXISTS kb_review_acts (
+     kb_id TEXT NOT NULL,
+     revision_id TEXT NOT NULL,
+     act TEXT NOT NULL,
+     principal TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     event_seq INTEGER NOT NULL,
+     override_note TEXT
+ );
+ CREATE INDEX IF NOT EXISTS idx_review_acts_revision ON kb_review_acts(revision_id);
+ CREATE TABLE IF NOT EXISTS kb_review_seed_writes (
+     kb_id TEXT NOT NULL,
+     node_id TEXT NOT NULL,
+     wal_id INTEGER NOT NULL,
+     author TEXT,
+     operator TEXT NOT NULL,
+     rev TEXT NOT NULL,
+     at INTEGER NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_review_seed_writes ON kb_review_seed_writes(kb_id, node_id, wal_id);
+ CREATE TRIGGER IF NOT EXISTS kb_review_seed_writes_no_update BEFORE UPDATE ON kb_review_seed_writes
+ BEGIN SELECT RAISE(ABORT, 'the seed write log is append-only'); END;
+ CREATE TRIGGER IF NOT EXISTS kb_review_seed_writes_no_delete BEFORE DELETE ON kb_review_seed_writes
+ BEGIN SELECT RAISE(ABORT, 'the seed write log is append-only'); END;
  CREATE TRIGGER IF NOT EXISTS kb_review_events_no_update BEFORE UPDATE ON kb_review_events
  BEGIN SELECT RAISE(ABORT, 'the review event log is append-only'); END;
  CREATE TRIGGER IF NOT EXISTS kb_review_events_no_delete BEFORE DELETE ON kb_review_events
@@ -106,7 +132,36 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
  BEGIN SELECT RAISE(ABORT, 'a frozen source is immutable'); END;";
 
 pub(crate) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
-    conn.execute(SCHEMA)
+    conn.execute(SCHEMA)?;
+    // PR-5 adds the performer lists to a table PR-4 shipped: an existing
+    // database gains the columns, empty (no performer: fail-closed, D3).
+    for col in ["reviewers", "approvers"] {
+        if !has_column(conn, "kb_review_policy", col)? {
+            conn.execute(format!(
+                "ALTER TABLE kb_review_policy ADD COLUMN {col} TEXT NOT NULL DEFAULT '[]'"
+            ))?;
+        }
+    }
+    // And a revision ended by a rejection records why, or which member's
+    // rejection ended it (E2).
+    for col in ["end_note", "ended_with"] {
+        if !has_column(conn, "kb_review_revisions", col)? {
+            conn.execute(format!(
+                "ALTER TABLE kb_review_revisions ADD COLUMN {col} TEXT"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn has_column(conn: &sqlite::Connection, table: &str, col: &str) -> Result<bool, sqlite::Error> {
+    let mut st = conn.prepare(format!("PRAGMA table_info({table})"))?;
+    while st.next()? == sqlite::State::Row {
+        if st.read::<String, _>("name")? == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn bad(what: &str) -> StorageError {
@@ -123,8 +178,49 @@ fn opt_int(v: Option<i64>) -> sqlite::Value {
 
 // ---------------------------------------------------------------- policy
 
-/// A KB's review policy (D3, E3, E9). The fields later PRs add (lists,
-/// second factor, retention) are not stored until they are built.
+/// Who may perform an act (D3, Amendment 3): an IdP group, matched against
+/// the caller's sign-in groups, or a named member by fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Performer {
+    Group(String),
+    Member(String),
+}
+
+impl Performer {
+    /// `{"group": name}` or `{"member": fingerprint}`, as the wire carries it.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Performer::Group(g) => serde_json::json!({ "group": g }),
+            Performer::Member(m) => serde_json::json!({ "member": m }),
+        }
+    }
+
+    /// The inverse of [`Performer::to_json`]: an object with exactly one of
+    /// the two keys, a non-empty string. `None` for anything else.
+    pub fn from_json(v: &serde_json::Value) -> Option<Performer> {
+        let o = v.as_object().filter(|o| o.len() == 1)?;
+        let (k, v) = o.iter().next()?;
+        let s = v.as_str().filter(|s| !s.trim().is_empty())?.to_string();
+        match k.as_str() {
+            "group" => Some(Performer::Group(s)),
+            "member" => Some(Performer::Member(s)),
+            _ => None,
+        }
+    }
+}
+
+fn performers_json(list: &[Performer]) -> String {
+    serde_json::to_string(&list.iter().map(Performer::to_json).collect::<Vec<_>>())
+        .expect("json values")
+}
+
+fn performers_from(text: &str) -> Option<Vec<Performer>> {
+    let v: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
+    v.iter().map(Performer::from_json).collect()
+}
+
+/// A KB's review policy (D3, E3, E9). The fields later PRs add (second
+/// factor, retention) are not stored until they are built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub review_enabled: bool,
@@ -132,6 +228,11 @@ pub struct Policy {
     pub required_acts: Vec<String>,
     pub approval_record: String,
     pub code_prefixes: Vec<String>,
+    /// Who may perform `reviewed` (D3). Empty: nobody (fail-closed).
+    pub reviewers: Vec<Performer>,
+    /// Who may approve, put into force, derogate and withdraw an approval
+    /// (D3, C2). Empty: nobody (fail-closed).
+    pub approvers: Vec<Performer>,
 }
 
 impl Default for Policy {
@@ -144,6 +245,8 @@ impl Default for Policy {
             required_acts: vec!["approved".into()],
             approval_record: "act".into(),
             code_prefixes: Vec::new(),
+            reviewers: Vec::new(),
+            approvers: Vec::new(),
         }
     }
 }
@@ -151,7 +254,7 @@ impl Default for Policy {
 pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT review_enabled, in_force_on_approval, required_acts, approval_record,
-                code_prefixes FROM kb_review_policy WHERE kb_id = ?1",
+                code_prefixes, reviewers, approvers FROM kb_review_policy WHERE kb_id = ?1",
     )?;
     stmt.bind((1, kb_id))?;
     if stmt.next()? != sqlite::State::Row {
@@ -166,6 +269,10 @@ pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, S
         required_acts: list("required_acts")?,
         approval_record: stmt.read::<String, _>("approval_record")?,
         code_prefixes: list("code_prefixes")?,
+        reviewers: performers_from(&stmt.read::<String, _>("reviewers")?)
+            .ok_or_else(|| bad("reviewers"))?,
+        approvers: performers_from(&stmt.read::<String, _>("approvers")?)
+            .ok_or_else(|| bad("approvers"))?,
     })
 }
 
@@ -176,8 +283,9 @@ pub(crate) fn put_policy(
 ) -> Result<(), StorageError> {
     let mut stmt = conn.prepare(
         "INSERT OR REPLACE INTO kb_review_policy
-         (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes,
+          reviewers, approvers)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     stmt.bind((1, kb_id))?;
     stmt.bind((2, i64::from(p.review_enabled)))?;
@@ -195,6 +303,8 @@ pub(crate) fn put_policy(
             .expect("strings")
             .as_str(),
     ))?;
+    stmt.bind((7, performers_json(&p.reviewers).as_str()))?;
+    stmt.bind((8, performers_json(&p.approvers).as_str()))?;
     stmt.next()?;
     Ok(())
 }
@@ -332,6 +442,25 @@ pub(crate) fn node_revisions(
     collect(&mut stmt)
 }
 
+/// The in-force revisions of `kb_id` whose node id is after `after` in byte
+/// order, at most `limit`, by node id (D5's published view, paged).
+pub(crate) fn in_force_after(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    after: &str,
+    limit: usize,
+) -> Result<Vec<Revision>, StorageError> {
+    let mut stmt = conn.prepare(format!(
+        "SELECT {REV_COLUMNS} FROM kb_review_revisions
+         WHERE kb_id = ?1 AND state = 'in_force' AND node_id > ?2
+         ORDER BY node_id LIMIT ?3"
+    ))?;
+    stmt.bind((1, kb_id))?;
+    stmt.bind((2, after))?;
+    stmt.bind((3, i64::try_from(limit).unwrap_or(i64::MAX)))?;
+    collect(&mut stmt)
+}
+
 /// A request's member revisions, in request order.
 pub(crate) fn request_revisions(
     conn: &sqlite::Connection,
@@ -452,6 +581,26 @@ pub(crate) fn has_revisions(conn: &sqlite::Connection, kb_id: &str) -> Result<bo
     let mut stmt = conn.prepare("SELECT 1 FROM kb_review_revisions WHERE kb_id = ?1 LIMIT 1")?;
     stmt.bind((1, kb_id))?;
     Ok(stmt.next()? == sqlite::State::Row)
+}
+
+/// Which of `node_ids` hold a revision of `kb_id`, in any state (E7).
+pub(crate) fn nodes_with_revisions(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_ids: &[String],
+) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn
+        .prepare("SELECT 1 FROM kb_review_revisions WHERE kb_id = ?1 AND node_id = ?2 LIMIT 1")?;
+    let mut out = Vec::new();
+    for n in node_ids {
+        stmt.reset()?;
+        stmt.bind((1, kb_id))?;
+        stmt.bind((2, n.as_str()))?;
+        if stmt.next()? == sqlite::State::Row {
+            out.push(n.clone());
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- requests
@@ -819,4 +968,245 @@ pub(crate) fn append_event(
 /// The opaque id of event `seq` (E9).
 pub fn event_id(seq: u64) -> String {
     format!("ev-{seq:010}")
+}
+
+// ---------------------------------------------------------------- acts (PR-5)
+
+/// The acts already performed on a revision, in order: `(act, principal)`.
+pub(crate) fn acts_of(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+) -> Result<Vec<(String, String)>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT act, principal FROM kb_review_acts WHERE revision_id = ?1 ORDER BY rowid",
+    )?;
+    st.bind((1, revision_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        out.push((
+            st.read::<String, _>("act")?,
+            st.read::<String, _>("principal")?,
+        ));
+    }
+    Ok(out)
+}
+
+/// Record one act on a revision, with the event that recorded it and the
+/// acknowledged override, if any (`null` when none).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_act(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    revision_id: &str,
+    act: &str,
+    principal: &str,
+    at: i64,
+    event_seq: u64,
+    ovr: &serde_json::Value,
+) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "INSERT INTO kb_review_acts (kb_id, revision_id, act, principal, at, event_seq, override_note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    st.bind((1, kb_id))?;
+    st.bind((2, revision_id))?;
+    st.bind((3, act))?;
+    st.bind((4, principal))?;
+    st.bind((5, at))?;
+    st.bind((6, i64::try_from(event_seq).map_err(|_| bad("event_seq"))?))?;
+    let note = (!ovr.is_null()).then(|| ovr.to_string());
+    st.bind((7, opt_text(note.as_deref())))?;
+    st.next()?;
+    Ok(())
+}
+
+/// Mark a revision approved: its state, time and revision number.
+pub(crate) fn approve_revision(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+    rev_no: i64,
+    at: i64,
+) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "UPDATE kb_review_revisions SET state = 'approved', approved_at = ?1, rev_no = ?2
+         WHERE revision_id = ?3",
+    )?;
+    st.bind((1, at))?;
+    st.bind((2, rev_no))?;
+    st.bind((3, revision_id))?;
+    st.next()?;
+    Ok(())
+}
+
+/// Put a revision in force from `since`.
+pub(crate) fn put_in_force(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+    since: i64,
+) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "UPDATE kb_review_revisions SET state = 'in_force', in_force_since = ?1
+         WHERE revision_id = ?2",
+    )?;
+    st.bind((1, since))?;
+    st.bind((2, revision_id))?;
+    st.next()?;
+    Ok(())
+}
+
+/// End one revision in `state` at `at`, with an optional note (the reason)
+/// and the revision whose act ended it (E2's `rejected_with`).
+pub(crate) fn end_revision(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+    state: &str,
+    at: i64,
+    note: Option<&str>,
+    ended_with: Option<&str>,
+) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "UPDATE kb_review_revisions SET state = ?1, ended_at = ?2, end_note = ?3, ended_with = ?4
+         WHERE revision_id = ?5",
+    )?;
+    st.bind((1, state))?;
+    st.bind((2, at))?;
+    st.bind((3, opt_text(note)))?;
+    st.bind((4, opt_text(ended_with)))?;
+    st.bind((5, revision_id))?;
+    st.next()?;
+    Ok(())
+}
+
+/// Each revision's end note and `ended_with`, by revision id (E2).
+pub(crate) type EndNotes = std::collections::HashMap<String, (Option<String>, Option<String>)>;
+
+/// The note and `ended_with` of every revision of a node that has them.
+pub(crate) fn end_notes(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+) -> Result<EndNotes, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT revision_id, end_note, ended_with FROM kb_review_revisions
+         WHERE kb_id = ?1 AND node_id = ?2 AND (end_note IS NOT NULL OR ended_with IS NOT NULL)",
+    )?;
+    st.bind((1, kb_id))?;
+    st.bind((2, node_id))?;
+    let mut out = std::collections::HashMap::new();
+    while st.next()? == sqlite::State::Row {
+        out.insert(
+            st.read::<String, _>("revision_id")?,
+            (
+                st.read::<Option<String>, _>("end_note")?,
+                st.read::<Option<String>, _>("ended_with")?,
+            ),
+        );
+    }
+    Ok(out)
+}
+
+/// The next revision number for a node: one past its highest, or 0 for its
+/// first approved revision.
+pub(crate) fn next_rev_no(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+) -> Result<i64, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT MAX(rev_no) AS m FROM kb_review_revisions WHERE kb_id = ?1 AND node_id = ?2",
+    )?;
+    st.bind((1, kb_id))?;
+    st.bind((2, node_id))?;
+    st.next()?;
+    Ok(st.read::<Option<i64>, _>("m")?.map_or(0, |m| m + 1))
+}
+
+/// Every act on a revision, in order, as the revision read lists them (D5):
+/// `{act, principal, at, override}`.
+pub(crate) fn act_records(
+    conn: &sqlite::Connection,
+    revision_id: &str,
+) -> Result<Vec<serde_json::Value>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT act, principal, at, override_note FROM kb_review_acts
+         WHERE revision_id = ?1 ORDER BY rowid",
+    )?;
+    st.bind((1, revision_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        let ovr = match st.read::<Option<String>, _>("override_note")? {
+            Some(t) => serde_json::from_str(&t).map_err(|_| bad("override_note"))?,
+            None => serde_json::Value::Null,
+        };
+        out.push(serde_json::json!({
+            "act": st.read::<String, _>("act")?,
+            "principal": st.read::<String, _>("principal")?,
+            "at": crate::rfc3339::utc_millis(st.read::<i64, _>("at")?),
+            "override": ovr,
+        }));
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------- seed writes
+
+/// One seed write to a node: its WAL id, the member the operator attested as
+/// the content's author (`kb seed --author`), or none, who ran it, and from
+/// which revision of the source.
+pub struct SeedWrite<'a> {
+    pub kb_id: &'a str,
+    pub node_id: &'a str,
+    pub wal_id: u64,
+    pub author: Option<&'a str>,
+    pub operator: &'a str,
+    pub rev: &'a str,
+    pub at: i64,
+}
+
+/// Log one seed write (append-only).
+pub fn log_seed_write(conn: &sqlite::Connection, w: &SeedWrite<'_>) -> Result<(), StorageError> {
+    let mut st = conn.prepare(
+        "INSERT INTO kb_review_seed_writes
+             (kb_id, node_id, wal_id, author, operator, rev, at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    st.bind((1, w.kb_id))?;
+    st.bind((2, w.node_id))?;
+    st.bind((3, i64::try_from(w.wal_id).map_err(|_| bad("wal_id"))?))?;
+    st.bind((4, opt_text(w.author)))?;
+    st.bind((5, w.operator))?;
+    st.bind((6, w.rev))?;
+    st.bind((7, w.at))?;
+    st.next()?;
+    Ok(())
+}
+
+/// One logged seed write to a node: its WAL id and its attested author
+/// (`None` when no one attested it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoggedSeedWrite {
+    pub wal_id: u64,
+    pub author: Option<String>,
+}
+
+/// Every logged seed write to a node, oldest first.
+pub(crate) fn seed_writes(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+) -> Result<Vec<LoggedSeedWrite>, StorageError> {
+    let mut st = conn.prepare(
+        "SELECT wal_id, author FROM kb_review_seed_writes
+         WHERE kb_id = ?1 AND node_id = ?2 ORDER BY wal_id",
+    )?;
+    st.bind((1, kb_id))?;
+    st.bind((2, node_id))?;
+    let mut out = Vec::new();
+    while st.next()? == sqlite::State::Row {
+        out.push(LoggedSeedWrite {
+            wal_id: u64::try_from(st.read::<i64, _>("wal_id")?).map_err(|_| bad("wal_id"))?,
+            author: st.read::<Option<String>, _>("author")?,
+        });
+    }
+    Ok(out)
 }
