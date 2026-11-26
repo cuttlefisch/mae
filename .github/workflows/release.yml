@@ -432,6 +432,11 @@ jobs:
       - name: Generate changelog
         run: |
           cargo install git-cliff
+          # `--current` fails ("No tag exists for the current commit") when the
+          # release commit carries another tag too, such as mae-crypto-vX or
+          # mae-org-vX: v0.14.207 was never published for it. Only release tags
+          # are kept in this throwaway checkout, so the commit's tag is ours.
+          git tag -l | grep -v -E '^v[0-9]' | xargs -r git tag -d >/dev/null
           git cliff --current --output CHANGELOG-release.md
           cat >> CHANGELOG-release.md << 'FOOTER'
 
