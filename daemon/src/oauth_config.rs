@@ -94,6 +94,11 @@ pub struct OAuthConfig {
     /// The live KB site's locale: `<html lang>` and every string the site
     /// writes (P-16, P-164). Default `en-US`.
     pub site_locale: String,
+    /// How many KBs' derived sites the live site holds (ADR-119 D6's first
+    /// step): a held KB is answered without being read again until it
+    /// changes; the least recently used goes first. `0`: derive on every
+    /// request. Default 8.
+    pub site_cache_kbs: usize,
     /// Namespaces whose references (`ns:rest`) the live site removes from every
     /// page and index (P-13, P-78). Default none.
     pub site_hidden_namespaces: Vec<String>,
@@ -356,6 +361,7 @@ impl Default for OAuthConfig {
             kb_query_enabled: false,
             site_enabled: false,
             site_locale: "en-US".to_string(),
+            site_cache_kbs: mae_daemon::site_cache::DEFAULT_CAPACITY,
             site_hidden_namespaces: Vec::new(),
             site_home: std::collections::BTreeMap::new(),
             site_title: std::collections::BTreeMap::new(),

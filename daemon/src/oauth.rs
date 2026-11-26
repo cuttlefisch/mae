@@ -1027,7 +1027,10 @@ pub(crate) fn site_answer(
         SitePage::NotFound => site_response(StatusCode::NOT_FOUND, "not found".into()),
         SitePage::TooLarge => site_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "this KB is larger than the site derives per request".into(),
+            "this KB is larger than the live site's bounds: the operator can raise \
+             [oauth] kb_query_max_scan_nodes (nodes) or kb_query_max_body_bytes (one node's \
+             title, body or properties)"
+                .into(),
         ),
     }
 }

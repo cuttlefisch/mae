@@ -130,6 +130,13 @@ pub struct DocStore {
     /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
     /// Absent ⇒ no projector wired (e.g. a pure relay); emits are dropped.
     change_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Per-KB content generation: moves after every committed write to a KB's
+    /// collection or node documents (and a deletion of one), so a reader that
+    /// took it BEFORE reading content can tell whether what it read is still
+    /// current. The live site's derivation cache keys on it (`site_cache`).
+    kb_generations: std::sync::Mutex<HashMap<String, u64>>,
+    /// The live site's derived KBs (ADR-119 D6, first step).
+    site_cache: crate::site_cache::SiteCache,
     /// Per-KB LOCAL self-protection blocklist (ADR-039 A2, #162): principals this
     /// daemon refuses to trust, enforced at EVERY membership-derivation site via
     /// [`DocStore::membership_view_for`]. Purely local — NEVER propagated to peers and
@@ -359,6 +366,8 @@ impl DocStore {
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
+            kb_generations: std::sync::Mutex::new(HashMap::new()),
+            site_cache: crate::site_cache::SiteCache::default(),
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
             authorized_keys_path: std::sync::OnceLock::new(),
@@ -870,11 +879,44 @@ impl DocStore {
     /// Emit a durable KB doc's name to the projector change feed (no-op if no projector
     /// is wired, or for ephemeral docs). Non-blocking unbounded send.
     fn emit_change(&self, doc_name: &str) {
+        self.note_kb_write(doc_name);
         if is_durable_doc(doc_name) {
             if let Some(tx) = self.change_tx.get() {
                 let _ = tx.send(doc_name.to_string());
             }
         }
+    }
+
+    /// After a committed write to `doc_name`: if it is one of a KB's documents,
+    /// move that KB's generation. Called after the write is visible, so a
+    /// generation read before a read of content never names newer content
+    /// than it read (a race costs a needless re-read, never a stale one).
+    fn note_kb_write(&self, doc_name: &str) {
+        let kb = match mae_sync::DocAddress::parse(doc_name) {
+            Some(mae_sync::DocAddress::KbCollection { kb_id }) => kb_id,
+            Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
+            _ => return,
+        };
+        let mut g = self
+            .kb_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *g.entry(kb).or_insert(0) += 1;
+    }
+
+    /// KB `kb_id`'s content generation ([`Self::note_kb_write`]). Take it
+    /// BEFORE reading the content it vouches for.
+    pub fn kb_generation(&self, kb_id: &str) -> u64 {
+        let g = self
+            .kb_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        g.get(kb_id).copied().unwrap_or(0)
+    }
+
+    /// The live site's derivation cache.
+    pub fn site_cache(&self) -> &crate::site_cache::SiteCache {
+        &self.site_cache
     }
 
     /// The daemon's signing identity, if running in key-auth mode.
@@ -1514,6 +1556,7 @@ impl DocStore {
         }
         // Remove from persistent storage.
         self.storage.delete_document(doc_name).await?;
+        self.note_kb_write(doc_name);
         self.forget_ephemeral_editors(doc_name).await;
         info!(doc = doc_name, "document deleted");
         Ok(())

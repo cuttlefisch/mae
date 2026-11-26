@@ -2,7 +2,7 @@
 
 **Status:** Proposed (design), being built in phase order. Built: S0 (mae-org 0.10.0, #973), and L1a's
 first slices: the core (`shared/site`: resolver, derivation, sanitiser, #974) and the live route
-`GET /kb/<kb-id>/<id>` (#976). Amendment 1 (2026-11-22) records what building them decided;
+`GET /kb/<kb-id>/<id>` (#976), and D6's first step, a derivation cache per KB (Amendment 5). Amendment 1 (2026-11-22) records what building them decided;
 Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the sitemap, redirects),
 where its home page comes from, and the retirement of ADR-073's view; Amendment 3 (2026-11-24) the
 live explorer and who may list a KB; Amendment 4 (2026-11-24) where the live app's slot components and
@@ -916,6 +916,43 @@ component register the same way.
 - Each behaviour runs once per navigation and is cleaned up before the next (P-156). One that throws
   is reported and skipped; it never stops another from running. A second registration under the same
   `id` replaces the first.
+
+## Amendment 5 (2026-11-26): D6's first step, and a path the daemon never routes
+
+### E1. The live app derives a KB once per change
+
+A5's "until D6's cache, every request derives the KB" ends here. It cost about 2 s a page at 1,560
+nodes on one CPU (#1036). The live app now holds one derived site per KB (`daemon/src/site_cache.rs`)
+and answers later requests from it.
+
+- **The key.** A held site is keyed on everything deriving it reads:
+  - the KB's content generation, which the store moves after every committed write to the KB's
+    collection or node documents, and after a deletion of one;
+  - the attachment store's change count;
+  - the options (hidden namespaces, highlighting) and D21's bounds.
+
+  The request takes the generation before it reads anything, so a racing write can make a held site
+  newer than its key, never older. A held site serves any request whose key it is at least as new as.
+- **Authorization is not cached.** The read gate and the whole-KB copy check run on every request,
+  before the cache is asked. Only plaintext, review-off KBs reach it (D8), so the derived site is the
+  same for every reader the gate admits.
+- **Concurrency.** One KB is derived once at a time: concurrent misses wait for the first.
+- **Failure.** A failed derivation is not held.
+- **Bound.** At most `oauth.site_cache_kbs` KBs are held (default 8), least recently used first out;
+  0 derives per request.
+
+This is the coarse half of D6. Per-node invalidation, with the property test that incremental output
+equals a full derivation, is still to build. C13 still measures the cache's memory per KB.
+
+### E2. `/edit/` belongs to the browser client
+
+The browser client's editor (ADR-100) mirrors the reader's addresses under `/edit/`. Its node pages
+are at `/edit/kb/<kb-id>/<id>`, and its own views are below `/edit/kb/<kb-id>/-/`, so they never
+meet a node ID. Node IDs are encoded as D4's segments are.
+
+MAE's daemon, the live app, the static export and any later feature route **nothing** under the
+top-level `/edit/`. A future MAE route that wants a top-level path checks this list first. The list
+is: `/edit/` (the browser client).
 
 ## Amendments this needs
 

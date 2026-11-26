@@ -1,0 +1,59 @@
+# ADR-119 D6, first step (#1036): the live site's derivation cache. One mutant
+# per point that keeps a cached site from going stale or crossing KBs.
+
+[[mutant]]
+id = "site-cache/write-not-noted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_edit_shows_on_the_next_request)"
+ref = "a committed write moves the KB's generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        self.note_kb_write(doc_name);
+        if is_durable_doc(doc_name) {'''
+replace = '''        if is_durable_doc(doc_name) {'''
+
+[[mutant]]
+id = "site-cache/delete-not-noted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_removed_or_deleted_node_is_gone_on_the_next_request)"
+ref = "a deleted node document moves the KB's generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        self.storage.delete_document(doc_name).await?;
+        self.note_kb_write(doc_name);'''
+replace = '''        self.storage.delete_document(doc_name).await?;'''
+
+[[mutant]]
+id = "site-cache/generation-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_held_site_serves_only_what_it_was_derived_from)"
+ref = "a held site never serves newer content than it read"
+[[mutant.edit]]
+file = "daemon/src/site_cache.rs"
+find = '''            && self.generation >= want.generation'''
+replace = '''            && self.generation >= 0'''
+
+[[mutant]]
+id = "site-cache/one-slot-for-all-kbs"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(one_kbs_site_never_answers_for_another)"
+ref = "one KB's site never answers for another"
+[[mutant.edit]]
+file = "daemon/src/site_cache.rs"
+find = '''        if let Some(s) = slots.get(kb_id) {'''
+replace = '''        if let Some(s) = slots.values().next() {'''
+
+[[mutant]]
+id = "site-cache/failure-held"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_failure_is_not_held)"
+ref = "a failed derivation is not held"
+[[mutant.edit]]
+file = "daemon/src/site_cache.rs"
+find = '''        if !matches!(*site, Derived::Failed) {'''
+replace = '''        if true {'''

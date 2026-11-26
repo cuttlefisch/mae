@@ -97,6 +97,7 @@ mod multi_instance_tests;
 mod seed_store_access_tests;
 mod site_components_tests;
 mod site_copy_gate_tests;
+mod site_derivation_cache_tests;
 mod site_highlight_tests;
 mod site_tests;
 
