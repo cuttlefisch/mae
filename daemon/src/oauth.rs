@@ -469,6 +469,9 @@ pub(crate) enum Route {
     SiteAsset,
     /// ADR-115: a KB's blob routes, when enabled.
     Blob,
+    /// A blob path on a daemon whose attachments are off: one fixed refusal,
+    /// its body never read (#1029), never someone else's answer.
+    BlobsOff,
     /// ADR-099: `/ws` and `/ws/ticket`, only when `ws_enabled`; otherwise
     /// they are ordinary paths and fall through to the authenticated default.
     Ws,
@@ -482,8 +485,11 @@ pub(crate) enum Route {
 impl Route {
     pub(crate) fn of(req: &Request<Incoming>, listener: &Listener) -> Route {
         let path = req.uri().path();
-        if listener.blobs.is_some() && crate::oauth_blobs::blob_path(path).is_some() {
-            return Route::Blob;
+        if crate::oauth_blobs::blob_path(path).is_some() {
+            return match listener.blobs {
+                Some(_) => Route::Blob,
+                None => Route::BlobsOff,
+            };
         }
         if path == "/.well-known/oauth-protected-resource" {
             return Route::Prm;
@@ -705,6 +711,13 @@ pub(crate) async fn dispatch(
             let routes = listener.blobs.clone().expect("Route::Blob only with blobs");
             crate::oauth_blobs::handle(req, &listener, &routes).await
         }
+        Route::BlobsOff => boxed(kinded_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            mae_mcp::protocol::McpError::attachments_disabled(
+                "attachments are not enabled on this daemon (oauth.attachments_enabled)".into(),
+            ),
+        )),
         Route::Ws => boxed(crate::ws::handle(req, Arc::clone(&listener), conn).await),
         Route::Binding => {
             let routes = listener

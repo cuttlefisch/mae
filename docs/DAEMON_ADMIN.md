@@ -319,7 +319,10 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   included; a KB that needs E2E is created encrypted. A request names at most 50 nodes, and a
   `reason` is at most 2,048 bytes.
 - **Attachments (ADR-115), when `attachments_enabled`.** Three routes beside JSON-RPC, each with a
-  bearer token and the KB's own access (and `collab.enabled`, which that access needs):
+  bearer token and the KB's own access (and `collab.enabled`, which that access needs). With
+  `attachments_enabled` off (the default), every blob path answers `404 attachments_disabled`, before
+  any authentication and without reading the body, so a client can tell "off on this daemon" from a
+  broken route:
 
   | Request | Who | Answer |
   |---|---|---|
@@ -509,6 +512,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
 | `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
 | `identity_not_bound` | An identity-provider token whose `(iss, sub)` is bound to no member key, on the sync WebSocket with `ws_accept_bound_idp` on (ADR-099 Amendment 2). It is never admitted as its raw subject; bind it first (proof of possession, or `mae-daemon binding bind`). HTTP `403`, `error: "access_denied"`. At a renewal, the subject was unbound since the socket opened: the socket closes `4403 principal_changed` instead. | `GET /ws`, `POST /ws/ticket` | — |
+| `attachments_disabled` | Attachments are off on this daemon (`oauth.attachments_enabled = false`). A daemon-wide setting, nothing about any KB; the body is never read. HTTP `404`, `error: "not_found"`. | every `/kb/<kb-id>/blobs[/<sha256>]` request | — |
 | `blob_missing` | The KB holds no blob at that address: never uploaded, or collected. Only a caller who may read the KB gets it; anyone else gets `not_member` whether or not the blob exists (ADR-115 D2). HTTP `404`, `error: "not_found"`. | `GET`/`HEAD /kb/<kb-id>/blobs/<sha256>` | — |
 | `blob_hash_mismatch` | The upload's `Content-Digest` does not match the bytes that arrived. Nothing was stored; retry the upload. HTTP `400`, `error: "invalid_request"`. | `POST /kb/<kb-id>/blobs` | — |
 | `attachment_too_many_pixels` | An image whose header declares more than `max_attachment_pixels`, or an animation over 1000 frames or four times that many pixels in all. Refused before decoding. HTTP `413`, `error: "payload_too_large"`. | `POST /kb/<kb-id>/blobs` | `limit` |

@@ -355,7 +355,8 @@ pub(crate) fn class_of(
     let m = method_name(req.method());
     let path = req.uri().path();
     Some(match route {
-        Route::Prm | Route::Health | Route::SiteAsset => return None,
+        // BlobsOff reads nothing and names no KB: a daemon-wide answer.
+        Route::Prm | Route::Health | Route::SiteAsset | Route::BlobsOff => return None,
         Route::Blob => match crate::oauth_blobs::blob_path(path) {
             Some((_, None)) => (format!("{m} /kb/{{kb}}/blobs"), EventKind::Upload),
             _ => (
