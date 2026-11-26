@@ -134,6 +134,7 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_review_policy (
 pub(crate) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Error> {
     conn.execute(SCHEMA)?;
     conn.execute(super::attach_store::SCHEMA)?;
+    conn.execute(super::import::SCHEMA)?;
     // PR-6: B7's switch, off on a KB PR-5 left; and the rendered PDF an
     // approval bound (B7), which annulment then refuses.
     if !has_column(conn, "kb_review_policy", "approval_requires_rendered_pdf")? {

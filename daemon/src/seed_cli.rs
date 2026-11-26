@@ -30,6 +30,7 @@ const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag
      \x20      mae-daemon kb seed --update --dry-run --git <repo> --rev <tag-or-commit> --kb-id <id>\n\
      \x20      mae-daemon kb seed --update --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash> [--discard-edits <edits_hash>] [--author <SHA256:…>]\n\
      \x20      mae-daemon kb export --kb-id <id> --out <dir> [--force]\n\
+     \x20      mae-daemon kb import [--dry-run] --kb-id <id> --dir <import-dir> [--import-hash <hash>] [--json]\n\
      \x20      mae-daemon kb member add|remove|list --kb-id <id> [--member <SHA256:…>] [--role viewer|editor]\n\
      \x20      mae-daemon kb anchor --kb-id <id> [--public-key <base64>]\n\
      \x20      mae-daemon kb history head|verify --kb-id <id> [--out <file>] [--against <head-file>]\n\
@@ -55,6 +56,7 @@ pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
             Step::Store(args) => crate::seed_apply_cli::run_apply(config, &args).await,
         },
         Some("export") => crate::seed_apply_cli::run_export(config, &rest[1..]).await,
+        Some("import") => crate::import_cli::run(config, &rest[1..]).await,
         Some("member") => crate::member_cli::run(config, &rest[1..]).await,
         Some("anchor") => crate::anchor_cli::run(config, &rest[1..]).await,
         Some("history") => crate::history_cli::run(config, &rest[1..]).await,

@@ -28,7 +28,7 @@ pub(super) const OPEN_STATES: &[&str] = &["in_review", "approved"];
 pub(super) const ENDED_BY_FORCE: &[&str] = &["in_force", "superseded", "derogated"];
 
 /// An opaque identifier (E9): `prefix-` and 16 random hex digits.
-fn new_id(prefix: &str) -> String {
+pub(super) fn new_id(prefix: &str) -> String {
     let mut b = [0u8; 8];
     rand::Rng::fill_bytes(&mut rand::rng(), &mut b);
     format!("{prefix}-{}", hex::encode(b))
@@ -687,7 +687,7 @@ fn named_members_are_persons(store: &DocStore, p: &Policy) -> Result<(), McpErro
 }
 
 /// `PREFIX-n`, `n` a positive integer without leading zeros.
-fn parse_code(code: &str) -> Option<(&str, i64)> {
+pub(super) fn parse_code(code: &str) -> Option<(&str, i64)> {
     let (prefix, n) = code.split_once('-')?;
     let ok = valid_prefix(prefix)
         && !n.is_empty()

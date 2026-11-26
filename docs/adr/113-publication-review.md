@@ -905,6 +905,21 @@ for a page with no signed original, it rests on the source repository's history.
 approved, signed original exists, `kb import` is the only path. A page gets its first revision from
 exactly one of the two, which the overlap rule enforces.
 
+*(As built: the import needs each page's node to exist in the KB already (`node_not_in_kb` otherwise);
+A4 is not built, so `kb import` is the only way a revision enters other than a review. `import_hash` is
+the sha256 of `mae-import-hash/1`, the KB id, the sha256 of `import.json`'s bytes and the manifest's
+sha256, each on its own line; the apply refuses `import_hash_mismatch` when it differs. A file named but
+absent is `manifest_mismatch` with `reason: "missing_file"`. One request record per import
+(`set_name: "import"`, ended) carries its revisions, chained by `replaces`; each is `approval_record:
+"signed_pdf"`, `approved_at` the attested date (else `effective_at`), `in_force_since` its
+`effective_at`, `history_seq` 0 (no working-copy version is cut: the source is the file's, not the live
+node's), and `cutoff_wal` 0: nothing of the live node was approved in MAE, so the next review's author
+window covers the node's whole record, and unattributed content in it reads as unknown authors (A3). The
+live node is not changed. An import lands after every revision the node holds, ended windows included,
+with revision numbers above the node's highest, and no two of its pages name one code. An imported source carries no attachments map; its images
+resolve only through the working copy. The read path's `imported` is `{approved_by_name, approved_on,
+event_id}`.)*
+
 **Agents can never reach it** (principle #16). It is a local CLI only: no network method, MCP tool or
 Scheme call reaches it, and a test scans for one.
 

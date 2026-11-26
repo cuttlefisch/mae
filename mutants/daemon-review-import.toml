@@ -1,0 +1,178 @@
+# ADR-113 E4 (kb import): one mutant per guard, each named for the test that
+# must catch it. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "daemon-review-import/manifest-hash-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_manifest_is_exact_and_a_refusal_writes_nothing)"
+ref = "E4: every file's sha256 equals its manifest line"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''    if &actual != expected {'''
+replace = '''    if actual.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/unused-line-allowed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_manifest_is_exact_and_a_refusal_writes_nothing)"
+ref = "E4: every manifest line is used"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''    if let Some(unused) = manifest.keys().find(|k| !used.contains(*k)) {'''
+replace = '''    if let Some(unused) = manifest.keys().find(|k| k.is_empty()) {'''
+
+[[mutant]]
+id = "daemon-review-import/duplicate-line-allowed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_manifest_is_exact_and_a_refusal_writes_nothing)"
+ref = "E4: no path twice"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''        if out.insert(path.to_string(), hash.to_string()).is_some() {'''
+replace = '''        if out.insert(path.to_string(), hash.to_string()).is_some() && false {'''
+
+[[mutant]]
+id = "daemon-review-import/pdf-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_with_a_wrong_file_or_order_is_refused)"
+ref = "B2: every PDF begins %PDF-"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''    if !f.bytes.starts_with(b"%PDF-") {'''
+replace = '''    if f.bytes.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/name-optional"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_with_a_wrong_file_or_order_is_refused)"
+ref = "E4: approved_by_name is required"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''    if r.approved_by_name.trim().is_empty() {'''
+replace = '''    if r.approved_by_name.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/in-force-anywhere"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_with_a_wrong_file_or_order_is_refused)"
+ref = "E4: at most one revision in force, and it the last"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''            ("in_force", None) if last => {}'''
+replace = '''            ("in_force", None) => {}'''
+
+[[mutant]]
+id = "daemon-review-import/source-of-another-node"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_with_a_wrong_file_or_order_is_refused)"
+ref = "E4: a page's source names its node"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''        if split.id != p.node_id {'''
+replace = '''        if split.id.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/node-not-required"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_with_a_wrong_file_or_order_is_refused)"
+ref = "E4: each page is a node of the KB"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''        if !coll.has_node(&p.node_id) {'''
+replace = '''        if p.node_id.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/overlap-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_records_signed_history_once)"
+ref = "B6: an import never lands at or before what a node holds"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''    (first <= latest || live).then(|| {'''
+replace = '''    (first < 0 && latest < 0 && live).then(|| {'''
+
+[[mutant]]
+id = "daemon-review-import/code-of-another-node"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_never_overlaps_or_takes_another_nodes_code)"
+ref = "D2: a code names one document"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''        if holder != page.node_id {'''
+replace = '''        if holder.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/hash-not-required"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_never_overlaps_or_takes_another_nodes_code)"
+ref = "E4: the apply needs the dry run's import_hash"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''    if a.import_hash != plan.checked.import_hash {'''
+replace = '''    if a.import_hash.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-import/apply-trusts-the-plan"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_apply_rechecks_inside_its_transaction)"
+ref = "E4: all or nothing, re-checked in the write"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''    if let Err(e) = check_in_store(c, kb, &plan.pages, &plan.checked)? {'''
+replace = '''    if let Err(e) = Ok::<Result<(), ImportError>, StorageError>(Ok(()))? {'''
+
+[[mutant]]
+id = "daemon-review-import/ended-window-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "B6: an import never lands inside a recorded in-force window"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''            r.ended_at.map_or(start, |end| end.max(start))'''
+replace = '''            start'''
+
+[[mutant]]
+id = "daemon-review-import/rev-numbers-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "E4: imported revision numbers follow the node's"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''        if highest.is_some_and(|h| input.revisions[0].rev <= h) {'''
+replace = '''        if highest.is_some_and(|h| h < 0) {'''
+
+[[mutant]]
+id = "daemon-review-import/one-code-two-pages"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_respects_ended_windows_numbers_and_one_code_per_page)"
+ref = "D2: one code names one document, within an import too"
+[[mutant.edit]]
+file = "daemon/src/review/import_check.rs"
+find = '''            if !codes.insert(code.clone()) {'''
+replace = '''            if !codes.insert(code.clone()) && false {'''
+
+[[mutant]]
+id = "daemon-review-import/author-window-starts-at-import"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_import_does_not_start_the_next_reviews_author_window)"
+ref = "A1: the next review counts the live node's whole record"
+[[mutant.edit]]
+file = "daemon/src/review/import.rs"
+find = '''    let cutoff_wal = 0;'''
+replace = '''    let cutoff_wal = store.wal_high_water(&name).await.map_err(storage)?;'''

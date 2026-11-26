@@ -29,6 +29,7 @@ pub mod enrichment;
 mod handler;
 mod history_cli;
 pub mod hygiene;
+mod import_cli;
 #[cfg(test)]
 mod lazy_fetch_client;
 pub mod maintenance;

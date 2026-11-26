@@ -13,7 +13,7 @@ use crate::blob_store::{process::ProcessLimits, BlobStore, MediaType};
 use crate::oauth_self_issue::PrincipalKind;
 
 /// The env with an attachment store, as the listener opens one.
-fn with_blobs(env: &Env) -> tempfile::TempDir {
+pub(super) fn with_blobs(env: &Env) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     env.store.set_blob_store(Arc::new(
         BlobStore::open(&dir.path().join("blobs")).unwrap(),
