@@ -55,7 +55,11 @@ pub(super) fn person(who: &ValidatedPrincipal) -> Result<(), McpError> {
 }
 
 /// A revision of this KB by id, or `unknown_revision`.
-async fn revision_of(store: &DocStore, kb_id: &str, id: &str) -> Result<Revision, McpError> {
+pub(super) async fn revision_of(
+    store: &DocStore,
+    kb_id: &str,
+    id: &str,
+) -> Result<Revision, McpError> {
     let (kb, id) = (kb_id.to_string(), id.to_string());
     store
         .review_read(move |c| store::revision(c, &kb, &id))
@@ -273,7 +277,7 @@ fn effective_at(params: &Value, now: i64) -> Result<i64, McpError> {
 }
 
 /// The refusal for a revision not in a state the act accepts.
-fn wrong_state(state: &str, act: &str) -> McpError {
+pub(super) fn wrong_state(state: &str, act: &str) -> McpError {
     McpError::invalid_transition(
         format!("a revision that is {state} cannot be the subject of {act}"),
         state,
@@ -354,7 +358,7 @@ pub(super) async fn act(
 }
 
 /// The members of a request still waiting for something, as ids.
-fn ids(rs: &[Revision], pred: impl Fn(&Revision) -> bool) -> Vec<String> {
+pub(super) fn ids(rs: &[Revision], pred: impl Fn(&Revision) -> bool) -> Vec<String> {
     rs.iter()
         .filter(|r| pred(r))
         .map(|r| r.revision_id.clone())
@@ -365,7 +369,7 @@ fn ids(rs: &[Revision], pred: impl Fn(&Revision) -> bool) -> Vec<String> {
 /// transaction (D4), superseding each node's previous in-force revision.
 /// Returns the event's sequence number.
 #[allow(clippy::too_many_arguments)]
-fn enter_into_force_now(
+pub(super) fn enter_into_force_now(
     c: &sqlite::Connection,
     signer: &mae_mcp::identity::Identity,
     kb_id: &str,
@@ -420,6 +424,10 @@ struct ApproveInput {
     /// The author check covered every member of the request, so this
     /// approval may put the set in force (`in_force_on_approval`).
     gated_set: bool,
+    /// B7: the rendered PDF the approver names, and whether the KB requires
+    /// one.
+    rendered: Option<String>,
+    requires_rendered: bool,
 }
 
 /// The required acts other than `approved` that `acts` lacks, in order, each
@@ -459,10 +467,15 @@ fn record_approval(
             None,
         )));
     }
+    let rendered = match super::attach::approval_binds(c, &i.id, &i.rendered, i.requires_rendered)?
+    {
+        Ok(b) => b,
+        Err(e) => return Ok(Err(e)),
+    };
     let rev_no = store::next_rev_no(c, &i.kb, &r.node_id)?;
     store::approve_revision(c, &i.id, rev_no, at)?;
     let payload = json!({ "revision_id": i.id, "rev": rev_no, "request_id": r.request_id,
-        "override": i.ovr });
+        "override": i.ovr, "rendered_pdf_sha256": rendered });
     let seq = store::append_event(
         c,
         signer,
@@ -475,6 +488,9 @@ fn record_approval(
         },
     )?;
     store::insert_act(c, &i.kb, &i.id, "approved", &i.principal, at, seq, &i.ovr)?;
+    if let Some(sha) = &rendered {
+        store::bind_rendered_pdf(c, &i.id, sha)?;
+    }
     let req = store::request(c, &i.kb, &r.request_id)?;
     let members = store::request_revisions(c, &r.request_id)?;
     let all_approved = members.iter().all(|m| m.state == "approved");
@@ -533,7 +549,10 @@ pub(super) async fn approve(
     let checked = set.unwrap_or_else(|| vec![rev.clone()]);
     let ovr = author_gate(store, &checked, who, params).await?;
     let signer = signer(store)?;
+    let rendered = super::optional_str(params, "rendered_pdf_sha256")?.map(str::to_string);
     let input = ApproveInput {
+        rendered,
+        requires_rendered: g.policy.approval_requires_rendered_pdf,
         gated_set,
         ovr,
         kb: kb_id.to_string(),
@@ -640,8 +659,7 @@ pub(super) async fn enter_into_force(
                         missing,
                     )));
                 }
-                // PR-6 attaches signed PDFs; until it is built no member has one.
-                let no_pdf = ids(&members, |r| r.approval_record == "signed_pdf");
+                let no_pdf = super::attach::without_signed_pdf(c, &members)?;
                 if !no_pdf.is_empty() {
                     return Ok(Err(McpError::signed_pdf_required(
                         "every member needs its signed PDF before entry into force".into(),

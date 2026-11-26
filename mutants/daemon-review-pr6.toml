@@ -1,0 +1,198 @@
+# ADR-113 PR-6 (revision attachments): one mutant per guard, each named for
+# the test that must catch it. Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "daemon-review-pr6/write-once-removed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "B1: a kind holds one current attachment"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        return Ok(Err(McpError::attachment_exists(
+            format!("this revision already holds a {}", i.kind),
+            &cur.sha256,
+        )));'''
+replace = '''        let _ = &cur;'''
+
+[[mutant]]
+id = "daemon-review-pr6/retry-not-recognised"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "B1: the same bytes again answer the first attach"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        if cur.sha256 == i.meta.sha256 {'''
+replace = '''        if cur.sha256 == i.meta.sha256 && false {'''
+
+[[mutant]]
+id = "daemon-review-pr6/pdf-head-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "B2: the bytes begin with the PDF header"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        Ok(()) => Ok(&head == b"%PDF-"),'''
+replace = '''        Ok(()) => Ok(true),'''
+
+[[mutant]]
+id = "daemon-review-pr6/pdf-type-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "B2: the stored type is application/pdf"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    if meta.media_type != MediaType::Pdf || !head {'''
+replace = '''    if !head {'''
+
+[[mutant]]
+id = "daemon-review-pr6/anyone-renders"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "O13: only the requester attaches the rendered PDF"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    if req.is_none_or(|q| q.requester != who.principal) {'''
+replace = '''    if req.is_none() {'''
+
+[[mutant]]
+id = "daemon-review-pr6/source-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_rendered_pdf_is_written_once_by_the_requester_from_the_frozen_source)"
+ref = "D6: the declared source is the frozen source of the revision"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    if declared != rev.source_sha256 {'''
+replace = '''    if declared.is_empty() {'''
+
+[[mutant]]
+id = "daemon-review-pr6/signed-by-an-agent"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_signed_pdf_needs_a_listed_person_and_an_approved_revision)"
+ref = "B3: a signed PDF only from a person"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    person(who)?;'''
+replace = '''    let _ = person(who);'''
+
+[[mutant]]
+id = "daemon-review-pr6/signed-in-review"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_signed_pdf_needs_a_listed_person_and_an_approved_revision)"
+ref = "B3: never to a pending revision"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''const SIGNED_STATES: &[&str] = &["approved", "in_force", "superseded", "derogated"];'''
+replace = '''const SIGNED_STATES: &[&str] = &["in_review", "approved", "in_force", "superseded", "derogated"];'''
+
+[[mutant]]
+id = "daemon-review-pr6/signed-pdf-assumed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_the_last_signed_pdf_puts_the_set_in_force)"
+ref = "O19: missing is read from the attachments"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        if attach_store::current(c, &m.revision_id, "signed_pdf")?.is_none() {'''
+replace = '''        if attach_store::current(c, &m.revision_id, "signed_pdf")?.is_some() {'''
+
+[[mutant]]
+id = "daemon-review-pr6/set-in-force-early"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_the_last_signed_pdf_puts_the_set_in_force)"
+ref = "O19: the set enters into force with its last signed PDF"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        && without_signed_pdf(c, &members)?.is_empty();'''
+replace = '''        && true;'''
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                && without_signed_pdf(c, &others)?.is_empty();'''
+replace = '''                && true;'''
+
+[[mutant]]
+id = "daemon-review-pr6/anyone-annuls"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_wrong_file_is_annulled_never_replaced)"
+ref = "B1: the owner or the uploader annuls"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                if !owner && cur.uploader != who.principal {'''
+replace = '''                if false {'''
+
+[[mutant]]
+id = "daemon-review-pr6/annulled-unreferenced"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_wrong_file_is_annulled_never_replaced)"
+ref = "B5: an annulled attachment stays referenced"
+[[mutant.edit]]
+file = "daemon/src/review/attach_store.rs"
+find = '''         WHERE kb_id = ?1 AND state != 'deleted'",'''
+replace = '''         WHERE kb_id = ?1 AND state = 'current'",'''
+
+[[mutant]]
+id = "daemon-review-pr6/bound-rendered-annulled"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_approval_binds_its_rendered_pdf)"
+ref = "B7: the rendered PDF an approval bound is never annulled"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                if kind == "rendered_pdf"
+                    && store::bound_rendered_pdf'''
+replace = '''                if kind == "none"
+                    && store::bound_rendered_pdf'''
+
+[[mutant]]
+id = "daemon-review-pr6/rendered-switch-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_approval_binds_its_rendered_pdf)"
+ref = "B7: the switch requires a rendered PDF"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    if named.is_none() && !required {'''
+replace = '''    if named.is_none() {'''
+
+[[mutant]]
+id = "daemon-review-pr6/rendered-mismatch-accepted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(an_approval_binds_its_rendered_pdf)"
+ref = "B7: the approval names the current rendered PDF"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''        Some(cur) if cur.sha256 != *named => Ok(Err(McpError::rendered_pdf_mismatch('''
+replace = '''        Some(cur) if false => Ok(Err(McpError::rendered_pdf_mismatch('''
+
+[[mutant]]
+id = "daemon-review-pr6/one-current-not-enforced"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_database_keeps_the_attachment_record)"
+ref = "B1: the database allows one current attachment per kind"
+[[mutant.edit]]
+file = "daemon/src/review/attach_store.rs"
+find = '''     ON kb_review_attachments(revision_id, kind) WHERE state = 'current';'''
+replace = '''     ON kb_review_attachments(revision_id, kind, seq) WHERE state = 'current';'''
+
+[[mutant]]
+id = "daemon-review-pr6/retry-forgets-entry-into-force"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(under_signed_pdf_the_last_signed_pdf_puts_the_set_in_force)"
+ref = "B1: a retry answers as the first attach, entry into force included"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''                (i.kind == "signed_pdf" && r.in_force_since == Some(cur.at)).then(|| time(cur.at));'''
+replace = '''                (i.kind == "none" && r.in_force_since == Some(cur.at)).then(|| time(cur.at));'''

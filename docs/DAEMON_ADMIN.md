@@ -527,6 +527,11 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `performer_not_person` | A named member on a reviewer or approver list is not bound as a person. | `kb/review.set_policy` | `member` |
 | `set_incomplete` | A set enters into force whole: some members are not approved yet. | `kb/review.enter_into_force` | `missing` |
 | `signed_pdf_required` | Under the `signed_pdf` approval record, entry into force waits for the signed PDF of each member. | `kb/review.enter_into_force` | `missing` |
+| `source_mismatch` | A rendered PDF declares a source that is not the revision's frozen source (`expected`). | `kb/review.attach_rendered_pdf` | `expected` |
+| `attachment_exists` | The revision already holds a current attachment of that kind, with other bytes. A wrong one is annulled first (`kb/review.annul_attachment`); the same bytes again answer the first attach. | `kb/review.attach_rendered_pdf`, `.attach_signed_pdf` | `current` |
+| `attachment_type` | A revision attachment must be a PDF: stored as `application/pdf` and beginning `%PDF-`. | `kb/review.attach_rendered_pdf`, `.attach_signed_pdf` | — |
+| `rendered_pdf_required` | The KB requires an approval to name the revision's rendered PDF (`approval_requires_rendered_pdf`), and it has none. | `kb/review.approve` | — |
+| `rendered_pdf_mismatch` | The approval names another rendered PDF than the revision's current one. | `kb/review.approve` | `current` |
 | `unknown_request` | This KB holds no request with that id. | `kb/review.withdraw` | — |
 | `unknown_revision` | This KB holds no revision with that id (or it is another node's). | `kb/query.get` with `revision` | — |
 | `revisions_hold_plaintext` | Switching the KB to E2E is refused while it holds any publication-review revision, whose frozen source is plaintext and is kept for good (ADR-113 O17). Code `-32600`. A mesh peer's update that would switch it is refused whole and counted. | any write to the KB's collection: `kb/collection_op`, `sync/update`, `sync/share`, `kb/share` | — |

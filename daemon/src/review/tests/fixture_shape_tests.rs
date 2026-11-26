@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::*;
 
-fn fixture(name: &str) -> Value {
+pub(super) fn fixture(name: &str) -> Value {
     let path = format!(
         "{}/../docs/verification/fixtures/review-api/{name}.json",
         env!("CARGO_MANIFEST_DIR")
@@ -61,18 +61,18 @@ fn shape_diff(expected: &Value, actual: &Value, path: &str, out: &mut Vec<String
     }
 }
 
-fn assert_shape(name: &str, expected: &Value, actual: &Value) {
+pub(super) fn assert_shape(name: &str, expected: &Value, actual: &Value) {
     let mut out = Vec::new();
     shape_diff(expected, actual, name, &mut out);
     assert!(out.is_empty(), "{name}:\n{}", out.join("\n"));
 }
 
-fn example_result(f: &Value, i: usize) -> Value {
+pub(super) fn example_result(f: &Value, i: usize) -> Value {
     f["examples"][i]["response"]["result"].clone()
 }
 
 /// The refusal named `case` in fixture `f`.
-fn refusal(f: &Value, case: &str) -> Value {
+pub(super) fn refusal(f: &Value, case: &str) -> Value {
     f["refusals"]
         .as_array()
         .unwrap()
@@ -103,7 +103,6 @@ async fn populated() -> (Env, Value) {
         "reviewers",
         "approvers",
         "approval_requires_mfa",
-        "approval_requires_rendered_pdf",
         "reauth_max_age_secs",
         "attachment_retention_days",
     ] {

@@ -47,7 +47,7 @@ pub(super) async fn policy(env: &Env, extra: Value) {
 }
 
 /// The editor edits then requests `nodes`; the revision ids in order, and the request id.
-async fn requested(env: &Env, nodes: &[&str]) -> (String, Vec<String>) {
+pub(super) async fn requested(env: &Env, nodes: &[&str]) -> (String, Vec<String>) {
     for n in nodes {
         retitle(env, n, &format!("Edited {n}")).await;
     }

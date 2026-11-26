@@ -203,7 +203,11 @@ A periodic sweep runs on the maintenance tick, bounded per pass. For each KB:
   - every ADR-106 history version of a node. That history is a record whether or not the KB uses
     publication review;
   - every ADR-113 revision, in every state, including rejected and withdrawn. A revision record is
-    never deleted, so neither is what it references (ADR-113 D5, D7);
+    never deleted, so neither is what it references (ADR-113 D5, D7). That covers the attachments
+    in its frozen source and its own attachments (`rendered_pdf`, `signed_pdf`, current or
+    annulled). *(Amended by ADR-113 PR-6, its O2: the one release of a revision's attachment is
+    ADR-113 B5's owner-only, audited deletion after the retention period, which releases the
+    revision's hold on those bytes, never the record. Nothing else releases it.)*
   - anything under an audit or legal hold the operator has placed;
   - every blob uploaded within the grace period (default 24 hours, configurable), the window
     between an upload and the edit that references it.

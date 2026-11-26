@@ -796,6 +796,56 @@ impl McpError {
         )
     }
 
+    /// ADR-113 D6: the source a rendered PDF declares is not the revision's
+    /// frozen source (`expected`).
+    pub fn source_mismatch(message: String, expected: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "source_mismatch",
+            serde_json::json!({ "expected": expected }),
+        )
+    }
+
+    /// ADR-113 B1: the revision already holds a current attachment of this
+    /// kind, with other bytes (`current`). A wrong one is annulled first.
+    pub fn attachment_exists(message: String, current: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "attachment_exists",
+            serde_json::json!({ "current": current }),
+        )
+    }
+
+    /// ADR-113 B2: a revision attachment must be a PDF (`application/pdf`,
+    /// bytes starting `%PDF-`).
+    pub fn attachment_type(message: String) -> Self {
+        Self::kinded(-32603, message, "attachment_type", serde_json::json!({}))
+    }
+
+    /// ADR-113 B7: the KB requires an approval to name the revision's
+    /// current rendered PDF, and it has none.
+    pub fn rendered_pdf_required(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "rendered_pdf_required",
+            serde_json::json!({}),
+        )
+    }
+
+    /// ADR-113 B7: the approval named another rendered PDF than the
+    /// revision's current one (`current`).
+    pub fn rendered_pdf_mismatch(message: String, current: &str) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "rendered_pdf_mismatch",
+            serde_json::json!({ "current": current }),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     /// ADR-120 D5: the activity record could not take the request's event in
@@ -889,6 +939,11 @@ pub const ERROR_KINDS: &[&str] = &[
     "set_incomplete",
     "signed_pdf_required",
     "activity_record_unavailable",
+    "source_mismatch",
+    "attachment_exists",
+    "attachment_type",
+    "rendered_pdf_required",
+    "rendered_pdf_mismatch",
     "internal",
 ];
 
@@ -1087,6 +1142,16 @@ mod tests {
             McpError::attachment_unsupported(m()),
             McpError::upload_timeout(m()),
             McpError::attachment_busy(m(), 10),
+        ]
+        .into_iter()
+        .chain(review_kinded_errors())
+        .collect()
+    }
+
+    /// ADR-113's kinds, in `ERROR_KINDS` order, from `review_not_enabled` on.
+    fn review_kinded_errors() -> Vec<McpError> {
+        let m = || "m".to_string();
+        vec![
             McpError::review_not_enabled(m()),
             McpError::stale_version(m(), "n", "v"),
             McpError::invalid_transition(m(), "in_force", "withdraw", None),
@@ -1103,6 +1168,11 @@ mod tests {
             McpError::set_incomplete(m(), vec!["r".into()]),
             McpError::signed_pdf_required(m(), vec!["r".into()]),
             McpError::activity_record_unavailable(m()),
+            McpError::source_mismatch(m(), "s"),
+            McpError::attachment_exists(m(), "c"),
+            McpError::attachment_type(m()),
+            McpError::rendered_pdf_required(m()),
+            McpError::rendered_pdf_mismatch(m(), "c"),
             McpError::internal_fault(m()),
         ]
     }

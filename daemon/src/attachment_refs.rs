@@ -14,9 +14,11 @@
 //!   withdrawn or rejected revision still holds it: revisions are never
 //!   deleted (E7).
 //!
-//! Not covered, because they are not built: revision attachments (PR-6) and
-//! operator holds. Their builders must add them here before a sweep runs
-//! against a KB that has them. The grace period for unbound uploads is the sweep's own
+//! - every ADR-113 revision attachment (PR-6), annulled ones included (B5:
+//!   only B5's deletion releases one).
+//!
+//! Not covered, because they are not built: operator holds. Their builder
+//! must add them here before a sweep runs against a KB that has them. The grace period for unbound uploads is the sweep's own
 //! (it reads the store's upload times, P1).
 //!
 //! A node document is read by the sweep's own reader
@@ -102,6 +104,11 @@ impl DocStore {
         let sources = self
             .review_read(move |c| crate::review::store::sources(c, &kb))
             .await?;
+        let kb = kb_id.to_string();
+        let attached = self
+            .review_read(move |c| crate::review::attach_store::hashes(c, &kb))
+            .await?;
+        out.hashes.extend(attached);
         for (sha, content) in sources {
             match mae_sync::kb::history::decode_content(&content) {
                 Ok(node) => out
