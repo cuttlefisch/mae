@@ -1068,3 +1068,65 @@ async fn a_pdf_is_stored_as_sent_and_a_claimed_type_is_ignored() {
 fn one_page_pdf() -> Vec<u8> {
     b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n".to_vec()
 }
+
+/// A listener with attachments off (`oauth.attachments_enabled = false`, the
+/// default), the site on or off.
+async fn attachments_off(site: bool) -> SocketAddr {
+    let mut c = config();
+    c.site_enabled = site;
+    let listener = Listener::new(
+        c,
+        Some(fresh_doc_store().await),
+        None,
+        Arc::new(TestQuota::none()),
+        None,
+    )
+    .unwrap()
+    .with_blobs(None);
+    serve(Arc::new(listener)).await.0
+}
+
+async fn send(addr: SocketAddr, head: &str, body: &[u8]) -> Reply {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!("{head}\r\nHost: test\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    let _ = s.write_all(body).await;
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out).await;
+    Reply::parse(&out)
+}
+
+/// #1029: with attachments off, every blob path answers one fixed 404
+/// `attachments_disabled`, whatever the method, whether the site is on, and
+/// however large the body (it is never read): never the site's not-found page
+/// nor a JSON-RPC answer. Kills a route that falls through.
+#[tokio::test]
+async fn with_attachments_off_a_blob_path_answers_one_fixed_refusal() {
+    for site in [true, false] {
+        let addr = attachments_off(site).await;
+        let big = vec![b'%'; 64 * 1024];
+        let blob = format!("/kb/kb-a/blobs/{}", "0".repeat(64));
+        for (method, path, body) in [
+            ("POST", "/kb/kb-a/blobs".to_string(), &big[..]),
+            ("GET", blob.clone(), &[][..]),
+            ("HEAD", blob.clone(), &[][..]),
+        ] {
+            let len = if body.is_empty() {
+                String::new()
+            } else {
+                format!("\r\nContent-Length: {}", body.len())
+            };
+            let head = format!("{method} {path} HTTP/1.1\r\nAuthorization: Bearer x{len}");
+            let r = send(addr, &head, body).await;
+            assert_eq!(r.status, 404, "site {site} {method}: {r:?}");
+            assert_eq!(
+                r.header("content-type"),
+                Some("application/json"),
+                "site {site} {method}"
+            );
+            if method != "HEAD" {
+                assert_eq!(r.kind(), "attachments_disabled", "site {site} {method}");
+            }
+        }
+    }
+}

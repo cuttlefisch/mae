@@ -353,6 +353,10 @@ fn samples(route: Route, token: &str) -> Vec<(&'static str, String, Option<Strin
                 true,
             ),
         ],
+        // This harness serves attachments, so a blob path is `Blob` here.
+        // `BlobsOff` (unrecorded, its body unread) is tested with attachments
+        // off in `blob_route_tests`.
+        Route::BlobsOff => Vec::new(),
         Route::Ws => vec![
             ("POST", "/ws/ticket".into(), t.clone(), true),
             ("GET", "/ws".into(), t.clone(), true),
@@ -387,11 +391,12 @@ fn samples(route: Route, token: &str) -> Vec<(&'static str, String, Option<Strin
     }
 }
 
-const ALL_ROUTES: [Route; 7] = [
+const ALL_ROUTES: [Route; 8] = [
     Route::Prm,
     Route::Health,
     Route::SiteAsset,
     Route::Blob,
+    Route::BlobsOff,
     Route::Ws,
     Route::Binding,
     Route::Authenticated,
