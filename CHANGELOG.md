@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.206] - 2026-11-26
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* A blob path with attachments off answers attachments_disabled ([8fcd0fe](https://github.com/cuttlefisch/mae/commit/8fcd0fe9fbd8e6c08d23aab4c5f144bb227375a8))
+
 ## [0.14.205] - 2026-11-26
 
 
@@ -15,6 +24,10 @@ All notable changes to this project will be documented in this file.
 
 - *(review)* Attaches to one KB serialize from the completion check to the commit ([9ae4fe5](https://github.com/cuttlefisch/mae/commit/9ae4fe5d4de919ffa3c780b3e50b3cda703d57ea))
 - *(review)* A signed-PDF retry answers as the attach that completed the set ([084653e](https://github.com/cuttlefisch/mae/commit/084653e1973f92ec57fe5507454d4ebca999b5b6))
+
+### Miscellaneous
+
+- Bump version to 0.14.205 ([67a1f55](https://github.com/cuttlefisch/mae/commit/67a1f550ed8541bc2ffb8eaa7a1fb4808299af31))
 
 ## [0.14.204] - 2026-11-26
 
