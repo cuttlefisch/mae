@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.205] - 2026-11-26
+
+
+
+
+### Features
+
+- *(review)* Revision attachments, ADR-113 PR-6 ([312bf61](https://github.com/cuttlefisch/mae/commit/312bf613529b37226d2ea8748fc19d6b7c3f9851))
+
+### Bug Fixes
+
+- *(review)* Attaches to one KB serialize from the completion check to the commit ([9ae4fe5](https://github.com/cuttlefisch/mae/commit/9ae4fe5d4de919ffa3c780b3e50b3cda703d57ea))
+- *(review)* A signed-PDF retry answers as the attach that completed the set ([084653e](https://github.com/cuttlefisch/mae/commit/084653e1973f92ec57fe5507454d4ebca999b5b6))
+
 ## [0.14.204] - 2026-11-26
 
 
@@ -22,6 +36,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(review)* The signed-PDF mutant covers both the pre-check and the write ([5801a10](https://github.com/cuttlefisch/mae/commit/5801a106b9eba46f607d5d9eb6ebd1bbef1214af))
+
+### Miscellaneous
+
+- Bump version to 0.14.204 ([e5b96f5](https://github.com/cuttlefisch/mae/commit/e5b96f523ceeb720f333666d82eb3153056d73af))
 
 ## [0.14.203] - 2026-11-25
 
