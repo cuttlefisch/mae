@@ -1,0 +1,84 @@
+# The delivery gate (daemon/src/collab_handler/delivery_gate.rs): a principal
+# who loses read access to a KB stops receiving its documents on the sessions
+# already open.
+
+[[mutant]]
+id = "delivery-gate/not-applied"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_member_removed_while_connected_is_closed_out_at_the_next_delivery)"
+ref = "a removed member is closed out at the next delivery"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/mod.rs"
+find = '''        if !gate.admits(doc_store, &kb_id).await {'''
+replace = '''        if false && !gate.admits(doc_store, &kb_id).await {'''
+
+[[mutant]]
+id = "delivery-gate/refusal-read-as-allow"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_member_removed_while_connected_is_closed_out_at_the_next_delivery)"
+ref = "a refused decision is not an allow"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/delivery_gate.rs"
+find = '''        Ok(AccessDecision::Allow)'''
+replace = '''        Ok(_)'''
+
+[[mutant]]
+id = "delivery-gate/collection-write-keeps-the-allow"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_member_removed_while_connected_is_closed_out_at_the_next_delivery)"
+ref = "a collection write moves the access generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''                self.note_access_change(&kb_id);'''
+replace = ''''''
+
+[[mutant]]
+id = "delivery-gate/block-keeps-the-allow"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_block_closes_a_principal_out_though_no_document_changed)"
+ref = "a blocklist change moves the access generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        self.derive_cache.write().await.remove(kb_id);
+        self.note_access_change(kb_id);'''
+replace = '''        self.derive_cache.write().await.remove(kb_id);'''
+
+[[mutant]]
+id = "delivery-gate/timebox-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_lapsed_timebox_is_refused_at_delivery_with_nothing_written)"
+ref = "a memoized allow ends at the membership's timebox horizon"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/delivery_gate.rs"
+find = '''            if g == generation && now_unix() < until {'''
+replace = '''            if g == generation {'''
+
+[[mutant]]
+id = "delivery-gate/closed-twice"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_member_removed_while_connected_is_closed_out_at_the_next_delivery)"
+ref = "a document is closed and reported once"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/delivery_gate.rs"
+find = '''        if !self.closed.contains(doc) && !docs.iter().any(|d| d == doc) {'''
+replace = '''        if !docs.iter().any(|d| d == doc) {'''
+
+[[mutant]]
+id = "delivery-gate/anchor-keeps-the-allow"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(recording_an_anchor_ends_a_memoized_allow)"
+ref = "recording an anchor moves the access generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        drop(anchors);
+        self.note_access_change(kb_id);
+        Ok(())'''
+replace = '''        drop(anchors);
+        Ok(())'''

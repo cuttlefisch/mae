@@ -18,7 +18,9 @@ use crate::config::DaemonConfig;
 const USAGE: &str = "usage: mae-daemon kb member add --kb-id <id> --member <SHA256:…> --role viewer|editor [--label <label>]\n\
      \x20      mae-daemon kb member remove --kb-id <id> --member <SHA256:…>\n\
      \x20      mae-daemon kb member list --kb-id <id>\n\
-     The daemon must be stopped; the KB must be owned by this daemon (e.g. a seeded KB).";
+     With the daemon running, the change goes through its operator socket and reaches connected\n\
+     editors at once; with it stopped, it is written to the store directly. Either way the KB\n\
+     must be owned by this daemon (e.g. a seeded KB).";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
@@ -108,6 +110,9 @@ async fn execute(config: &DaemonConfig, action: &str, a: &Args) -> Result<String
         "remove" => Some(OperatorMemberOp::Remove { member: member()? }),
         _ => None,
     };
+    if let Some(out) = live(config, action, a).await? {
+        return Ok(out);
+    }
     let store = crate::seed_apply_cli::open_exclusive(config)?;
     match op {
         Some(op) => {
@@ -125,6 +130,36 @@ async fn execute(config: &DaemonConfig, action: &str, a: &Args) -> Result<String
             Ok(out)
         }
     }
+}
+
+/// The command through a running daemon's operator socket; `None` when no
+/// daemon answers there, so the command works on the stopped store instead.
+async fn live(config: &DaemonConfig, action: &str, a: &Args) -> Result<Option<String>, String> {
+    let path = mae_daemon::operator_socket::path(&config.effective_data_dir());
+    let mut params = serde_json::json!({"kb_id": a.kb_id});
+    if let Some(m) = &a.member {
+        params["member"] = serde_json::json!(m);
+    }
+    if action == "add" {
+        params["role"] = serde_json::json!(a.role.as_deref().unwrap_or_default());
+        params["label"] = serde_json::json!(a.label);
+    }
+    let method = format!("member.{action}");
+    let Some(result) = mae_daemon::operator_socket::request(&path, &method, params).await? else {
+        return Ok(None);
+    };
+    if action != "list" {
+        return Ok(Some(result.to_string()));
+    }
+    let mut out = format!("owner  {}", result["owner"].as_str().unwrap_or_default());
+    for m in result["members"].as_array().into_iter().flatten() {
+        let (fp, role) = (
+            m["member"].as_str().unwrap_or_default(),
+            m["role"].as_str().unwrap_or_default(),
+        );
+        out.push_str(&format!("\n{role:<6} {fp}"));
+    }
+    Ok(Some(out))
 }
 
 #[cfg(test)]

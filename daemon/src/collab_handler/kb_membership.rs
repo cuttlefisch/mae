@@ -696,6 +696,20 @@ pub async fn operator_change_membership(
     kb_id: &str,
     op: OperatorMemberOp<'_>,
 ) -> Result<serde_json::Value, String> {
+    let nobody: SharedBroadcaster = Default::default();
+    operator_change_membership_live(doc_store, &nobody, operator, kb_id, op).await
+}
+
+/// [`operator_change_membership`] on a running daemon: the change reaches the
+/// sessions subscribed to the KB's collection through `broadcaster`, as an
+/// owner's change over collab does.
+pub async fn operator_change_membership_live(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    operator: &mae_mcp::identity::Identity,
+    kb_id: &str,
+    op: OperatorMemberOp<'_>,
+) -> Result<serde_json::Value, String> {
     let coll = load_collection(doc_store, kb_id)
         .await
         .map_err(|e| format!("KB '{kb_id}': {}", McpError::from(e).message))?;
@@ -732,7 +746,6 @@ pub async fn operator_change_membership(
     if !add && coll.role_of(member).is_none() {
         return Err(format!("'{member}' is not a member of KB '{kb_id}'"));
     }
-    let broadcaster: SharedBroadcaster = Default::default();
     let who = (0, Attribution::Internal(InternalWriter::OperatorMembership));
     let change = MembershipChange {
         member,
@@ -740,7 +753,7 @@ pub async fn operator_change_membership(
         role,
         label,
     };
-    let result = apply_membership_change(doc_store, &broadcaster, who, kb_id, change)
+    let result = apply_membership_change(doc_store, broadcaster, who, kb_id, change)
         .await
         .map_err(|e| e.message)?;
     // The only way here is a storage write failing just after the roles write
