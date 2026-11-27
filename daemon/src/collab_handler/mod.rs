@@ -22,6 +22,7 @@
 
 mod access;
 mod content_verify;
+pub(crate) mod delivery_gate;
 mod docs_methods;
 pub mod governor;
 mod kb_artifacts;
@@ -280,8 +281,31 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_docs: &mut HashSet<String>,
+    gate: &mut delivery_gate::DeliveryGate,
     (writer, timeout): (&mut W, std::time::Duration),
 ) -> bool {
+    if let Some((doc, kb_id)) = event
+        .doc_id()
+        .and_then(|d| delivery_gate::kb_of(d).map(|kb| (d, kb)))
+    {
+        if !gate.admits(doc_store, &kb_id).await {
+            let docs = gate.closing(session_docs, &kb_id, doc);
+            delivery_gate::close_docs(doc_store, broadcaster, session.id, session_docs, &docs)
+                .await;
+            info!(session = session.id, kb_id = %kb_id, closed = docs.len(),
+                "delivery: read access lost, KB documents closed (not_member)");
+            for d in &docs {
+                let notice = governor::doc_closed(d, "not_member");
+                if governor::write_json(writer, &notice, timeout)
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
     let method = format!("notifications/{}", event.event_type());
     debug!(session = session.id, event_type = %method, "broadcasting event to client");
     let notification = match event {
@@ -445,7 +469,9 @@ async fn run_session<R, W>(
     // Subscribe with empty subs — client opts in later. Doc-scoped: a
     // document's events reach this session only once it is subscribed to
     // that document (which every doc method gates on access).
-    let mut event_rx = register_session(&broadcaster, session_id, auth_principal.as_deref());
+    let mut event_rx = register_session(&broadcaster, session_id);
+    // Every KB document event is re-authorized as it is delivered.
+    let mut gate = delivery_gate::DeliveryGate::new(auth_principal.as_deref(), transport);
 
     let tool_defs: Vec<ToolInfo> = vec![];
     let mut consecutive_write_failures: u32 = 0;
@@ -547,7 +573,7 @@ async fn run_session<R, W>(
 
             Some(event) = event_rx.recv() => {
                 let out = (&mut writer, write_timeout);
-                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, out).await;
+                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, &mut gate, out).await;
                 consecutive_write_failures = if delivered { 0 } else { consecutive_write_failures + 1 };
                 if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
                     warn!(session = session_id, "disconnecting after 3 write failures");
@@ -654,14 +680,9 @@ fn augment_initialize(
 pub(crate) fn register_session(
     broadcaster: &SharedBroadcaster,
     session_id: u64,
-    principal: Option<&str>,
 ) -> tokio::sync::mpsc::Receiver<EditorEvent> {
     let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-    let rx = bc.subscribe_doc_scoped(session_id, vec![]);
-    // Recorded so a member's removal can cut this session off its KB's
-    // documents at once (`kb_membership::cut_off`).
-    bc.set_principal(session_id, principal);
-    rx
+    bc.subscribe_doc_scoped(session_id, vec![])
 }
 
 /// The JSON-RPC error for a document write that storage refused or failed.
@@ -1469,16 +1490,8 @@ async fn append_signed_revoke(
     let update = coll.append_signed_op(&op, &sig, &pubkey);
     persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update)
         .await
-        .map_err(McpError::internal_fault)?;
-    // One co-signature may not reach the quorum: cut the subject's open
-    // sessions off only once the derivation no longer counts them a member.
-    let after = doc_store
-        .derived_membership(kb_id, coll, &anchor, now)
-        .await;
-    if !after.members.contains_key(subject) {
-        kb_membership::cut_off(broadcaster, kb_id, subject);
-    }
-    Ok(())
+        .map(|_| ())
+        .map_err(McpError::internal_fault)
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
@@ -2168,7 +2181,6 @@ async fn handle_doc_request_inner(
         Method::KbBlockPrincipal | Method::KbUnblockPrincipal => {
             kb_governance::handle_kb_block_unblock_principal(
                 doc_store,
-                broadcaster,
                 session_id,
                 auth_principal,
                 request.method.as_str(),

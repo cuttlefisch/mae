@@ -139,6 +139,10 @@ pub struct DocStore {
     /// took it BEFORE reading content can tell whether what it read is still
     /// current. The live site's derivation cache keys on it (`site_cache`).
     kb_generations: std::sync::Mutex<HashMap<String, u64>>,
+    /// Per KB, moved by every change to what decides who may read it: its
+    /// collection document, its anchor, its blocklist
+    /// ([`Self::kb_access_generation`]).
+    kb_access_generations: std::sync::Mutex<HashMap<String, u64>>,
     /// The live site's derived KBs (ADR-119 D6, first step).
     site_cache: crate::site_cache::SiteCache,
     /// Per-KB LOCAL self-protection blocklist (ADR-039 A2, #162): principals this
@@ -372,6 +376,7 @@ impl DocStore {
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
             kb_generations: std::sync::Mutex::new(HashMap::new()),
+            kb_access_generations: std::sync::Mutex::new(HashMap::new()),
             site_cache: crate::site_cache::SiteCache::default(),
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
@@ -856,6 +861,7 @@ impl DocStore {
     /// the collection SV changes — i.e. the local blocklist (block/unblock).
     async fn invalidate_derive_cache(&self, kb_id: &str) {
         self.derive_cache.write().await.remove(kb_id);
+        self.note_access_change(kb_id);
     }
 
     /// Install the daemon's signing identity (ADR-026). Called once at startup in
@@ -899,7 +905,10 @@ impl DocStore {
     /// never leaves changed content under an unmoved generation.
     fn note_kb_write(&self, doc_name: &str) {
         let kb = match mae_sync::DocAddress::parse(doc_name) {
-            Some(mae_sync::DocAddress::KbCollection { kb_id }) => kb_id,
+            Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+                self.note_access_change(&kb_id);
+                kb_id
+            }
             Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
             _ => return,
         };
@@ -908,6 +917,43 @@ impl DocStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *g.entry(kb).or_insert(0) += 1;
+    }
+
+    /// After a change to an input of `kb_access` for KB `kb_id` is visible:
+    /// move its access generation. Never before the change is visible, or a
+    /// reader could pair the new generation with the old state and keep a
+    /// stale decision.
+    fn note_access_change(&self, kb_id: &str) {
+        let mut g = self
+            .kb_access_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *g.entry(kb_id.to_string()).or_insert(0) += 1;
+    }
+
+    /// KB `kb_id`'s access generation: it moves whenever anything that
+    /// decides who may read the KB changes (the collection document, the
+    /// anchor, the blocklist). Take it BEFORE the access decision it vouches
+    /// for. Time is the one input it does not cover: see
+    /// [`Self::membership_valid_until`].
+    pub fn kb_access_generation(&self, kb_id: &str) -> u64 {
+        let g = self
+            .kb_access_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        g.get(kb_id).copied().unwrap_or(0)
+    }
+
+    /// Until when (unix seconds) KB `kb_id`'s last derived membership holds
+    /// without a change: the earliest future timebox in its op-log. With no
+    /// derivation cached (a KB governed by its member list, which carries no
+    /// timeboxes), nothing expires: `u64::MAX`.
+    pub async fn membership_valid_until(&self, kb_id: &str) -> u64 {
+        self.derive_cache
+            .read()
+            .await
+            .get(kb_id)
+            .map_or(u64::MAX, |e| e.valid_until)
     }
 
     /// KB `kb_id`'s content generation ([`Self::note_kb_write`]). Take it
@@ -1014,6 +1060,8 @@ impl DocStore {
             warn!(kb_id, error = %e, "KB content anchor not persisted");
         }
         anchors.insert(kb_id.to_string(), (owner_pubkey, source));
+        drop(anchors);
+        self.note_access_change(kb_id);
         Ok(())
     }
 
@@ -1056,6 +1104,8 @@ impl DocStore {
             .put_kb_anchor(kb_id, &owner_pubkey, source)
             .await?;
         anchors.insert(kb_id.to_string(), (owner_pubkey, source));
+        drop(anchors);
+        self.note_access_change(kb_id);
         Ok(true)
     }
 

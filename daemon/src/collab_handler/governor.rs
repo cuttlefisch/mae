@@ -27,7 +27,7 @@ use mae_mcp::protocol::{JsonRpcResponse, McpError};
 use mae_sync::kb::Transport;
 use tokio::sync::mpsc;
 
-use super::{kb_access, AccessDecision, KbOp};
+use super::delivery_gate;
 use crate::doc_store::DocStore;
 
 /// A request from the transport to the session loop it governs.
@@ -239,30 +239,19 @@ pub(crate) async fn reauthorize_open_docs(
     let mut decided: HashMap<String, bool> = HashMap::new();
     let mut lost = Vec::new();
     for doc in session_docs.iter() {
-        let kb_id = match mae_sync::DocAddress::parse(doc) {
-            Some(mae_sync::DocAddress::KbCollection { kb_id })
-            | Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
-            _ => continue,
+        let Some(kb_id) = delivery_gate::kb_of(doc) else {
+            continue;
         };
         if !decided.contains_key(&kb_id) {
-            let allowed = matches!(
-                kb_access(doc_store, &kb_id, principal, KbOp::Read, transport).await,
-                Ok(AccessDecision::Allow)
-            );
+            let allowed = delivery_gate::may_read(doc_store, &kb_id, principal, transport).await;
             decided.insert(kb_id.clone(), allowed);
         }
         if !decided[&kb_id] {
             lost.push((doc.clone(), kb_id));
         }
     }
-    for (doc, _) in &lost {
-        session_docs.remove(doc);
-        broadcaster
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .unsubscribe_doc(session_id, doc);
-        let _ = doc_store.track_client_disconnect(doc).await;
-    }
+    let docs: Vec<String> = lost.iter().map(|(d, _)| d.clone()).collect();
+    delivery_gate::close_docs(doc_store, broadcaster, session_id, session_docs, &docs).await;
     lost
 }
 

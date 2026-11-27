@@ -603,31 +603,6 @@ pub struct MembershipChange<'a> {
     pub label: &'a str,
 }
 
-/// A removed member's sessions already open stop receiving KB `kb_id`'s
-/// documents at once: their subscriptions to its collection and nodes are
-/// dropped (a new one needs an access-gated method, which now refuses). Without
-/// this, a removed member's open connection kept receiving the KB's changes
-/// until it disconnected. Every path that takes a principal's read access
-/// away calls it: removal, `kb/block_principal`, and a `kb/revoke` that
-/// reaches its quorum.
-pub(super) fn cut_off(broadcaster: &SharedBroadcaster, kb_id: &str, member: &str) {
-    let in_kb = |doc: &str| match mae_sync::DocAddress::parse(doc) {
-        Some(mae_sync::DocAddress::KbCollection { kb_id: k }) => k == kb_id,
-        Some(mae_sync::DocAddress::KbNode { kb_id: k, .. }) => k == kb_id,
-        _ => false,
-    };
-    let dropped = broadcaster
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .unsubscribe_principal_docs(member, in_kb);
-    if dropped > 0 {
-        info!(
-            kb_id,
-            member, dropped, "removed member's open subscriptions cut off"
-        );
-    }
-}
-
 /// The single membership write path (the RPC and the operator command both
 /// use it): update the collection's `member_roles`, persist and broadcast it,
 /// then mirror the change into the signed op-log when this daemon owns the KB.
@@ -656,9 +631,6 @@ async fn apply_membership_change(
     persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update)
         .await
         .map_err(McpError::internal_fault)?;
-    if !ch.add {
-        cut_off(broadcaster, kb_id, ch.member);
-    }
     // ADR-026: mirror the change into the signed op-log (owned KBs).
     let (action, signed_role) = if ch.add {
         (MembershipAction::Admit, Some(ch.role))
@@ -681,11 +653,6 @@ async fn apply_membership_change(
     // The legacy `member_roles` mutation above DID persist, so this is a real
     // success — but if the peer-verifiable signed op-log did not get the
     // matching op, say so rather than implying both landed (audit #589.4).
-    if !ch.add {
-        // Again, after the op-log write: a subscribe that passed its access
-        // check before the removal persisted may have landed since the first.
-        cut_off(broadcaster, kb_id, ch.member);
-    }
     let mut result = serde_json::json!({ "kb_id": kb_id, "member": ch.member, "added": ch.add });
     result["signed_oplog"] = serde_json::json!(appended.failure().is_none());
     if let Some(e) = appended.failure() {

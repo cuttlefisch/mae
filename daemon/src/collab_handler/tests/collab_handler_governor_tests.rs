@@ -123,7 +123,7 @@ async fn reauthorization_closes_only_the_kb_the_principal_lost() {
     .await;
 
     let bob_session = 9;
-    let mut rx = register_session(&bc, bob_session, None);
+    let mut rx = register_session(&bc, bob_session);
     bc.lock().unwrap().add_event_sub(bob_session, "sync_update");
     let mut bob_docs = open(&["kbc:kra", "kbc:krb", "shared:pad"]);
     for d in &bob_docs {
@@ -288,6 +288,8 @@ async fn a_document_closed_for_a_full_queue_is_reported_to_the_client() {
         broadcaster.lock().unwrap().broadcast(&update(n));
     }
     let mut docs: HashSet<String> = [doc.to_string()].into();
+    // The loopback principal: the delivery gate admits it, as `kb_access` does.
+    let mut gate = delivery_gate::DeliveryGate::new(None, Transport::Hub);
     let first = rx.try_recv().expect("queued");
     let mut out: Vec<u8> = Vec::new();
     let timeout = std::time::Duration::from_secs(1);
@@ -298,6 +300,7 @@ async fn a_document_closed_for_a_full_queue_is_reported_to_the_client() {
             &store,
             &broadcaster,
             &mut docs,
+            &mut gate,
             (&mut out, timeout)
         )
         .await
@@ -324,6 +327,7 @@ async fn a_document_closed_for_a_full_queue_is_reported_to_the_client() {
         &store,
         &broadcaster,
         &mut docs,
+        &mut gate,
         (&mut out, timeout),
     )
     .await;

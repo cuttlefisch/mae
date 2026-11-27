@@ -1391,11 +1391,12 @@ as the daemon.
   only the daemon's own account can open it.
   - The change applies at once, without a restart.
   - Connected editors receive it.
-  - A removed member's open sessions stop receiving the KB's changes at once, and their next request
-    is refused. The same holds when an owner removes a member from the editor, for a principal
-    blocked with `kb/block_principal`, and for a member removed by a `kb/revoke` once it reaches its
-    quorum. One exception: a grant that lapses at its expiry time ends the member's access on their
-    next request, but a session they already have open keeps receiving until it disconnects.
+  - A removed member's open sessions stop receiving the KB's changes, and their next request is
+    refused. Each session re-checks read access whenever it is about to deliver one of a KB's
+    documents, so this holds however access ends: this command, an owner's removal from the editor
+    or a signed op, a `kb/revoke` that reaches its quorum, a removal synced from a peer,
+    `kb/block_principal`, or a timeboxed grant lapsing. The session receives
+    `session/doc_closed` (`not_member`) for each of the KB's documents it held.
   - A directory sync can run it every few minutes without disconnecting anyone.
 - **With the daemon stopped**, the command writes the store directly, under the store lock, like
   `kb seed`. It refuses, writing nothing: a KB another

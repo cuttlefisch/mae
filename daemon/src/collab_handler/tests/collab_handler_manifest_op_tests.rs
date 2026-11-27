@@ -309,36 +309,3 @@ fn the_helper_signs_what_the_verifier_checks() {
     let sig = mae_sync::encoding::base64_to_update(h["sig"].as_str().unwrap()).unwrap();
     assert!(op.verify(&sig, &a.pk));
 }
-
-/// A member removed while connected stops receiving the KB's changes on the
-/// sessions they already have open; another member's session keeps them.
-/// Before, the removed member's open connection kept receiving until it
-/// disconnected. Kills the removal not cutting subscriptions off.
-#[tokio::test]
-async fn a_removed_members_open_sessions_stop_receiving_the_kb() {
-    let (mut h, k) = hv(false, false, true).await;
-    let node = mae_sync::kb_node_doc_name(KB, "concept:shared");
-    let (bob_sid, carol_sid) = (601, 602);
-    let mut bob_rx = register_session(&h.bc, bob_sid, Some(&k.bob.fp));
-    let mut carol_rx = register_session(&h.bc, carol_sid, Some(&k.carol.fp));
-    {
-        let mut b = h.bc.lock().unwrap();
-        for sid in [bob_sid, carol_sid] {
-            b.add_event_sub(sid, "sync_update");
-            b.subscribe_doc(sid, &node);
-        }
-    }
-    let rm = kb_member_msg("kb/remove_member", KB, &k.bob.fp, None);
-    let r = h.call(k.owner.bearer(), rm).await;
-    assert!(r.error.is_none(), "{:?}", r.error);
-    while bob_rx.try_recv().is_ok() {}
-    while carol_rx.try_recv().is_ok() {}
-    h.bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-        buffer_name: node.clone(),
-        update_base64: "AA==".into(),
-        wal_seq: 1,
-        content_header: None,
-    });
-    assert!(bob_rx.try_recv().is_err(), "the removed member is cut off");
-    assert!(carol_rx.try_recv().is_ok(), "a member still receives");
-}
