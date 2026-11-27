@@ -211,6 +211,7 @@ async fn the_fingerprint_shape_accepts_every_real_key() {
 /// subscribed to the KB's collection, and the socket is owner-only. Kills: a
 /// live change that is not broadcast, a socket other accounts can open, and a
 /// socket that serves anything but the membership commands.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_running_daemon_takes_membership_changes_on_its_operator_socket() {
     use std::os::unix::fs::PermissionsExt;
@@ -284,6 +285,7 @@ async fn a_running_daemon_takes_membership_changes_on_its_operator_socket() {
 
 /// With nothing listening, `request` says so (`None`), so the command uses
 /// the stopped store; a stale socket file is replaced on the next start.
+#[cfg(unix)]
 #[tokio::test]
 async fn no_daemon_means_the_offline_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -300,6 +302,7 @@ async fn no_daemon_means_the_offline_path() {
 
 /// The socket's directory must be a real directory: a symlink in its place
 /// (one another account could aim elsewhere) is refused, not followed.
+#[cfg(unix)]
 #[tokio::test]
 async fn the_socket_directory_is_never_a_symlink() {
     let dir = tempfile::tempdir().unwrap();

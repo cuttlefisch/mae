@@ -1388,7 +1388,8 @@ as the daemon.
 
 - **With the daemon running**, the command goes through the daemon's operator socket,
   `operator/operator.sock` in its data directory. The directory is `0700` and the socket `0600`:
-  only the daemon's own account can open it.
+  only the daemon's own account can open it. The socket exists on Linux and macOS only: a daemon on
+  Windows opens none, so there the command needs the daemon stopped, as before.
   - The change applies at once, without a restart.
   - Connected editors receive it.
   - A removed member's open sessions stop receiving the KB's changes, and their next request is

@@ -589,7 +589,14 @@ async fn spawn_operator_socket(
     doc_store: Arc<doc_store::DocStore>,
     broadcaster: mae_mcp::broadcast::SharedBroadcaster,
 ) {
+    #[cfg(not(unix))]
+    {
+        let _ = (config, doc_store, broadcaster);
+        info!("operator socket: not on this platform; `kb member` needs the daemon stopped");
+    }
+    #[cfg(unix)]
     let path = mae_daemon::operator_socket::path(&config.effective_data_dir());
+    #[cfg(unix)]
     match mae_daemon::operator_socket::bind(&path).await {
         Ok(listener) => {
             info!(socket = %path.display(), "operator socket ready");
