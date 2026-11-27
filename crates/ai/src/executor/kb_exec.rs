@@ -31,6 +31,18 @@ use crate::types::ToolCall;
 /// kb_shortest_path) so they can post-filter their own results for the
 /// AI-residency seed-content exemption (ADR-048/#358, extended #361/#366);
 /// every other arm is unaffected.
+/// The node-property tools, beside [`dispatch`] (whose preamble has already
+/// run for the call by the time this is reached).
+pub(super) fn dispatch_property(
+    editor: &mut Editor,
+    call: &ToolCall,
+) -> Option<Result<String, String>> {
+    match call.name.as_str() {
+        "kb_set_property" => Some(execute_kb_set_property(editor, &call.arguments)),
+        _ => None,
+    }
+}
+
 pub(super) fn dispatch(
     editor: &mut Editor,
     call: &ToolCall,
@@ -91,7 +103,6 @@ pub(super) fn dispatch(
         "kb_unregister" => execute_kb_unregister(editor, &call.arguments),
         "kb_set_ai_residency" => execute_kb_set_ai_residency(editor, &call.arguments),
         "kb_set_role" => execute_kb_set_role(editor, &call.arguments),
-        "kb_set_property" => execute_kb_set_property(editor, &call.arguments),
         "kb_reimport" => execute_kb_reimport(editor, &call.arguments),
         "kb_export_guidance" => execute_kb_export_guidance(editor, &call.arguments),
         "kb_export_subgraph_html" => {

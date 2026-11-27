@@ -49,7 +49,7 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
-use kb_crud::register_kb_crud_fns;
+use kb_crud::{register_kb_crud_fns, register_kb_property_fns};
 use kb_export::register_kb_export_fns;
 use kb_graph_view::register_kb_graph_view_fns;
 use kb_preview::register_kb_preview_fns;
@@ -629,6 +629,7 @@ impl SchemeRuntime {
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
         register_kb_crud_fns(&mut vm, &shared);
+        register_kb_property_fns(&mut vm, &shared);
         register_lsp_dap_fns(&mut vm, &shared);
         register_kb_graph_view_fns(&mut vm, &shared);
         register_kb_preview_fns(&mut vm, &shared);

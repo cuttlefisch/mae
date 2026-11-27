@@ -726,6 +726,9 @@ fn dispatch_tool(
     if let Some(result) = super::kb_exec::dispatch(editor, call, requester_provider) {
         return result;
     }
+    if let Some(result) = super::kb_exec::dispatch_property(editor, call) {
+        return result;
+    }
     if let Some(result) = super::shell_exec::dispatch(editor, call) {
         return result;
     }
