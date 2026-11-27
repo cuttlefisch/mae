@@ -778,6 +778,8 @@ pub(super) async fn derogate(
             "not on this KB's approver list".into(),
         ));
     }
+    // O24: ending a document's force is a controlled act too.
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let (kb, node) = (kb_id.to_string(), node_id.clone());
     let all = store
         .review_read(move |c| store::node_revisions(c, &kb, &node))
@@ -789,7 +791,7 @@ pub(super) async fn derogate(
     };
     let ovr = author_gate(store, std::slice::from_ref(&current), who, params).await?;
     let signer = signer(store)?;
-    let (kb, actor) = (kb_id.to_string(), actor(who));
+    let (kb, actor) = (kb_id.to_string(), super::strength::actor(who, &satisfied));
     flatten(
         store
             .review_write(move |c| -> TxnResult<Value> {

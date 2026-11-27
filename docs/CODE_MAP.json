@@ -1420,6 +1420,10 @@
           "kind": "mod"
         },
         {
+          "name": "incremental",
+          "kind": "mod"
+        },
+        {
           "name": "order",
           "kind": "mod"
         },

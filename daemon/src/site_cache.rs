@@ -27,8 +27,12 @@
 //! the first instead of each paying the derivation.
 //!
 //! **Bounded.** At most `capacity` KBs are held; the least recently used is
-//! dropped. Incremental re-derivation per node, with ADR-119's property test
-//! that it equals a full derivation, is the rest of D6.
+//! dropped.
+//!
+//! **Incremental.** Each held KB also keeps its [`Deriver`]: what each page's
+//! last derivation read and produced (`mae_site::incremental`). A derivation
+//! after a change re-renders only the pages whose fingerprint moved; the
+//! property test there holds the result equal to a full derivation.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -74,8 +78,13 @@ pub enum Derived {
 
 type Held = Option<(DerivationKey, Arc<Derived>)>;
 
+/// A KB's incremental state, handed to the derivation that runs off the async
+/// workers. Only the slot's holder uses it, so the lock is never contended.
+pub type SharedDeriver = Arc<Mutex<mae_site::incremental::Deriver>>;
+
 struct Slot {
     held: Arc<tokio::sync::Mutex<Held>>,
+    deriver: SharedDeriver,
     used: AtomicU64,
 }
 
@@ -85,6 +94,7 @@ pub struct SiteCache {
     capacity: AtomicUsize,
     tick: AtomicU64,
     derivations: AtomicU64,
+    rendered: AtomicU64,
 }
 
 impl Default for SiteCache {
@@ -94,6 +104,7 @@ impl Default for SiteCache {
             capacity: AtomicUsize::new(DEFAULT_CAPACITY),
             tick: AtomicU64::new(0),
             derivations: AtomicU64::new(0),
+            rendered: AtomicU64::new(0),
         }
     }
 }
@@ -109,9 +120,21 @@ impl SiteCache {
         self.derivations.load(Ordering::SeqCst)
     }
 
+    /// How many pages derivations have rendered rather than reused, since
+    /// the process started.
+    pub fn pages_rendered(&self) -> u64 {
+        self.rendered.load(Ordering::SeqCst)
+    }
+
+    /// Count `n` pages a derivation rendered.
+    pub fn note_rendered(&self, n: usize) {
+        self.rendered.fetch_add(n as u64, Ordering::SeqCst);
+    }
+
     /// KB `kb_id`'s site for `key`: the held one if it serves, otherwise
     /// `derive`'s, which is then held. `derive` reads the KB itself, after
-    /// the caller took `key`.
+    /// the caller took `key`, with the KB's kept [`SharedDeriver`] (a fresh
+    /// one when the cache holds nothing).
     pub async fn get_or_derive<F, Fut>(
         &self,
         kb_id: &str,
@@ -119,12 +142,12 @@ impl SiteCache {
         derive: F,
     ) -> Arc<Derived>
     where
-        F: FnOnce() -> Fut,
+        F: FnOnce(SharedDeriver) -> Fut,
         Fut: Future<Output = Derived>,
     {
         let Some(slot) = self.slot(kb_id) else {
             self.derivations.fetch_add(1, Ordering::SeqCst);
-            return Arc::new(derive().await);
+            return Arc::new(derive(SharedDeriver::default()).await);
         };
         let mut held = slot.held.lock().await;
         if let Some((k, site)) = held.as_ref() {
@@ -133,7 +156,7 @@ impl SiteCache {
             }
         }
         self.derivations.fetch_add(1, Ordering::SeqCst);
-        let site = Arc::new(derive().await);
+        let site = Arc::new(derive(Arc::clone(&slot.deriver)).await);
         if !matches!(*site, Derived::Failed) {
             *held = Some((key, Arc::clone(&site)));
         }
@@ -165,6 +188,7 @@ impl SiteCache {
         }
         let slot = Arc::new(Slot {
             held: Arc::new(tokio::sync::Mutex::new(None)),
+            deriver: SharedDeriver::default(),
             used: AtomicU64::new(now),
         });
         slots.insert(kb_id.to_string(), Arc::clone(&slot));

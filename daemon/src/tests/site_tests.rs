@@ -1160,3 +1160,48 @@ async fn an_attachment_the_store_holds_is_an_image_and_one_it_lacks_is_a_placeho
     assert_eq!(html.matches("data-state=\"missing\"").count(), 2, "{html}");
     assert!(!html.contains(&ghost), "{html}");
 }
+
+/// ADR-119 D8: a KB with publication review on is not served by the live app
+/// (its pages are the working copy, drafts included) until the published
+/// view lands: the same not-found as every refusal, on the very next request
+/// even with the KB already derived, and served again once review is off.
+#[tokio::test]
+async fn a_review_enabled_kb_is_not_served() {
+    let store = kb().await;
+    assert!(matches!(
+        site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await,
+        SitePage::Found { .. }
+    ));
+    let owner = mae_daemon::oauth_self_issue::ValidatedPrincipal {
+        principal: store.signer().unwrap().fingerprint(),
+        audience: vec![],
+        expires_at: u64::MAX,
+        issuer: "https://idp.example".into(),
+        subject: "owner".into(),
+        credential: mae_daemon::oauth_self_issue::Credential::IdpBound,
+        kind: mae_daemon::oauth_self_issue::PrincipalKind::Person,
+        sign_in: None,
+    };
+    let limits = mae_daemon::kb_query::KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 50,
+        max_search_results: 20,
+    };
+    let set = |on: bool| serde_json::json!({"kb_id": "kb-site", "review_enabled": on});
+    let m = "kb/review.set_policy";
+    mae_daemon::review::dispatch(m, &set(true), &store, &owner, limits)
+        .await
+        .unwrap();
+    assert_eq!(
+        site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await,
+        SitePage::NotFound,
+        "review on: not served"
+    );
+    mae_daemon::review::dispatch(m, &set(false), &store, &owner, limits)
+        .await
+        .unwrap();
+    assert!(matches!(
+        site::page(&store, "kb-site", "alpha", Some(READER), LIMITS).await,
+        SitePage::Found { .. }
+    ));
+}

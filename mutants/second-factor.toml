@@ -131,3 +131,27 @@ ref = "E8: pwd never counts"
 file = "daemon/src/oauth_config.rs"
 find = '''        if self.second_factor_amr.iter().any(|v| v == "pwd") {'''
 replace = '''        if false {'''
+
+[[mutant]]
+id = "second-factor/derogate-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(annulment_and_derogation_need_it_too)"
+ref = "O24: derogate"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    // O24: ending a document's force is a controlled act too.
+    let satisfied = super::strength::required(store, &g.policy, who)?;'''
+replace = '''    let satisfied = None;'''
+
+[[mutant]]
+id = "second-factor/annul-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(annulment_and_derogation_need_it_too)"
+ref = "O24: annul_attachment"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    // O24: an annulment can undo a signed PDF.
+    let satisfied = super::strength::required(store, &g.policy, who)?;'''
+replace = '''    let satisfied = None;'''

@@ -942,8 +942,59 @@ and answers later requests from it.
 - **Bound.** At most `oauth.site_cache_kbs` KBs are held (default 8), least recently used first out;
   0 derives per request.
 
-This is the coarse half of D6. Per-node invalidation, with the property test that incremental output
-equals a full derivation, is still to build. C13 still measures the cache's memory per KB.
+**Measured live** (v0.14.211, the test deployment, one CPU, 1,560 nodes):
+
+| Request | Time |
+|---|---|
+| The first page after a restart | 1.89 s (a 1.75 s derivation) |
+| Later pages, the same one and others | 29–56 ms |
+| The first page after an edit | 2.59 s (one full re-derivation) |
+| The page after that | 30 ms |
+
+The edit showed on the first page after it. Memory rose by 20–30 MiB. So the coarse cache met "a cached page in ≤ 50 ms", but not "a change visible ≤ 2 s after its commit" or "re-deriving after one node's change ≤ 200 ms". E3 is for those two.
+
+### E3. Incremental re-derivation, correct by construction
+
+The rest of D6. `mae_site::incremental::Deriver` keeps, per KB, what each page's last derivation read and produced. A held KB in the live app keeps its `Deriver` in its cache slot.
+
+- **A summary per page.** It holds what the first render and the semantics say: the ID, title, nodes and anchors, `CUSTOM_ID`s, link targets, and whether the page renders faithfully. A summary is reused while the page's text and the hidden namespaces are unchanged. The KB-wide lists (which pages publish, the resolver, the backlinks) are rebuilt from summaries on every derivation, at ~10 ms for 1,536 pages.
+- **An output per page.** An output (the page, its index entry, its plain blocks) is reused while its fingerprint is unchanged.
+- **Correct by construction.** Each page's second render gets a **page-local resolver**: only the KB resolver's entries for the targets its links and transclusions name, plus its own attachments. Its fingerprint hashes exactly that resolver, with the page's text, address, backlinks and the context (core version, hidden namespaces, highlighting). The render cannot read what the fingerprint does not cover, because nothing else is handed to it. The renderer reads the resolver in exactly two places, a link's target and a transclusion's member, and both are in the read set.
+- **No regression.** Rendering every page against its page-local resolver gives byte-identical output to the whole KB's resolver. This was checked on a 1,536-page bundle and by a test over random edits.
+- **The proof** is D6's property test. Random edit sequences cover:
+  - retitles, body edits, links added and removed;
+  - pages added, deleted and moved;
+  - tags;
+  - heading retitles, IDs and `CUSTOM_ID`s, including duplicate IDs;
+  - attachments appearing and going missing;
+  - transclusions;
+  - the hidden namespaces switched on and off.
+
+  After every step, a warm `Deriver` must give output equal to a fresh one. Declared mutants drop each fingerprint input in turn, and the test kills each.
+- **Measured** on one core, 1,536 pages with highlighting:
+
+  | Derivation | Time | Pages rendered |
+  |---|---|---|
+  | Cold | 958 ms | 1,536 |
+  | After a one-page edit | 44–48 ms | 1 |
+
+  The live instance's CPU is slower. The first live measurement after release will be recorded here.
+- **Still open.**
+  - Every derivation still reads every node document (`read_ms` in the daemon's "site: derived" line), so its cost is not yet known live. A per-document cache keyed by the document's generation is the next step if it is significant.
+  - The change index and the thin notices (D9) are not built.
+  - C13 still measures memory per KB. Each kept KB holds its pages' text and outputs alongside the derived site.
+
+### E1a. D8 enforced in the live app (2026-11-27)
+
+The live route's gate did not read the review policy: a KB with publication review on would have been
+served from its working copy, drafts included. D8 keeps such a KB off the live app until the
+published view (L3). The gate now answers it with the same not-found as every refusal, on every
+request and before the cache, so switching review on hides a cached KB at once. A policy that cannot
+be read hides it too.
+
+No KB on the test deployment had review on when this was found, so nothing was exposed. The
+published view on the site (in-force revisions only, with its leak test) is the next step for a
+review-enabled KB to be readable there.
 
 ### E2. `/edit/` belongs to the browser client
 
@@ -1014,13 +1065,36 @@ is: `/edit/` (the browser client).
 - **The licence opinion** and the self-built Graphviz module (D13).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
-  - C5b is measured (2026-11-27). D15 waits on three owner decisions:
-    - whether the bulk chord layer may be drawn at one pixel per CSS pixel. That is 10–30× cheaper,
-      and visibly softer on a 2× screen.
-    - whether the hierarchical views leave L1c until they are redesigned. As built, they take 0.3–2 s
-      and 0.35–1.9 GB.
-    - whether the parity suite's graph rows (P-55, P-57, P-57a, P-64) may assert on an exposed
-      graph model plus sampled pixels, instead of on chord elements.
+  - C5b is measured (2026-11-27). Its three owner decisions:
+    - **The bulk chord layer at one pixel per CSS pixel** *(owner, 2026-11-27, after a side-by-side
+      at 1,560 and 10,000 notes)*: yes. It is 10–30× cheaper (40 ms at 1,560 notes, about 125 ms at
+      10,000, against 0.4–4.5 s), keeps zoom usable, and is visibly softer only as background
+      texture: the current page's and the hovered note's links, the labels, the markers and the
+      visited band stay at device resolution on the overlay. A sharper layer swapped in later by a
+      worker, for small KBs, stays possible as an addition.
+
+      With this, D15 is decided: the chord layer baked at 1× in a worker and tinted for palette and
+      accent, the overlay at device resolution, notes as elements, and the hierarchical views
+      redesigned before the graph ships.
+    - **The hierarchical views** *(owner, 2026-11-27)*: redesigned **before** the graph ships, so
+      L1c's first release has the chord, sunburst and balloon views. As built, they take 0.3–2 s and
+      0.35–1.9 GB.
+
+      **What the redesign changes**, measured with `buildScene` on the same synthetic graphs:
+      - The layout itself is cheap. With the links removed, a scene takes 8–12 ms at 1,560 notes and
+        46–53 ms at 10,000, so positions stay in the browser.
+      - The cost is one scene object per link: an SVG path string and 24 culling boxes each. At
+        1,560 notes that is 22 MB of link data, against 1.1 MB for every note and folder, and
+        160–190 ms of the build. At 10,000 notes it is 1.3–1.4 s of the build.
+      - The redesign keeps the layout and makes no per-link objects. The worker draws the bundled
+        links straight into the 1× tinted layer, as the chord view does. Only the links of the
+        current, hovered and found notes get paths, for the overlay. With the links on a canvas,
+        nothing needs culling boxes.
+      - Still to measure, when it is built: the worker's bake of the bundled paths, which have more
+        segments than a chord.
+    - **The graph's parity rows** *(owner, 2026-11-27)*: P-55, P-57, P-57a and P-64 assert on the
+      graph model the mounted graph exposes, plus sampled pixels, instead of on chord elements. The
+      model's shape is in the parity spec, §3.7.
 
     Real-device GPU runs are still owed.
   - C7: fail-closed rules;
