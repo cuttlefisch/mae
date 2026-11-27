@@ -22,6 +22,7 @@
 
 mod access;
 mod content_verify;
+pub(crate) mod delivery_gate;
 mod docs_methods;
 pub mod governor;
 mod kb_artifacts;
@@ -31,7 +32,10 @@ mod kb_history;
 mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
-pub use kb_membership::{operator_change_membership, operator_list_members, OperatorMemberOp};
+pub use kb_membership::{
+    operator_change_membership, operator_change_membership_live, operator_list_members,
+    OperatorMemberOp,
+};
 mod kb_share_ownership;
 mod method_authz;
 mod refusal;
@@ -277,8 +281,31 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_docs: &mut HashSet<String>,
+    gate: &mut delivery_gate::DeliveryGate,
     (writer, timeout): (&mut W, std::time::Duration),
 ) -> bool {
+    if let Some((doc, kb_id)) = event
+        .doc_id()
+        .and_then(|d| delivery_gate::kb_of(d).map(|kb| (d, kb)))
+    {
+        if !gate.admits(doc_store, &kb_id).await {
+            let docs = gate.closing(session_docs, &kb_id, doc);
+            delivery_gate::close_docs(doc_store, broadcaster, session.id, session_docs, &docs)
+                .await;
+            info!(session = session.id, kb_id = %kb_id, closed = docs.len(),
+                "delivery: read access lost, KB documents closed (not_member)");
+            for d in &docs {
+                let notice = governor::doc_closed(d, "not_member");
+                if governor::write_json(writer, &notice, timeout)
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
     let method = format!("notifications/{}", event.event_type());
     debug!(session = session.id, event_type = %method, "broadcasting event to client");
     let notification = match event {
@@ -443,6 +470,8 @@ async fn run_session<R, W>(
     // document's events reach this session only once it is subscribed to
     // that document (which every doc method gates on access).
     let mut event_rx = register_session(&broadcaster, session_id);
+    // Every KB document event is re-authorized as it is delivered.
+    let mut gate = delivery_gate::DeliveryGate::new(auth_principal.as_deref(), transport);
 
     let tool_defs: Vec<ToolInfo> = vec![];
     let mut consecutive_write_failures: u32 = 0;
@@ -544,7 +573,7 @@ async fn run_session<R, W>(
 
             Some(event) = event_rx.recv() => {
                 let out = (&mut writer, write_timeout);
-                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, out).await;
+                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, &mut gate, out).await;
                 consecutive_write_failures = if delivered { 0 } else { consecutive_write_failures + 1 };
                 if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
                     warn!(session = session_id, "disconnecting after 3 write failures");

@@ -376,7 +376,10 @@ Each test must fail without its mechanism.
 - A missed deadline closes the socket with `4401`, and a frame sent after it is not applied.
 - Renewal with a different principal closes the socket.
 - A member removed between renewals loses that KB's documents at the next renewal, and keeps the
-  others.
+  others. *(2026-11-27: sooner. The daemon re-checks read access as it delivers each KB document
+  event, so the documents close when the KB's next event reaches the session, usually the
+  removal's own collection update. Renewal still closes any that no event reached first. The
+  notice and the client's handling are unchanged.)*
 
 **Authorization:**
 - An external-issuer token is refused on `/ws` while B6 holds.

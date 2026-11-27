@@ -1377,20 +1377,35 @@ with `approval_record: "signed_pdf"`.
 ### Members of a seeded KB: `mae-daemon kb member`
 
 ```bash
-systemctl --user stop mae-daemon
 mae-daemon kb member add    --kb-id notes --member SHA256:… --role viewer   # or editor; --label <name>
 mae-daemon kb member remove --kb-id notes --member SHA256:…
 mae-daemon kb member list   --kb-id notes
-systemctl --user start mae-daemon
 ```
 
-The operator's bridge until ADR-098: it changes membership of a KB **this daemon owns** (a seeded KB),
-offline under the store lock like `kb seed`, through the same write path as `kb/add_member`, and signs
-the change into the KB's membership op-log as the daemon. It refuses, writing nothing: a KB another
+The operator's bridge until ADR-098. It changes membership of a KB **this daemon owns** (a seeded KB),
+through the same write path as `kb/add_member`, and signs the change into the KB's membership op-log
+as the daemon.
+
+- **With the daemon running**, the command goes through the daemon's operator socket,
+  `operator/operator.sock` in its data directory. The directory is `0700` and the socket `0600`:
+  only the daemon's own account can open it. The socket exists on Linux and macOS only: a daemon on
+  Windows opens none, so there the command needs the daemon stopped, as before.
+  - The change applies at once, without a restart.
+  - Connected editors receive it.
+  - A removed member's open sessions stop receiving the KB's changes, and their next request is
+    refused. Each session re-checks read access whenever it is about to deliver one of a KB's
+    documents, so this holds however access ends: this command, an owner's removal from the editor
+    or a signed op, a `kb/revoke` that reaches its quorum, a removal synced from a peer,
+    `kb/block_principal`, or a timeboxed grant lapsing. The session receives
+    `session/doc_closed` (`not_member`) for each of the KB's documents it held.
+  - A directory sync can run it every few minutes without disconnecting anyone.
+- **With the daemon stopped**, the command writes the store directly, under the store lock, like
+  `kb seed`. It refuses, writing nothing: a KB another
 identity owns (its owner manages it), a role other than `viewer`/`editor` (ownership is not
 transferred here), the owner as the member, and a member that is not a key fingerprint. Like
-`token mint`, it acts as the KB's owner: it is a command for the operator only, never exposed as an
-MCP tool or an RPC.
+`token mint`, it acts as the KB's owner: it is a command for the operator only. The operator socket
+serves these three commands and nothing else; the KB socket the editor uses does not serve them, and
+no MCP tool or Scheme primitive reaches them (CLAUDE.md principle #16).
 
 ### A KB's content anchor: `mae-daemon kb anchor`
 

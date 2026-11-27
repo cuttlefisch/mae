@@ -416,6 +416,7 @@ async fn main() {
                 st.doc_store = Some(Arc::clone(&doc_store));
                 st.broadcaster = Some(broadcaster.clone());
             }
+            spawn_operator_socket(&config, Arc::clone(&doc_store), broadcaster.clone()).await;
             spawn_projector(&config, Arc::clone(&state), Arc::clone(&doc_store)).await;
             daemon_identity_for_oauth = spawn_collab_server(
                 &config,
@@ -527,6 +528,9 @@ async fn main() {
 
     // Clean up socket (best-effort at shutdown)
     let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(mae_daemon::operator_socket::path(
+        &config.effective_data_dir(),
+    ));
 
     // Wait for tasks
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -573,6 +577,36 @@ fn refuse_invalid_config(
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// The operator's socket (`mae-daemon kb member` against this running
+/// daemon): owner-only, in the data directory, membership commands only. A
+/// failure to bind is logged, and the command then refuses while the daemon
+/// runs, as before.
+async fn spawn_operator_socket(
+    config: &DaemonConfig,
+    doc_store: Arc<doc_store::DocStore>,
+    broadcaster: mae_mcp::broadcast::SharedBroadcaster,
+) {
+    #[cfg(not(unix))]
+    {
+        let _ = (config, doc_store, broadcaster);
+        info!("operator socket: not on this platform; `kb member` needs the daemon stopped");
+    }
+    #[cfg(unix)]
+    let path = mae_daemon::operator_socket::path(&config.effective_data_dir());
+    #[cfg(unix)]
+    match mae_daemon::operator_socket::bind(&path).await {
+        Ok(listener) => {
+            info!(socket = %path.display(), "operator socket ready");
+            tokio::spawn(mae_daemon::operator_socket::serve(
+                listener,
+                doc_store,
+                broadcaster,
+            ));
+        }
+        Err(e) => warn!(socket = %path.display(), error = %e, "operator socket not started"),
     }
 }
 

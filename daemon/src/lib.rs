@@ -20,6 +20,7 @@ pub mod kb_query;
 pub mod lease_fence;
 pub mod message_limits;
 pub mod oauth_self_issue;
+pub mod operator_socket;
 pub mod projector;
 pub mod quota;
 pub mod review;
