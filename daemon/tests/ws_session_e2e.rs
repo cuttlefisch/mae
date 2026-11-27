@@ -150,11 +150,15 @@ async fn a_renewal_with_a_different_principal_closes() {
     assert_eq!(ws.closed().await, (4403, "principal_changed".to_string()));
 }
 
-/// B3: Bob holds Alice's KB and his own. Removed from Alice's between
-/// renewals, he loses exactly her KB's documents at the next renewal — told
-/// per document, `not_member` — and keeps his own on the same socket.
+/// Bob holds Alice's KB and his own. Removed from Alice's while connected, he
+/// loses exactly her KB's documents at once — the removal's own collection
+/// update is refused at delivery — told once per document, `not_member`. The
+/// renewal after closes nothing more, and his own KB stays open on the same
+/// socket. (Before delivery re-checked access, the documents stayed open, and
+/// kept receiving, until the next renewal; renewal re-authorization itself is
+/// pinned in `collab_handler_governor_tests`.)
 #[tokio::test]
-async fn a_member_removed_between_renewals_loses_that_kb_only() {
+async fn a_member_removed_while_connected_loses_that_kb_only() {
     // Bob's token lives 30 s with a 29 s lead: `renew_needed` about a second
     // in, then most of the lifetime to renew. With a 4 s token and a 2 s lead
     // a slow setup let `renew_needed` arrive during one of Bob's calls, which
@@ -179,10 +183,6 @@ async fn a_member_removed_between_renewals_loses_that_kb_only() {
     let bob_out = json!({"kb_id": "kra", "member": "SHA256:bob"});
     assert!(ok(&alice.call(3, "kb/remove_member", bob_out).await));
 
-    bob.seen_or_until(|v| v["method"] == "session/renew_needed")
-        .await;
-    let renew = json!({"token": d.token("SHA256:bob", 3600)});
-    assert!(ok(&bob.call(3, "session/renew", renew).await));
     let mut closed = std::collections::BTreeSet::new();
     while closed.len() < 2 {
         let v = bob.until(|v| v["method"] == "session/doc_closed").await;
@@ -202,10 +202,21 @@ async fn a_member_removed_between_renewals_loses_that_kb_only() {
         .map(|s| s.to_string())
         .collect();
     assert_eq!(closed, want);
+
+    bob.seen_or_until(|v| v["method"] == "session/renew_needed")
+        .await;
+    let renew = json!({"token": d.token("SHA256:bob", 3600)});
+    assert!(ok(&bob.call(3, "session/renew", renew).await));
     let own = bob
         .call(4, "sync/state_vector", json!({"doc": "kbc:krb"}))
         .await;
     assert!(ok(&own), "his own KB stays open on the same socket: {own}");
+    let notices = bob
+        .log
+        .iter()
+        .filter(|t| t.contains("session/doc_closed"))
+        .count();
+    assert_eq!(notices, 2, "each document is closed and reported once");
 }
 
 /// B4: a frame over `max_frame_bytes` closes the socket with `1009`.

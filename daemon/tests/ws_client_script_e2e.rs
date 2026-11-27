@@ -733,16 +733,18 @@ async fn slow_document(sc: Value) {
     assert_eq!(resynced.title(), "n1 editado");
 }
 
-/// "member removed between renewals": at the next renewal Bob loses that
-/// KB's documents, one notice each, and keeps the session and his own KB.
+/// "member removed between renewals": Bob loses that KB's documents, one
+/// notice each, and keeps the session and his own KB. The script fixes the
+/// notice and what the client does with it, not when it comes: the daemon
+/// re-checks access as it delivers each of the KB's documents, so the
+/// removal's own collection update closes them at once, and the renewal
+/// after closes nothing more.
 ///
 /// Bob's token and the lead are timed like [`renew_in_time`]'s. With a 4 s
 /// token and a 2 s lead, a slow setup (connect, share, join, remove) let
 /// `renew_needed` arrive during one of Bob's calls, which skipped it; the
 /// later wait for it then ran into `4401 token_expired`. `seen_or_until`
 /// finds it wherever it arrived, and the long lead leaves the renewal room.
-/// The renewal still comes after the removal, which is what the scenario
-/// needs: the daemon re-reads membership when the renewal arrives.
 async fn member_removed(sc: Value) {
     let d = spawn(Opts {
         renew_lead_secs: RENEW_TOKEN_SECS - 1,
@@ -762,15 +764,6 @@ async fn member_removed(sc: Value) {
     assert!(ok(&bob.call(2, "kb/join", json!({"kb_id": KB})).await));
     let bob_out = json!({"kb_id": KB, "member": "SHA256:bob"});
     assert!(ok(&alice.call(3, "kb/remove_member", bob_out).await));
-
-    tokio::time::timeout(
-        until_past(deadline),
-        bob.seen_or_until(|v| v["method"] == "session/renew_needed"),
-    )
-    .await
-    .expect("session/renew_needed by Bob's token deadline");
-    let renew = json!({"token": d.token("SHA256:bob", 3600)});
-    assert!(ok(&bob.call(3, "session/renew", renew).await));
 
     let want = &step(&sc, 0, "daemon")["frame"];
     // The collection document's notice is the node one's without `node_id`.
@@ -795,10 +788,25 @@ async fn member_removed(sc: Value) {
     let expect: std::collections::BTreeSet<String> =
         [format!("kbc:{KB}"), format!("kbn:{KB}:n1")].into();
     assert_eq!(closed, expect);
+
+    tokio::time::timeout(
+        until_past(deadline),
+        bob.seen_or_until(|v| v["method"] == "session/renew_needed"),
+    )
+    .await
+    .expect("session/renew_needed by Bob's token deadline");
+    let renew = json!({"token": d.token("SHA256:bob", 3600)});
+    assert!(ok(&bob.call(3, "session/renew", renew).await));
     let own = bob
         .call(4, "sync/state_vector", json!({"doc": "kbc:kb-b"}))
         .await;
     assert!(ok(&own), "his other KB and the session stay open: {own}");
+    let notices = bob
+        .log
+        .iter()
+        .filter(|t| t.contains("session/doc_closed"))
+        .count();
+    assert_eq!(notices, 2, "each document is closed and reported once");
 }
 
 /// "frame too large": a frame of exactly `limits.max_frame_bytes` is
