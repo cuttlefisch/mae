@@ -176,8 +176,14 @@ interface GraphModel {
 - **Colours** are as painted, and `base` is the tint of the all-links layer. A sampled pixel on that
   layer is `colours.base` composited over `colours.background`.
 - **Pixel checks.** A test converts a `Point` to device pixels with `devicePixelRatio` and compares the
-  pixel there with the expected colour, allowing for anti-aliasing: on a note, at a link's `sample`,
-  at a crossing, on the visited band.
+  pixel there with the expected colour: on a note, at a link's `sample`, at a crossing, on the visited
+  band.
+  - The model's points lie on the centreline of what they name, and a highlighted link is at least
+    2 device pixels wide. So the pixel there is fully covered, and anti-aliasing does not reach it.
+  - The tolerance is **2 per 8-bit channel**, for rounding only.
+  - The first implementation measures the largest difference it sees across both browsers, modes and
+    palettes, and records it here. If the measurement needs more than 2, the number changes here, for
+    both sides, never in one test.
 - **Versions.** The snapshot carries `version`. Either side may add fields within a version, and only a
   change of meaning raises it.
 
