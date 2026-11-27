@@ -61,12 +61,12 @@ fn a_held_site_serves_only_what_it_was_derived_from() {
 async fn a_kb_is_derived_once_per_change() {
     let cache = SiteCache::default();
     for _ in 0..3 {
-        cache.get_or_derive("a", key(1), || async { site() }).await;
+        cache.get_or_derive("a", key(1), |_| async { site() }).await;
     }
     assert_eq!(cache.derivations(), 1);
-    cache.get_or_derive("a", key(2), || async { site() }).await;
+    cache.get_or_derive("a", key(2), |_| async { site() }).await;
     assert_eq!(cache.derivations(), 2);
-    cache.get_or_derive("b", key(2), || async { site() }).await;
+    cache.get_or_derive("b", key(2), |_| async { site() }).await;
     assert_eq!(
         cache.derivations(),
         3,
@@ -83,7 +83,7 @@ async fn concurrent_misses_derive_once() {
         let cache = Arc::clone(&cache);
         tasks.push(tokio::spawn(async move {
             cache
-                .get_or_derive("a", key(1), || async {
+                .get_or_derive("a", key(1), |_| async {
                     tokio::task::yield_now().await;
                     site()
                 })
@@ -101,9 +101,9 @@ async fn concurrent_misses_derive_once() {
 async fn a_failure_is_not_held() {
     let cache = SiteCache::default();
     cache
-        .get_or_derive("a", key(1), || async { Derived::Failed })
+        .get_or_derive("a", key(1), |_| async { Derived::Failed })
         .await;
-    cache.get_or_derive("a", key(1), || async { site() }).await;
+    cache.get_or_derive("a", key(1), |_| async { site() }).await;
     assert_eq!(cache.derivations(), 2);
 }
 
@@ -114,14 +114,14 @@ async fn the_cache_is_bounded() {
     let cache = SiteCache::default();
     cache.set_capacity(2);
     for kb in ["a", "b", "a", "c"] {
-        cache.get_or_derive(kb, key(1), || async { site() }).await;
+        cache.get_or_derive(kb, key(1), |_| async { site() }).await;
     }
     assert_eq!(cache.held_kbs(), 2);
     let before = cache.derivations();
-    cache.get_or_derive("a", key(1), || async { site() }).await;
+    cache.get_or_derive("a", key(1), |_| async { site() }).await;
     assert_eq!(cache.derivations(), before, "a was used last, so b went");
     cache.set_capacity(0);
-    cache.get_or_derive("a", key(1), || async { site() }).await;
-    cache.get_or_derive("a", key(1), || async { site() }).await;
+    cache.get_or_derive("a", key(1), |_| async { site() }).await;
+    cache.get_or_derive("a", key(1), |_| async { site() }).await;
     assert_eq!(cache.derivations(), before + 2);
 }

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.214] - 2026-11-27
+
+
+
+
+### Features
+
+- *(site)* Re-derive only what changed (ADR-119 D6, incremental) ([f9b4236](https://github.com/cuttlefisch/mae/commit/f9b423692f587623066fb4abd20b80e5d44f9871))
+
+### Testing
+
+- *(site)* The property test's pages carry hidden-namespace references ([13072f9](https://github.com/cuttlefisch/mae/commit/13072f9f2458f5c5a8c3b42e8c44ee1500c1f52b))
+
 ## [0.14.213] - 2026-11-27
 
 
@@ -22,6 +35,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(activity)* A generous commit timeout by default; short only where it is the subject ([67bc12a](https://github.com/cuttlefisch/mae/commit/67bc12aee35e70e6ba43f35c2994a979983bfc1d))
+
+### Miscellaneous
+
+- Bump version to 0.14.213 ([62815a5](https://github.com/cuttlefisch/mae/commit/62815a53ed0ae50eaa0a0a14bd3cf86cf74d3596))
 
 ## [0.14.212] - 2026-11-27
 

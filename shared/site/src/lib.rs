@@ -27,6 +27,7 @@ pub mod components;
 pub mod derive;
 pub mod explorer;
 pub mod highlight;
+pub mod incremental;
 pub mod order;
 pub mod sanitize;
 pub mod strings;

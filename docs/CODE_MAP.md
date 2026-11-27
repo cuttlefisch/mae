@@ -551,6 +551,7 @@ Source: `shared/site/src/lib.rs`
 | `derive` | mod |
 | `explorer` | mod |
 | `highlight` | mod |
+| `incremental` | mod |
 | `order` | mod |
 | `sanitize` | mod |
 | `strings` | mod |

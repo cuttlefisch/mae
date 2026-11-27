@@ -42,6 +42,10 @@ async fn an_edit_shows_on_the_next_request() {
     assert!(html.contains("A newer body"), "{html}");
     assert!(!html.contains("Beta's body"), "{html}");
     assert_eq!(store.site_cache().derivations(), 2);
+    // Incremental (D6): the first derivation rendered both pages; the edit
+    // re-rendered beta alone (alpha's link to beta reads beta's address and
+    // title, which did not change).
+    assert_eq!(store.site_cache().pages_rendered(), 3);
 }
 
 /// A node removed from the collection, and a node document deleted while
