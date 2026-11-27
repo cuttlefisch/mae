@@ -31,7 +31,10 @@ mod kb_history;
 mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
-pub use kb_membership::{operator_change_membership, operator_list_members, OperatorMemberOp};
+pub use kb_membership::{
+    operator_change_membership, operator_change_membership_live, operator_list_members,
+    OperatorMemberOp,
+};
 mod kb_share_ownership;
 mod method_authz;
 mod refusal;

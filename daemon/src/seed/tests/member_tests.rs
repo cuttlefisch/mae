@@ -205,3 +205,88 @@ async fn the_fingerprint_shape_accepts_every_real_key() {
         );
     }
 }
+
+/// The same command against a RUNNING daemon, through its operator socket:
+/// the change applies without stopping the store, reaches a session
+/// subscribed to the KB's collection, and the socket is owner-only. Kills: a
+/// live change that is not broadcast, a socket other accounts can open, and a
+/// socket that serves anything but the membership commands.
+#[tokio::test]
+async fn a_running_daemon_takes_membership_changes_on_its_operator_socket() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = fixture_repo(&fixture_files());
+    let (store, _daemon, _) = seeded(&r).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = crate::operator_socket::path(dir.path());
+    let listener = crate::operator_socket::bind(&path).await.unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "owner-only");
+    let bc: mae_mcp::broadcast::SharedBroadcaster = Default::default();
+    let mut watcher = {
+        let mut b = bc.lock().unwrap();
+        let rx = b.subscribe(5, vec!["sync_update".into()]);
+        b.subscribe_doc(5, &format!("kbc:{KB}"));
+        rx
+    };
+    let server = tokio::spawn(crate::operator_socket::serve(
+        listener,
+        std::sync::Arc::clone(&store),
+        bc.clone(),
+    ));
+
+    let editor_a = Identity::generate("editor-a");
+    let fp = editor_a.fingerprint();
+    let add = json!({"kb_id": KB, "member": fp, "role": "viewer", "label": "editor-a"});
+    let out = crate::operator_socket::request(&path, "member.add", add)
+        .await
+        .unwrap()
+        .expect("a daemon answers");
+    assert_eq!(out["signed_oplog"], true);
+    assert!(reads(&store, &editor_a).await, "the live store changed");
+    assert!(watcher.try_recv().is_ok(), "a connected session saw it");
+
+    let list = crate::operator_socket::request(&path, "member.list", json!({"kb_id": KB}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(list["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["member"] == json!(fp) && m["role"] == "viewer"));
+
+    let rm = json!({"kb_id": KB, "member": fp});
+    crate::operator_socket::request(&path, "member.remove", rm)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!reads(&store, &editor_a).await, "removed at once");
+
+    for method in ["kb/query.get", "member.grant_owner", ""] {
+        let e = crate::operator_socket::request(&path, method, json!({"kb_id": KB}))
+            .await
+            .unwrap_err();
+        assert!(e.contains("unknown operator method"), "{method}: {e}");
+    }
+    // A live socket is never taken over by a second daemon.
+    assert!(crate::operator_socket::bind(&path).await.is_err());
+    server.abort();
+    // With no daemon answering, the command falls back to the stopped store.
+    let _ = server.await;
+    drop(watcher);
+}
+
+/// With nothing listening, `request` says so (`None`), so the command uses
+/// the stopped store; a stale socket file is replaced on the next start.
+#[tokio::test]
+async fn no_daemon_means_the_offline_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = crate::operator_socket::path(dir.path());
+    let none = crate::operator_socket::request(&path, "member.list", json!({"kb_id": KB})).await;
+    assert_eq!(none, Ok(None));
+    std::fs::write(&path, b"stale").unwrap();
+    assert!(
+        crate::operator_socket::bind(&path).await.is_ok(),
+        "a stale file is replaced"
+    );
+}
