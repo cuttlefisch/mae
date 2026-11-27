@@ -1015,8 +1015,16 @@ is: `/edit/` (the browser client).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
   - C5b is measured (2026-11-27). Its three owner decisions:
-    - **The bulk chord layer at one pixel per CSS pixel**: open. It is 10–30× cheaper and visibly
-      softer on a 2× screen. The owner is reviewing a side-by-side before deciding.
+    - **The bulk chord layer at one pixel per CSS pixel** *(owner, 2026-11-27, after a side-by-side
+      at 1,560 and 10,000 notes)*: yes. It is 10–30× cheaper (40 ms at 1,560 notes, about 125 ms at
+      10,000, against 0.4–4.5 s), keeps zoom usable, and is visibly softer only as background
+      texture: the current page's and the hovered note's links, the labels, the markers and the
+      visited band stay at device resolution on the overlay. A sharper layer swapped in later by a
+      worker, for small KBs, stays possible as an addition.
+
+      With this, D15 is decided: the chord layer baked at 1× in a worker and tinted for palette and
+      accent, the overlay at device resolution, notes as elements, and the hierarchical views
+      redesigned before the graph ships.
     - **The hierarchical views** *(owner, 2026-11-27)*: redesigned **before** the graph ships, so
       L1c's first release has the chord, sunburst and balloon views. As built, they take 0.3–2 s and
       0.35–1.9 GB. The redesign derives per-note positions on the server, cached with D6, and draws
