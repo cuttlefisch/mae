@@ -62,6 +62,7 @@ mod collab_handler_member_access_tests;
 mod collab_handler_membership_join_tests;
 mod collab_handler_method_routing_tests;
 mod collab_handler_n_way_convergence_tests;
+mod collab_handler_page_lifecycle_tests;
 mod collab_handler_paged_transfer_tests;
 mod collab_handler_persist_failure_tests;
 mod collab_handler_protocol_dispatch_tests;
