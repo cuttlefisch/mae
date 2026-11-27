@@ -31,7 +31,7 @@ use crate::site_cache::{DerivationKey, Derived};
 use crate::site_components::{KbComponents, Slots};
 use mae_org::{AttachmentState, ResolvedAttachment};
 use mae_site::components::{PageData, Slot};
-use mae_site::{derive_with, Addressing, SourcePage};
+use mae_site::{Addressing, SourcePage};
 use mae_sync::kb::{AttachmentRef, Encryption, KbCollectionDoc, KbNodeDoc};
 
 /// What the route answers.
@@ -209,8 +209,14 @@ pub async fn view(
     };
     let derived = doc_store
         .site_cache()
-        .get_or_derive(kb_id, key, || {
-            derive_kb(doc_store, kb_id, coll, (addressing.clone(), limits), opts)
+        .get_or_derive(kb_id, key, |deriver| {
+            derive_kb(
+                doc_store,
+                kb_id,
+                coll,
+                (addressing.clone(), limits),
+                (opts, deriver),
+            )
         })
         .await;
     match *derived {
@@ -252,28 +258,37 @@ async fn derive_kb(
     kb_id: &str,
     coll: KbCollectionDoc,
     (addressing, limits): (Addressing, SiteLimits),
-    opts: &mae_site::SiteOptions,
+    (opts, deriver): (&mae_site::SiteOptions, crate::site_cache::SharedDeriver),
 ) -> Derived {
+    let read = std::time::Instant::now();
     let sources = match readable_sources(doc_store, kb_id, &coll, limits).await {
         Ok(sources) => sources,
         Err(Refused::Unreadable) => return Derived::Failed,
         Err(_) => return Derived::TooLarge,
     };
+    let read_ms = read.elapsed().as_millis();
     let (opts, kb_id) = (opts.clone(), kb_id.to_string());
     let started = std::time::Instant::now();
     let derived = tokio::task::spawn_blocking(move || {
-        let site = derive_with(&sources, &addressing, &opts);
+        // A panic in an earlier derivation leaves nothing worth reusing.
+        let mut d = deriver.lock().unwrap_or_else(|poisoned| {
+            let mut d = poisoned.into_inner();
+            *d = Default::default();
+            d
+        });
+        let site = d.derive(&sources, &addressing, &opts);
         // P-108: never fatal, but said, once per derivation.
         for line in crate::site_highlight::plain_block_lines(&kb_id, &site.plain_blocks) {
             tracing::info!("{line}");
         }
-        (site, kb_id, sources.len())
+        (site, kb_id, sources.len(), d.last_rendered())
     })
     .await;
     match derived {
-        Ok((site, kb_id, pages)) => {
+        Ok((site, kb_id, pages, rendered)) => {
             let ms = started.elapsed().as_millis();
-            tracing::info!(kb_id = %kb_id, pages, ms, "site: derived");
+            doc_store.site_cache().note_rendered(rendered);
+            tracing::info!(kb_id = %kb_id, pages, rendered, read_ms, ms, "site: derived");
             Derived::Site(site)
         }
         Err(e) => {

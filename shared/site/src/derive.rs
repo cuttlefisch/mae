@@ -6,18 +6,18 @@
 //! nodes go into ONE resolver for the KB, so a link never points at a page
 //! that does not publish. The second render is each such page against it,
 //! and its HTML passes the final sanitiser.
+//!
+//! The passes themselves are [`crate::incremental`]'s: a full derivation is a
+//! fresh [`crate::incremental::Deriver`], and a kept one re-derives only what
+//! changed (D6).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use mae_org::{
-    parse, render, semantics, AttachmentState, HeadlineIds, NodeOrigin, ParseOptions,
-    RenderOptions, Rendered, Resolved, Resolver,
-};
+use mae_org::{AttachmentState, HeadlineIds, NodeOrigin, RenderOptions};
 
-use crate::address::{export_collision_key, is_reserved, valid_id, valid_tag, Addressing};
-use crate::highlight::{highlight_blocks, Highlighter, PlainBlock};
-use crate::sanitize::sanitize_fragment;
+use crate::address::{valid_tag, Addressing};
+use crate::highlight::{Highlighter, PlainBlock};
 
 /// One page's source: an Org text with a file-level `:ID:`.
 #[derive(Debug, Clone)]
@@ -178,26 +178,18 @@ impl std::fmt::Debug for SiteOptions {
 /// The render diagnostics that withhold a page: its output would not be what
 /// the author wrote (P-147). None depends on the resolver, so the first
 /// render decides them.
-fn withholds(kind: &str) -> bool {
+pub(crate) fn withholds(kind: &str) -> bool {
     kind.starts_with("macro_") && kind != "fragment_macro" || kind == "footnote_undefined"
 }
 
 /// How every page renders. A top-level headline is an `h2`: the page title
 /// is the page's one `h1`, written by the chrome (P-17), as ox-html's
 /// `org-html-toplevel-hlevel` 2 does.
-fn options() -> RenderOptions {
+pub(crate) fn options() -> RenderOptions {
     let below_the_title = mae_org::ToplevelHlevel::new(2).expect("2 is a heading level");
     RenderOptions::default()
         .with_headline_ids(HeadlineIds::Explicit)
         .with_toplevel_hlevel(below_the_title)
-}
-
-struct Parsed<'a> {
-    source: &'a SourcePage,
-    doc: mae_org::Document,
-    sem: mae_org::Semantics,
-    id: Option<String>,
-    title: Option<String>,
 }
 
 /// Derive every page of one KB, with no operator options.
@@ -205,83 +197,16 @@ pub fn derive(sources: &[SourcePage], addressing: &Addressing) -> Site {
     derive_with(sources, addressing, &SiteOptions::default())
 }
 
-/// Derive every page of one KB under the operator's options.
+/// Derive every page of one KB under the operator's options: a full
+/// derivation, a fresh [`crate::incremental::Deriver`]'s.
 pub fn derive_with(sources: &[SourcePage], addressing: &Addressing, opts: &SiteOptions) -> Site {
-    let mut site = Site::default();
-    let parsed: Vec<Parsed> = sources.iter().map(|s| parse_page(s, opts)).collect();
-    let candidates = addressable(&parsed, addressing, &mut site.withheld);
-
-    // Pass 1: where each page's nodes and CUSTOM_IDs land, and whether it
-    // renders faithfully.
-    let empty = Resolver::default();
-    let mut first: Vec<(usize, Rendered)> = Vec::new();
-    for i in candidates {
-        let p = &parsed[i];
-        let r = render(&p.doc, &p.sem, &options(), &empty);
-        match r.diagnostics.iter().find(|d| withholds(d.kind_name())) {
-            Some(d) => site.withheld.push(Withheld::Unfaithful {
-                id: p.id.clone().unwrap_or_default(),
-                kind: d.kind_name(),
-            }),
-            None => first.push((i, r)),
-        }
-    }
-    let mut resolver = resolver(&parsed, &first, addressing);
-    let backlinks = backlinks(&parsed, &first, addressing);
-
-    // Pass 2: every faithful page against the one resolver.
-    for (i, _) in &first {
-        let p = &parsed[*i];
-        let id = p.id.clone().unwrap_or_default();
-        let Some(href) = addressing.page_href(&id) else {
-            continue;
-        };
-        // A page's attachments are its own: NAMEs are per node.
-        resolver.attachments.clear();
-        resolver.attachments.extend(page_attachments(p));
-        let mut r = render(&p.doc, &p.sem, &options(), &resolver);
-        scrub_nodes(&mut r.body, &opts.hidden_namespaces);
-        // After scrubbing: a block is highlighted as it is shown.
-        if let Some(h) = &opts.highlighter {
-            highlight_blocks(&mut r.body, &id, h.as_ref(), &mut site.plain_blocks);
-        }
-        site.index.push(IndexEntry {
-            id: id.clone(),
-            title: p.title.clone().unwrap_or_else(|| id.clone()),
-            href: href.clone(),
-            tags: page_tags(&p.sem),
-            links: Vec::new(),
-            text: mae_org::text_of(&r.body),
-        });
-        let properties = file_properties(&p.sem, &opts.hidden_namespaces);
-        let page = DerivedPage {
-            title: p.title.clone().unwrap_or_else(|| id.clone()),
-            href,
-            html: sanitize_fragment(&mae_org::to_html(&r.body)),
-            backlinks: backlinks.get(&id).cloned().unwrap_or_default(),
-            tags: page_tags(&p.sem),
-            toc: toc(&r.body),
-            dates: dates_of(&properties),
-            properties,
-            id: id.clone(),
-        };
-        for t in &page.tags {
-            site.tags.entry(t.clone()).or_default().push(PageRef {
-                title: page.title.clone(),
-                id: page.id.clone(),
-                href: page.href.clone(),
-            });
-        }
-        site.pages.insert(id, page);
-    }
-    finish_lists(&mut site);
-    site
+    crate::incremental::Deriver::default().derive(sources, addressing, opts)
 }
 
 /// The lists derived from every page at once: each tag's pages A to Z, and
 /// each index entry's outgoing links to published pages (the backlinks,
 /// inverted), with the index in ID order.
-fn finish_lists(site: &mut Site) {
+pub(crate) fn finish_lists(site: &mut Site) {
     for pages in site.tags.values_mut() {
         pages.sort_by(crate::explorer::by_title);
     }
@@ -341,7 +266,7 @@ pub fn scrub(s: &str, hidden: &[String]) -> Option<String> {
     changed.then_some(out)
 }
 
-fn scrub_nodes(nodes: &mut [mae_org::Node], hidden: &[String]) {
+pub(crate) fn scrub_nodes(nodes: &mut [mae_org::Node], hidden: &[String]) {
     if hidden.is_empty() {
         return;
     }
@@ -358,59 +283,10 @@ fn scrub_nodes(nodes: &mut [mae_org::Node], hidden: &[String]) {
     }
 }
 
-/// Who links to whom, over the pages that publish only (P-36): a link to any
-/// node of page Q is a link to Q, a page never backlinks itself, and a link
-/// from a withheld page counts for nothing. mae-org lists only the links in
-/// rendered regions, so a `:noexport:` subtree's links do not count either.
-fn backlinks(
-    parsed: &[Parsed],
-    first: &[(usize, Rendered)],
-    addressing: &Addressing,
-) -> BTreeMap<String, Vec<Backlink>> {
-    let mut page_of: HashMap<&str, &str> = HashMap::new();
-    for (i, _) in first {
-        let p = &parsed[*i];
-        let Some(id) = p.id.as_deref() else { continue };
-        for n in &p.sem.nodes {
-            page_of.insert(n.id.as_str(), id);
-        }
-    }
-    let mut out: BTreeMap<String, std::collections::BTreeSet<Backlink>> = BTreeMap::new();
-    for (i, _) in first {
-        let p = &parsed[*i];
-        let Some(from) = p.id.as_deref() else {
-            continue;
-        };
-        let Some(href) = addressing.page_href(from) else {
-            continue;
-        };
-        let me = Backlink {
-            title: p.title.clone().unwrap_or_else(|| from.to_string()),
-            id: from.to_string(),
-            href,
-        };
-        for l in p
-            .sem
-            .links
-            .iter()
-            .filter(|l| l.kind == mae_org::LinkKind::Kb)
-        {
-            if let Some(&to) = page_of.get(l.target.as_str()) {
-                if to != from {
-                    out.entry(to.to_string()).or_default().insert(me.clone());
-                }
-            }
-        }
-    }
-    out.into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect()
-}
-
 /// A page's headings in document order, from the rendered tree, so every
 /// anchor is an id the page really has (P-79). A heading inside an unrendered
 /// subtree is not in the tree, so not in the TOC.
-fn toc(body: &[mae_org::Node]) -> Vec<TocEntry> {
+pub(crate) fn toc(body: &[mae_org::Node]) -> Vec<TocEntry> {
     fn walk(nodes: &[mae_org::Node], out: &mut Vec<TocEntry>) {
         for n in nodes {
             let mae_org::Node::Element(e) = n else {
@@ -443,7 +319,7 @@ fn toc(body: &[mae_org::Node]) -> Vec<TocEntry> {
 }
 
 /// A page's valid file tags (P-73), each once, in written order.
-fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
+pub(crate) fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in &sem.file_tags {
         if valid_tag(t) && !out.contains(t) {
@@ -454,7 +330,10 @@ fn page_tags(sem: &mae_org::Semantics) -> Vec<String> {
 }
 
 /// The file node's properties but its `ID` (see [`DerivedPage::properties`]).
-fn file_properties(sem: &mae_org::Semantics, hidden: &[String]) -> BTreeMap<String, String> {
+pub(crate) fn file_properties(
+    sem: &mae_org::Semantics,
+    hidden: &[String],
+) -> BTreeMap<String, String> {
     let Some(file) = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File) else {
         return BTreeMap::new();
     };
@@ -466,183 +345,9 @@ fn file_properties(sem: &mae_org::Semantics, hidden: &[String]) -> BTreeMap<Stri
 }
 
 /// [`DATE_PROPERTIES`] read from `properties`.
-fn dates_of(properties: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+pub(crate) fn dates_of(properties: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     DATE_PROPERTIES
         .iter()
         .filter_map(|(key, name)| properties.get(*key).map(|v| (name.to_string(), v.clone())))
         .collect()
-}
-
-fn parse_page<'a>(source: &'a SourcePage, opts: &SiteOptions) -> Parsed<'a> {
-    let doc = parse(&source.text, &ParseOptions::default());
-    let sem = semantics(&doc);
-    let file = sem.nodes.iter().find(|n| n.origin == NodeOrigin::File);
-    let id = file.map(|n| n.id.clone());
-    let title = file
-        .and_then(|n| n.title.clone())
-        .map(|t| scrub(&t, &opts.hidden_namespaces).unwrap_or(t));
-    Parsed {
-        source,
-        doc,
-        sem,
-        id,
-        title,
-    }
-}
-
-/// The pages that may publish, before rendering: a valid file ID, no node ID
-/// shared with any other node of the KB, and (in the export) no file ID in
-/// the same directory as another's.
-fn addressable(
-    parsed: &[Parsed],
-    addressing: &Addressing,
-    withheld: &mut Vec<Withheld>,
-) -> Vec<usize> {
-    let mut ok: Vec<usize> = Vec::new();
-    for (i, p) in parsed.iter().enumerate() {
-        match &p.id {
-            None => withheld.push(Withheld::NoFileId {
-                origin: p.source.origin.clone(),
-            }),
-            Some(id) if !valid_id(id) => withheld.push(Withheld::InvalidId {
-                origin: p.source.origin.clone(),
-                id: id.clone(),
-            }),
-            Some(id) if is_reserved(id) => withheld.push(Withheld::Reserved {
-                origin: p.source.origin.clone(),
-                id: id.clone(),
-            }),
-            Some(_) => ok.push(i),
-        }
-    }
-    // Every node ID, file-level or not, once in the KB.
-    let mut holders: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for &i in &ok {
-        for n in &parsed[i].sem.nodes {
-            holders.entry(n.id.as_str()).or_default().push(i);
-        }
-    }
-    let mut out_dup = vec![false; parsed.len()];
-    for (id, at) in &holders {
-        if at.len() > 1 {
-            let origins = at
-                .iter()
-                .map(|&i| parsed[i].source.origin.clone())
-                .collect();
-            withheld.push(Withheld::DuplicateId {
-                id: id.to_string(),
-                origins,
-            });
-            for &i in at {
-                out_dup[i] = true;
-            }
-        }
-    }
-    ok.retain(|&i| !out_dup[i]);
-    if addressing.is_export() {
-        let mut dirs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for &i in &ok {
-            dirs.entry(export_collision_key(
-                parsed[i].id.as_deref().unwrap_or_default(),
-            ))
-            .or_default()
-            .push(i);
-        }
-        let mut out = vec![false; parsed.len()];
-        for at in dirs.values().filter(|at| at.len() > 1) {
-            let ids = at
-                .iter()
-                .map(|&i| parsed[i].id.clone().unwrap_or_default())
-                .collect();
-            withheld.push(Withheld::FsCollision { ids });
-            for &i in at {
-                out[i] = true;
-            }
-        }
-        ok.retain(|&i| !out[i]);
-    }
-    ok
-}
-
-/// What each `[[attachment:NAME]]` link of the page resolves to, keyed by
-/// the link's target as mae-org's resolver looks it up: the host's state for
-/// NAME, or missing when the node binds no such NAME.
-fn page_attachments<'a>(p: &'a Parsed) -> impl Iterator<Item = (String, AttachmentState)> + 'a {
-    p.sem.links.iter().filter_map(|l| {
-        let name = l.target.strip_prefix("attachment:")?;
-        let state = p
-            .source
-            .attachments
-            .get(name)
-            .cloned()
-            .unwrap_or(AttachmentState::Missing);
-        Some((l.target.clone(), state))
-    })
-}
-
-/// The KB's one resolver, over the pages that will publish: every page, every
-/// node on it at its anchor, and each page's CUSTOM_IDs (S0). A heading's
-/// UUID `CUSTOM_ID` is an ID too (D5), unless a node holds that ID or two
-/// pages share the UUID: then it resolves nowhere rather than by order.
-fn resolver(parsed: &[Parsed], first: &[(usize, Rendered)], addressing: &Addressing) -> Resolver {
-    let mut r = Resolver::default();
-    let mut uuid_cids: HashMap<String, Option<Resolved>> = HashMap::new();
-    for (i, rendered) in first {
-        let p = &parsed[*i];
-        let Some(id) = &p.id else { continue };
-        let Some(href) = addressing.page_href(id) else {
-            continue;
-        };
-        let mut page =
-            Resolved::new(href.clone()).with_title(p.title.clone().unwrap_or_else(|| id.clone()));
-        for (c, a) in &rendered.custom_ids {
-            page = page.with_custom_id(c.clone(), a.clone());
-            if is_uuid(c) {
-                let at = Resolved::new(format!("{href}#{a}"));
-                uuid_cids
-                    .entry(c.clone())
-                    .and_modify(|e| *e = None)
-                    .or_insert(Some(at));
-            }
-        }
-        r = r.with_target(id.clone(), page);
-        for n in &rendered.nodes {
-            if &n.id == id {
-                continue;
-            }
-            let at = match &n.anchor {
-                Some(a) => format!("{href}#{a}"),
-                None => href.clone(),
-            };
-            let title = p
-                .sem
-                .nodes
-                .iter()
-                .find(|s| s.id == n.id)
-                .and_then(|s| s.title.clone());
-            let mut t = Resolved::new(at);
-            if let Some(title) = title {
-                t = t.with_title(title);
-            }
-            r = r.with_target(n.id.clone(), t);
-        }
-    }
-    for (c, t) in uuid_cids {
-        if let Some(t) = t {
-            if !r.targets.contains_key(&c) {
-                r = r.with_target(c, t);
-            }
-        }
-    }
-    r
-}
-
-/// 8-4-4-4-12 hex digits.
-fn is_uuid(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    parts.len() == 5
-        && parts
-            .iter()
-            .zip([8, 4, 4, 4, 12])
-            .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }

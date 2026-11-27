@@ -1,0 +1,91 @@
+# ADR-119 D6: incremental derivation. One mutant per input a page's output
+# reads that its fingerprint or summary key must cover, each named for the
+# test that must catch it.
+
+[[mutant]]
+id = "site-incremental/fingerprint-drops-text"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: a page's source"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''        source.text.hash(h);'''
+replace = ''''''
+
+[[mutant]]
+id = "site-incremental/fingerprint-drops-targets"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: the resolver entries it references"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''            (k, &e.href, &e.title, &e.custom_ids).hash(h);'''
+replace = '''            k.hash(h);'''
+
+[[mutant]]
+id = "site-incremental/fingerprint-drops-attachments"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: its attachments' states"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''        attachments.hash(h);'''
+replace = '''        let _ = &attachments;'''
+
+[[mutant]]
+id = "site-incremental/fingerprint-drops-backlinks"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: its backlink list"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''            (&b.title, &b.id, &b.href).hash(h);'''
+replace = '''            let _ = b;'''
+
+[[mutant]]
+id = "site-incremental/summary-ignores-hidden"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: a summary holds for its text and the hidden namespaces"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''                    .filter(|s| s.text == src.text && s.hidden == opts.hidden_namespaces);'''
+replace = '''                    .filter(|s| s.text == src.text);'''
+
+[[mutant]]
+id = "site-incremental/context-ignores-hidden"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_warm_deriver_matches_a_fresh_one_after_every_edit)"
+ref = "D6: the context hash covers the configuration"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''        opts.hidden_namespaces.hash(h);'''
+replace = ''''''
+
+[[mutant]]
+id = "site-incremental/reads-miss-transclusions"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(a_page_local_resolver_renders_as_the_kb_wide_one)"
+ref = "D6: the page-local resolver holds every target the render reads"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''        .chain(sem.transclusions.iter().map(|t| t.member.clone()))'''
+replace = ''''''
+
+[[mutant]]
+id = "site-incremental/nothing-reused"
+runner = "editor"
+targets = ["-p", "mae-site", "--lib"]
+filter = "test(only_what_changed_is_rendered)"
+ref = "D6: an unchanged page is not rendered again"
+[[mutant.edit]]
+file = "shared/site/src/incremental.rs"
+find = '''                Some((f, out)) if *f == fp => Arc::clone(out),'''
+replace = '''                Some((f, out)) if *f == fp && false => Arc::clone(out),'''
