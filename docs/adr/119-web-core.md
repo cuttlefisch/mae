@@ -945,6 +945,18 @@ and answers later requests from it.
 This is the coarse half of D6. Per-node invalidation, with the property test that incremental output
 equals a full derivation, is still to build. C13 still measures the cache's memory per KB.
 
+### E1a. D8 enforced in the live app (2026-11-27)
+
+The live route's gate did not read the review policy: a KB with publication review on would have been
+served from its working copy, drafts included. D8 keeps such a KB off the live app until the
+published view (L3). The gate now answers it with the same not-found as every refusal, on every
+request and before the cache, so switching review on hides a cached KB at once. A policy that cannot
+be read hides it too.
+
+No KB on the test deployment had review on when this was found, so nothing was exposed. The
+published view on the site (in-force revisions only, with its leak test) is the next step for a
+review-enabled KB to be readable there.
+
 ### E2. `/edit/` belongs to the browser client
 
 The browser client's editor (ADR-100) mirrors the reader's addresses under `/edit/`. Its node pages

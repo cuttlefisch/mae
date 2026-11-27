@@ -316,8 +316,31 @@ async fn gated(
     if !matches!(encryption, Encryption::None) {
         return Err(Refused::NotFound);
     }
+    if !review_off(doc_store, kb_id).await {
+        return Err(Refused::NotFound);
+    }
     let may_copy = kb_query::may_copy_whole_kb(doc_store, kb_id, &coll, principal).await;
     Ok((coll, may_copy))
+}
+
+/// ADR-119 D8: the live app serves a KB with publication review off only.
+/// A review-enabled KB's pages are its working copy, drafts included, so it
+/// is the same not-found as every refusal until the published view (L3)
+/// derives it from in-force revisions. Checked on every request, before the
+/// cache, so switching review on hides a KB at once. A policy that cannot be
+/// read hides it too.
+async fn review_off(doc_store: &DocStore, kb_id: &str) -> bool {
+    let kb = kb_id.to_string();
+    let enabled = doc_store
+        .review_read(move |c| crate::review::store::policy(c, &kb).map(|p| p.review_enabled))
+        .await;
+    match enabled {
+        Ok(on) => !on,
+        Err(e) => {
+            tracing::warn!(kb_id, error = %e, "site: review policy unreadable; KB not served");
+            false
+        }
+    }
 }
 
 /// The pages of `coll`, KB `kb_id`'s collection, as sources, when the KB is
