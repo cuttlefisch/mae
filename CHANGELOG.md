@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.216] - 2026-11-27
+
+
+
+
+### Features
+
+- *(crypto)* Mae-crypto 0.4.0, the browser signs node-list changes ([473528b](https://github.com/cuttlefisch/mae/commit/473528b8045e1b02495757fe045b70a6edd1df68))
+- *(pages)* A browser editor creates, retitles and deletes pages ([f9f35e0](https://github.com/cuttlefisch/mae/commit/f9f35e0815050e2a535cf2c5fc292ae7fc3afea5))
+
 ## [0.14.215] - 2026-11-27
 
 
@@ -19,6 +29,10 @@ All notable changes to this project will be documented in this file.
 - *(parity)* Marks a graph test samples are 3 device px wide at any ratio ([f441837](https://github.com/cuttlefisch/mae/commit/f44183793dd125796737c4b099167de4d1a25c7d))
 - *(adr-119)* The 1x link layer decided; D15 is decided ([7e00e9c](https://github.com/cuttlefisch/mae/commit/7e00e9c046e3acb8c2755778b03a5adc7af524a8))
 - *(adr-119)* The hierarchical redesign keeps the layout in the browser ([ae2a896](https://github.com/cuttlefisch/mae/commit/ae2a896a59a60707bf1e2315ca232c71dd7ed45b))
+
+### Miscellaneous
+
+- Bump version to 0.14.215 ([b68ce22](https://github.com/cuttlefisch/mae/commit/b68ce22d22f5fdb500512dfbb46de2b217c4bdaf))
 
 ## [0.14.214] - 2026-11-27
 
