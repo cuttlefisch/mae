@@ -68,17 +68,18 @@ fn ids(answer: &Value) -> Vec<&str> {
         .collect()
 }
 
-#[tokio::test]
-async fn search_matches_by_canonical_caseless_key_and_the_fixture_holds() {
-    let (store, owner, _plan) = seeded(&fixture_repo(&corpus())).await;
-    let me = owner.fingerprint();
+/// One case: its name, its params, the limits it ran under, its answer.
+type Case = (&'static str, Value, KbQueryLimits, Value);
+
+/// Every fixture case, run against the seeded KB as its owner.
+async fn run_cases(store: &crate::doc_store::DocStore, me: &str) -> Vec<Case> {
     let d = KbQueryLimits::default;
     let capped = KbQueryLimits {
         max_scan_nodes: 2,
         ..d()
     };
     let q = |query: &str| json!({ "kb_id": KB, "query": query });
-    let mut cases: Vec<(&str, Value, KbQueryLimits, Value)> = Vec::new();
+    let mut cases: Vec<Case> = Vec::new();
     for (name, params, limits) in [
         (
             "composed query, composed and decomposed text",
@@ -97,18 +98,15 @@ async fn search_matches_by_canonical_caseless_key_and_the_fixture_holds() {
         ("scan cap reached", q("needle-word"), capped),
         ("missing query", json!({ "kb_id": KB }), d()),
     ] {
-        let answer = search(&store, &me, params.clone(), limits).await;
+        let answer = search(store, me, params.clone(), limits).await;
         cases.push((name, params, limits, answer));
     }
 
-    // The decomposed page is stored decomposed, or its case tests nothing.
-    let stored = super::apply_tests::get(&store, &owner, NFD).await;
-    assert!(
-        stored["body"].as_str().unwrap().contains("a\u{301}"),
-        "{stored}"
-    );
+    cases
+}
 
-    // The rules, asserted on the answers before they become the fixture.
+/// The rules, asserted on the answers before they become the fixture.
+fn assert_rules(cases: &[Case]) {
     let at = |i: usize| &cases[i].3;
     assert_eq!(ids(at(0)), [ACCENT, NFD], "NFC query, NFC and NFD text");
     assert_eq!(at(1)["result"], at(0)["result"], "case-insensitive");
@@ -137,22 +135,12 @@ async fn search_matches_by_canonical_caseless_key_and_the_fixture_holds() {
     );
     assert_eq!(cap["truncated"], true, "the cap ended the scan");
     assert_eq!(at(7)["error"]["kind"], "invalid_params");
+}
 
-    // The same search answers the same, request after request.
-    for _ in 0..5 {
-        assert_eq!(&search(&store, &me, q("árbol"), d()).await, at(0));
-    }
-
-    // A non-member learns nothing: a refusal naming no node of the KB.
-    let stranger = Identity::generate("stranger").fingerprint();
-    let refused = search(&store, &stranger, q("árbol"), d()).await;
-    let text = refused.to_string();
-    for id in [ACCENT, NFD, SHARP_S, PLAIN, LONG] {
-        assert!(!text.contains(id), "{text}");
-    }
-    assert!(refused.get("error").is_some(), "{refused}");
-
-    let fixture = json!({
+/// The fixture: the rules in words, every case, and the non-member's refusal.
+fn fixture(cases: &[Case], refused: &Value) -> Value {
+    let d = KbQueryLimits::default;
+    json!({
         "method": "kb/query.search",
         "rules": [
             "A node matches when its title or its body contains the query, both compared by Unicode canonical caseless matching (NFD, full case folding, NFC; no locale): case and normalization do not count, accents do.",
@@ -172,8 +160,41 @@ async fn search_matches_by_canonical_caseless_key_and_the_fixture_holds() {
             c
         }).collect::<Vec<_>>(),
         "refused_non_member": refused,
-    });
-    check_fixture(&fixture);
+    })
+}
+
+#[tokio::test]
+async fn search_matches_by_canonical_caseless_key_and_the_fixture_holds() {
+    let (store, owner, _plan) = seeded(&fixture_repo(&corpus())).await;
+    let me = owner.fingerprint();
+    let d = KbQueryLimits::default;
+    let q = |query: &str| json!({ "kb_id": KB, "query": query });
+    let cases = run_cases(&store, &me).await;
+    // The decomposed page is stored decomposed, or its case tests nothing.
+    let stored = super::apply_tests::get(&store, &owner, NFD).await;
+    assert!(
+        stored["body"].as_str().unwrap().contains("a\u{301}"),
+        "{stored}"
+    );
+
+    assert_rules(&cases);
+    let at = |i: usize| &cases[i].3;
+
+    // The same search answers the same, request after request.
+    for _ in 0..5 {
+        assert_eq!(&search(&store, &me, q("árbol"), d()).await, at(0));
+    }
+
+    // A non-member learns nothing: a refusal naming no node of the KB.
+    let stranger = Identity::generate("stranger").fingerprint();
+    let refused = search(&store, &stranger, q("árbol"), d()).await;
+    let text = refused.to_string();
+    for id in [ACCENT, NFD, SHARP_S, PLAIN, LONG] {
+        assert!(!text.contains(id), "{text}");
+    }
+    assert!(refused.get("error").is_some(), "{refused}");
+
+    check_fixture(&fixture(&cases, &refused));
 }
 
 fn check_fixture(got: &Value) {
