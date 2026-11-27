@@ -91,6 +91,9 @@ fn node_json(editor: &Editor, id: &str) -> Result<Option<serde_json::Value>, Str
         "kind": node.kind,
         "body": node.body,
         "tags": node.tags,
+        // Sorted: `properties` is a HashMap, and an answer must not reorder
+        // itself between calls.
+        "properties": node.properties.iter().collect::<std::collections::BTreeMap<_, _>>(),
         "links_from": links_from,
         "links_to": links_to,
     });
@@ -1635,6 +1638,29 @@ pub fn execute_kb_set_role(
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: role")?;
     editor.kb_set_role_target(kb_arg(args), id, role)
+}
+
+pub fn execute_kb_set_property(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: key")?;
+    let value = match args.get("value") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or("value must be a string")?),
+    };
+    let stored = editor.kb_set_property_target(kb_arg(args), id, key, value)?;
+    Ok(match value {
+        Some(v) => format!("KB node '{id}' property {stored} set to {v}"),
+        None => format!("KB node '{id}' property {stored} removed"),
+    })
 }
 
 pub fn execute_kb_set_ai_residency(

@@ -675,18 +675,36 @@ impl Editor {
         role: &str,
     ) -> Result<String, String> {
         let role = role.to_ascii_lowercase();
-        if !["source", "atom", "molecule", "hub"].contains(&role.as_str()) {
-            return Err(format!(
-                "Invalid role '{}': expected source|atom|molecule|hub",
-                role
-            ));
-        }
-        self.kb_update_node_with_target(kb, id, |updated| {
-            updated.properties.insert("role".to_string(), role.clone());
-        })?;
+        self.kb_set_property_target(kb, id, "role", Some(&role))?;
         let msg = format!("KB node '{}' role set to {}", id, role);
         self.set_status(msg.clone());
         Ok(msg)
+    }
+
+    /// Set node `id`'s property `key` to `value`, or remove it (`None`), in
+    /// the KB named `kb`, which must hold `id`. The one property write path:
+    /// the `kb-set-node-property!` Scheme primitive, the `kb_set_property` MCP
+    /// tool and [`Editor::kb_set_role_target`] all land here, and
+    /// `mae_kb::node_property::validate` refuses what would not survive the
+    /// node's org round trip. Returns the key as stored (lower-case).
+    pub fn kb_set_property_target(
+        &mut self,
+        kb: Option<&str>,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<String, String> {
+        let key = mae_kb::node_property::validate(key, value).map_err(|e| e.to_string())?;
+        let stored = key.clone();
+        self.kb_update_node_with_target(kb, id, move |updated| match value {
+            Some(v) => {
+                updated.properties.insert(key, v.to_string());
+            }
+            None => {
+                updated.properties.remove(&key);
+            }
+        })?;
+        Ok(stored)
     }
 
     /// ADR-109 D6: refuse a write that would grow node `id`'s body from

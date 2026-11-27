@@ -1244,3 +1244,8 @@ mod permission_option_tests;
 #[cfg(test)]
 #[path = "parity_tests.rs"]
 mod parity_tests;
+
+// `kb-node-properties` / `kb-set-node-property!` against a real `Editor`.
+#[cfg(test)]
+#[path = "kb_property_tests.rs"]
+mod kb_property_tests;

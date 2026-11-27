@@ -67,9 +67,9 @@ pub use kb::{
     execute_kb_links_to, execute_kb_list, execute_kb_neighborhood, execute_kb_preview_dismiss,
     execute_kb_preview_show, execute_kb_promote, execute_kb_raw_query, execute_kb_register,
     execute_kb_reimport, execute_kb_related, execute_kb_restore, execute_kb_search,
-    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_role,
-    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
-    execute_kb_vector_search, execute_kb_view_query,
+    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_property,
+    execute_kb_set_role, execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister,
+    execute_kb_update, execute_kb_vector_search, execute_kb_view_query,
 };
 pub use kb_export_html::execute_kb_export_subgraph_html;
 pub use lsp::{
@@ -111,3 +111,6 @@ pub fn resolve_buffer_idx(editor: &Editor, args: &serde_json::Value) -> Result<u
             .unwrap_or_else(|| editor.active_buffer_idx()))
     }
 }
+
+#[cfg(test)]
+mod kb_property_tests;

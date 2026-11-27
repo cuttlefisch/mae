@@ -13,9 +13,9 @@ use crate::tool_impls::{
     execute_kb_links_to, execute_kb_list, execute_kb_neighborhood, execute_kb_preview_dismiss,
     execute_kb_preview_show, execute_kb_promote, execute_kb_raw_query, execute_kb_register,
     execute_kb_reimport, execute_kb_related, execute_kb_restore, execute_kb_search,
-    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_role,
-    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
-    execute_kb_vector_search, execute_kb_view_query,
+    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_property,
+    execute_kb_set_role, execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister,
+    execute_kb_update, execute_kb_vector_search, execute_kb_view_query,
 };
 use crate::types::ToolCall;
 
@@ -91,6 +91,7 @@ pub(super) fn dispatch(
         "kb_unregister" => execute_kb_unregister(editor, &call.arguments),
         "kb_set_ai_residency" => execute_kb_set_ai_residency(editor, &call.arguments),
         "kb_set_role" => execute_kb_set_role(editor, &call.arguments),
+        "kb_set_property" => execute_kb_set_property(editor, &call.arguments),
         "kb_reimport" => execute_kb_reimport(editor, &call.arguments),
         "kb_export_guidance" => execute_kb_export_guidance(editor, &call.arguments),
         "kb_export_subgraph_html" => {

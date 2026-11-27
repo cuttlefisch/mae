@@ -76,6 +76,13 @@ pub enum KbNodeOp {
         role: String,
         kb: Option<String>,
     },
+    /// `kb-set-node-property!`: `value` `None` removes the property.
+    SetProperty {
+        id: String,
+        key: String,
+        value: Option<String>,
+        kb: Option<String>,
+    },
 }
 
 /// `kb-update`'s optional TAGS: a list of strings, or `#f` / absence for none.
@@ -329,6 +336,67 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
                 Some(node) => Ok(node_to_value(&node)),
                 None => Ok(Value::Bool(false)),
             }
+        },
+    );
+
+    // (kb-node-properties ID) → ((key . value) ...) sorted by key, or #f
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-node-properties",
+        "A KB node's properties (its :PROPERTIES: drawer, without the ID, KIND and ALIASES \
+         fields) as an association list of (key . value) strings, sorted by key, or #f when no \
+         node with that id exists. Keys are lower-case, as the store keeps them. Reads the \
+         primary KB or any registered federated instance, like kb-get.",
+        Arity::Fixed(1),
+        tier::READ,
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-node-properties")?;
+            let state = s.lock();
+            let Some(node) = lookup_node(&state, &id)? else {
+                return Ok(Value::Bool(false));
+            };
+            let mut props: Vec<(&String, &String)> = node.properties.iter().collect();
+            props.sort();
+            Ok(Value::list(props.into_iter().map(|(k, v)| {
+                Value::cons(Value::string(k.as_str()), Value::string(v.as_str()))
+            })))
+        },
+    );
+
+    // (kb-set-node-property! ID KEY VALUE [KB]) → #t; VALUE #f removes KEY
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-set-node-property!",
+        "Set a KB node's property KEY to the string VALUE, or remove it when VALUE is #f. KEY \
+         is printable ASCII without blanks or ':' and is stored lower-case; ID, KIND, ALIASES, \
+         END and PROPERTIES are refused (fields or drawer syntax), as is a key ending in '+'. \
+         VALUE is one non-empty line without a blank at either end; role takes \
+         source|atom|molecule|hub. These are the rules under which the property survives the \
+         node's org round trip. Signals the refusal at once; otherwise returns #t once the write \
+         is queued, applied on the next editor tick through the same write path as the \
+         kb_set_property MCP tool. Optional KB names the KB holding the node.",
+        Arity::Variadic(3),
+        tier::WRITE,
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-set-node-property!")?;
+            let key = arg_string(args, 1, "kb-set-node-property!")?;
+            let value = match args.get(2) {
+                Some(Value::Bool(false)) => None,
+                _ => Some(arg_string(args, 2, "kb-set-node-property!")?),
+            };
+            let kb = opt_kb(args, 3, "kb-set-node-property!")?;
+            mae_kb::node_property::validate(&key, value.as_deref())
+                .map_err(|e| LispError::internal(format!("kb-set-node-property!: {e}")))?;
+            let mut state = s.lock();
+            if kb.is_none() && lookup_node(&state, &id)?.is_none() {
+                return Err(LispError::internal(format!(
+                    "kb-set-node-property!: No KB node: {id}"
+                )));
+            }
+            state
+                .pending_kb_node_ops
+                .push(KbNodeOp::SetProperty { id, key, value, kb });
+            Ok(Value::Bool(true))
         },
     );
 
