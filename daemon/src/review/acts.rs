@@ -544,6 +544,7 @@ pub(super) async fn approve(
             "not on this KB's approver list".into(),
         ));
     }
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let set = completing_set(store, kb_id, &rev).await?;
     let gated_set = set.is_some();
     let checked = set.unwrap_or_else(|| vec![rev.clone()]);
@@ -558,7 +559,7 @@ pub(super) async fn approve(
         kb: kb_id.to_string(),
         id: rev.revision_id,
         principal: who.principal.clone(),
-        actor: actor(who),
+        actor: super::strength::actor(who, &satisfied),
         required: g.policy.required_acts.clone(),
     };
     let at = store.now_ms() as i64;
@@ -637,11 +638,12 @@ pub(super) async fn enter_into_force(
             "not on this KB's approver list".into(),
         ));
     }
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let now = store.now_ms() as i64;
     let since = effective_at(params, now)?;
     let ovr = author_gate(store, &members, who, params).await?;
     let signer = signer(store)?;
-    let (kb, actor) = (kb_id.to_string(), actor(who));
+    let (kb, actor) = (kb_id.to_string(), super::strength::actor(who, &satisfied));
     flatten(
         store
             .review_write(move |c| -> TxnResult<Value> {
@@ -776,6 +778,8 @@ pub(super) async fn derogate(
             "not on this KB's approver list".into(),
         ));
     }
+    // O24: ending a document's force is a controlled act too.
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let (kb, node) = (kb_id.to_string(), node_id.clone());
     let all = store
         .review_read(move |c| store::node_revisions(c, &kb, &node))
@@ -787,7 +791,7 @@ pub(super) async fn derogate(
     };
     let ovr = author_gate(store, std::slice::from_ref(&current), who, params).await?;
     let signer = signer(store)?;
-    let (kb, actor) = (kb_id.to_string(), actor(who));
+    let (kb, actor) = (kb_id.to_string(), super::strength::actor(who, &satisfied));
     flatten(
         store
             .review_write(move |c| -> TxnResult<Value> {

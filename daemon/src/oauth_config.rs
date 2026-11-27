@@ -60,6 +60,9 @@ pub struct OAuthConfig {
     /// identity providers emit a constant `acr` that says nothing about the
     /// factors used; prefer `second_factor_amr`. Empty by default.
     pub second_factor_acr: Vec<String>,
+    /// ADR-113 E8: the longest time, seconds, between a person's sign-in and
+    /// a controlled act (a KB may only shorten it). Default 300; at least 60.
+    pub second_factor_max_age_secs: u64,
     /// ADR-098 Amendment 1, C2: whether `POST /identity/challenge` and `POST
     /// /identity/bind` exist, letting an IdP-authenticated person bind their
     /// subject to a member key by proof of possession. Default `false`
@@ -353,6 +356,7 @@ impl Default for OAuthConfig {
             allowed_groups: Vec::new(),
             second_factor_amr: Vec::new(),
             second_factor_acr: Vec::new(),
+            second_factor_max_age_secs: mae_daemon::sign_in::DEFAULT_REAUTH_MAX_AGE_SECS,
             identity_binding_enabled: false,
             identity_challenge_ttl_secs: 300,
             identity_max_pending_challenges: 4,
@@ -397,6 +401,38 @@ impl Default for OAuthConfig {
 }
 
 impl OAuthConfig {
+    /// What [`Self::second_factor_amr`] and [`Self::second_factor_max_age_secs`]
+    /// state for controlled acts (ADR-113 E8).
+    pub fn step_up_rule(&self) -> mae_daemon::sign_in::StepUpRule {
+        mae_daemon::sign_in::StepUpRule {
+            rule: self.second_factor_rule(),
+            max_age_secs: self.second_factor_max_age_secs,
+        }
+    }
+
+    /// ADR-113 E8's configuration rules: `pwd` never counts as a second
+    /// factor, and no window is shorter than the clock leeway. Each problem
+    /// stops the daemon.
+    pub fn check_second_factor(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.second_factor_amr.iter().any(|v| v == "pwd") {
+            problems.push(
+                "[oauth] second_factor_amr lists \"pwd\": a password is one factor, never a \
+                 second one (ADR-113 E8)"
+                    .to_string(),
+            );
+        }
+        let min = mae_daemon::sign_in::MIN_REAUTH_MAX_AGE_SECS;
+        if self.second_factor_max_age_secs < min {
+            problems.push(format!(
+                "[oauth] second_factor_max_age_secs is {}: it must be at least {min} seconds, \
+                 the clock leeway (ADR-113 E8)",
+                self.second_factor_max_age_secs
+            ));
+        }
+        problems
+    }
+
     /// The second-factor rule `second_factor_amr`/`second_factor_acr` state.
     pub fn second_factor_rule(&self) -> mae_daemon::sign_in::SecondFactorRule {
         mae_daemon::sign_in::SecondFactorRule {

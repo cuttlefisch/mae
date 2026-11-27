@@ -26,6 +26,7 @@ mod limits_tests;
 mod method_tests;
 mod published_view_tests;
 mod seed_author_tests;
+mod strength_act_tests;
 mod switch_race_tests;
 
 pub(super) const KB: &str = "kb-review";

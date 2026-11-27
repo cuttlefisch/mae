@@ -38,8 +38,7 @@ use super::attach_store::{self, Annulment, Attachment, KINDS};
 use super::methods::{flatten, TxnResult};
 use super::store::{self, NewEvent, Revision};
 use super::{
-    actor, gate, required_str, required_text, signer, storage_fault, time, within_bytes,
-    MAX_REASON_BYTES,
+    gate, required_str, required_text, signer, storage_fault, time, within_bytes, MAX_REASON_BYTES,
 };
 use crate::blob_store::{sniff::MediaType, BlobMeta, KbGuard};
 use crate::doc_store::DocStore;
@@ -165,6 +164,9 @@ struct AttachInput {
     /// Signed PDF only: the set may enter into force here (its author check
     /// covered every member), and the override it recorded.
     completes: Option<Value>,
+    /// The sign-in E8's check accepted, when the policy required one: the
+    /// event records it.
+    satisfied: Option<super::strength::Satisfied>,
 }
 
 /// The attach transaction: write-once, the `attach` event, the row, and, for
@@ -208,7 +210,7 @@ fn record_attach(
             kb_id: &i.kb,
             kind: "attach",
             at: time(at),
-            actor: actor(&i.who),
+            actor: super::strength::actor(&i.who, &i.satisfied),
             payload,
         },
     )?;
@@ -234,7 +236,10 @@ fn record_attach(
         },
     )?;
     let in_force_since = match i.completes {
-        Some(ovr) => complete_signed_set(c, signer, &i.kb, &r, at, actor(&i.who), seq, ovr)?,
+        Some(ovr) => {
+            let actor = super::strength::actor(&i.who, &i.satisfied);
+            complete_signed_set(c, signer, &i.kb, &r, at, actor, seq, ovr)?
+        }
         None => None,
     };
     Ok(Ok(
@@ -337,6 +342,7 @@ pub(super) async fn attach_signed_pdf(
     if let Some(e) = state_refusal(&rev, "signed_pdf") {
         return Err(e);
     }
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let sha = required_str(params, "blob_sha256")?;
     // The binding lock first: attaches to one KB then run one at a time from
     // this check to their commit, so of two approvers attaching a set's last
@@ -354,6 +360,7 @@ pub(super) async fn attach_signed_pdf(
         declared_source: None,
         who: who.clone(),
         completes,
+        satisfied,
     };
     write(store, input, guard).await
 }
@@ -399,6 +406,8 @@ pub(super) async fn attach_rendered_pdf(
         declared_source: Some(declared.to_string()),
         who: who.clone(),
         completes: None,
+        // The requester's rendering is not a controlled act (E8).
+        satisfied: None,
     };
     let mut out = write(store, input, guard).await?;
     if let Some(o) = out.as_object_mut() {
@@ -439,6 +448,8 @@ pub(super) async fn annul_attachment(
     };
     let reason = required_text(params, "reason")?.to_string();
     within_bytes("reason", &reason, MAX_REASON_BYTES)?;
+    // O24: an annulment can undo a signed PDF.
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let owner = g.role == mae_sync::kb::Role::Owner;
     let signer = signer(store)?;
     let (kb, who) = (kb_id.to_string(), who.clone());
@@ -482,7 +493,7 @@ pub(super) async fn annul_attachment(
                         kb_id: &kb,
                         kind: "annul_attachment",
                         at: time(at),
-                        actor: actor(&who),
+                        actor: super::strength::actor(&who, &satisfied),
                         payload,
                     },
                 )?;

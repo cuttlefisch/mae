@@ -32,6 +32,7 @@ mod methods;
 pub mod published;
 mod reads;
 pub mod store;
+mod strength;
 
 pub use reads::export_lines;
 
