@@ -1,6 +1,6 @@
 [package]
 name = "mae-mcp"
-version = "0.14.211"
+version = "0.14.212"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MCP (Model Context Protocol) bridge for MAE"
