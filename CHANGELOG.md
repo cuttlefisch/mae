@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.217] - 2026-11-27
+
+
+
+
+### Features
+
+- *(daemon)* Membership changes on a running daemon, through an operator socket ([274705f](https://github.com/cuttlefisch/mae/commit/274705f271316d3d73bb088dc14cfea73fb9562f))
+
+### Bug Fixes
+
+- *(daemon)* The operator socket lives in a private 0700 directory ([58b731c](https://github.com/cuttlefisch/mae/commit/58b731c32994bc6bc3997db9f723c7f807480477))
+- *(collab)* A removed member's open sessions stop receiving the KB ([6fe3671](https://github.com/cuttlefisch/mae/commit/6fe367189ba132596a6a32252c701f847d8fdc9f))
+- *(collab)* A block or a quorum revoke also cuts off open sessions ([a84fcd1](https://github.com/cuttlefisch/mae/commit/a84fcd1e454776c51aa7ea287bc393746deda87b))
+- *(collab)* Re-check read access when delivering a KB document ([90da79d](https://github.com/cuttlefisch/mae/commit/90da79d6e6c410cce0af198e9b0147f3689a9238))
+- *(daemon)* The operator socket builds on Unix only ([6c35003](https://github.com/cuttlefisch/mae/commit/6c350039c5eddf653362141eabd5ecf5116ff1ac))
+
+### Documentation
+
+- *(daemon)* Which removals cut off open sessions, and the expiry exception ([deee2af](https://github.com/cuttlefisch/mae/commit/deee2affe0036b0e3396f41760e14103f857d777))
+
+### Testing
+
+- *(ws)* A removed member's documents close at delivery, before renewal ([a4f3891](https://github.com/cuttlefisch/mae/commit/a4f3891044ffd640b7ff6e595b31cd5eb999c688))
+- *(collab)* Recording an anchor ends a memoized delivery allow ([16f0d4b](https://github.com/cuttlefisch/mae/commit/16f0d4b4957a97279d891d19096fff2330a6e341))
+
+### Miscellaneous
+
+- *(adr-kb)* Regenerate the ADR KB checksum after merging main ([4c51a57](https://github.com/cuttlefisch/mae/commit/4c51a576eb831ffed18c74853d6be2a435944b12))
+
 ## [0.14.216] - 2026-11-27
 
 
@@ -11,6 +41,10 @@ All notable changes to this project will be documented in this file.
 
 - *(crypto)* Mae-crypto 0.4.0, the browser signs node-list changes ([473528b](https://github.com/cuttlefisch/mae/commit/473528b8045e1b02495757fe045b70a6edd1df68))
 - *(pages)* A browser editor creates, retitles and deletes pages ([f9f35e0](https://github.com/cuttlefisch/mae/commit/f9f35e0815050e2a535cf2c5fc292ae7fc3afea5))
+
+### Miscellaneous
+
+- Bump version to 0.14.216 ([f056b6b](https://github.com/cuttlefisch/mae/commit/f056b6bed379890d2f0c6ef96d0ab6314f63869d))
 
 ## [0.14.215] - 2026-11-27
 
