@@ -294,8 +294,9 @@ async fn derive_cache_drops_a_timeboxed_out_member_when_wallclock_passes_expiry(
 /// its result after the block's invalidation, must not leave the stale
 /// result cached: the next derivation, with nothing else changed, sees the
 /// block. Paused between reading its inputs and caching, so the order is
-/// forced, not hoped for. Kills: the insert not checking the generation, and
-/// the generation moving outside the cache lock.
+/// forced, not hoped for. Kills: the insert not checking the generation. (The
+/// generation moving inside the cache lock is argued, not tested: a test would
+/// need a pause inside the window it closes.)
 #[tokio::test]
 async fn a_block_during_a_derivation_never_leaves_its_result_cached() {
     use mae_mcp::identity::Identity;
@@ -331,7 +332,10 @@ async fn a_block_during_a_derivation_never_leaves_its_result_cached() {
             store.derived_membership("kbr", &coll, &anchor, now).await
         })
     };
-    pause.reached.notified().await;
+    // A cache hit would never reach the pause: fail loudly, not hang.
+    tokio::time::timeout(std::time::Duration::from_secs(10), pause.reached.notified())
+        .await
+        .expect("the derivation reached the pause (it was not served from the cache)");
     store.add_kb_block("kbr", &bob).await.unwrap();
     pause.proceed.notify_one();
     let before_block = racing.await.unwrap();
