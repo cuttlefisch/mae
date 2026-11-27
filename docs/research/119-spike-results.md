@@ -134,6 +134,63 @@ marker, the visited band and themes, so it understates the real cost. Graphs wer
   precompute as is (572 KB compressed at 1.5k sparse; about 19 MB at 10k dense).
 - No CPU-throttled (phone-like) runs.
 
+## C5b: the graph's open questions (2026-11-27)
+
+The candidate measured is D15's:
+- **The bulk layer.** Every chord is drawn once into an alpha layer, then tinted to the palette's colour with one composite.
+- **Notes.** Each note is an SVG element, so it can be focused and named (P-59, P-60).
+- **The live layer.** The current note's chords, a hovered note's chords, labels, the visited band and the "here" marker are drawn on an overlay canvas.
+
+**Method**
+- **Graphs.** Synthetic graphs at the real bundle's density: 11 links per note, 70% of them between nearby notes. Sizes 1,560 (the test deployment's KB), 5,000 and 10,000 notes (8,580, 27,500 and 55,000 chords).
+- **Browsers.** Playwright with Chromium 158 and Firefox 159, headless, software raster, on the same shared laptop as C1–C6.
+- **Jobs.** Each run was a job in the machine's queue: 2 CPUs and a memory cap. Single runs.
+- **Timing.** Each canvas step is timed to a forced rasterisation (a 1-pixel readback); without it, Chromium's deferred rasterisation makes a bake look like 7 ms.
+- **Throttling.** CPU throttling (4×, 6×) is Chromium's CDP emulation. It slows only the main thread, so worker numbers under it are not phone numbers.
+- **GPU.** A GPU-raster run was attempted (`--use-angle=gl`, the integrated GPU). It ran out of its 2 GB cap, and the readback above penalises a GPU canvas, so GPU raster is not measured. Real-device runs are still owed.
+- **The code.** As before, the harness is not committed.
+
+**The bulk layer is the whole cost, and its resolution decides it.** In both browsers, unthrottled:
+
+| Chords | Bulk at device pixels (2×): bake | Zoom 2× | Bulk at 1×: bake (main / worker) | Zoom 2× |
+|---|---|---|---|---|
+| 8,580 | 400–450 ms | 300–500 ms | 40 / 35–55 ms | 17–22 ms |
+| 55,000 | 4.2–4.5 s | 2–2.8 s | 123–125 / 185–189 ms | 114–193 ms |
+
+Drawing the bulk at one pixel per CSS pixel costs 10–30× less than at device resolution, not 4×: the strokes become sub-pixel. On a 2× screen the 1× bulk is visibly softer but reads as the same texture. Screenshots were compared side by side. The current and hovered chords, labels and markers stay at device resolution on the overlay.
+
+**Everything else passes at every size.** Unthrottled, in both browsers:
+- A palette or accent change re-tints the baked layer in 4–18 ms, with no chord redrawn (P-68, P-95).
+- A hover redraws only the overlay: p95 3–17 ms. P-57a holds by construction, because the bulk layer is never touched.
+- The visited band and "here" marker take 1–6 ms.
+- 10,000 note elements take 59–94 ms. At 6× throttling that rises to 170–380 ms, over the 100 ms long-task budget per navigation, so the side-panel graph must keep its note elements across navigations rather than rebuild them.
+
+**What did not work**
+- **Baking on the server.** tiny-skia (the editor's rasteriser, not yet a daemon dependency) took 1.2–7 s at 1600 px, and an 8-bit alpha PNG of the layer is 0.6–1.2 MB. That is over the 300 KB download budget, because a dense chord texture does not compress. A colour WebP was 11–34 KB in C5, but it cannot be tinted, and the daemon has no lossy encoder.
+- **Drawing visible chords live when zoomed.** At device resolution it costs 0.3–2.8 s at 2×, and is affordable only from about 8× at 1,560 notes. Zoom instead scales the 1× bulk layer and redraws the overlay sharp. The camera moves; nothing else does (P-64).
+- **Binning chords by ring position.** Merging chords that join the same pair of ring bins cuts the strokes only 1.0–2.1× (720–2,880 bins). The links are too spread out.
+
+**The hierarchical views do not fit any budget, at any size, as built.** The graph package's `buildScene`, in Node, desktop CPU:
+
+| Notes | Sunburst or balloon build | Copying the scene to or from a worker | Peak memory |
+|---|---|---|---|
+| 1,560 | 300–340 ms | 220–350 ms | 0.35 GB |
+| 5,000 | 1.1–1.3 s | 0.9–1.0 s | 1.1 GB |
+| 10,000 | 2.1–2.2 s | 2.1–2.9 s | 1.9 GB |
+
+An earlier run at 5,000 notes ran out of memory under a 1 GB cap.
+- On the main thread the build is a long task over the 300 ms target even at 1,560 notes.
+- Moving it to a worker costs as much again in copying.
+- Its memory rules out phones.
+
+The scene's size, not the layout arithmetic, is the problem. Making these views fit needs a different scene: positions per note (O(notes)), derived on the server and cached with D6, with bundled links drawn as a tinted bulk layer like the chord view's. That is a redesign, not a tuning pass.
+
+**What the parity suite needs.** P-55, P-57, P-57a and P-64 are written as DOM checks on chord elements, such as "highlighted link elements come after all others". A chord drawn on a canvas has no element. With this design, those checks have to assert on the graph's model (which notes and links are lit, and in what role), exposed to tests, plus sampled pixels. The behaviour they describe is unchanged.
+
+**Still open**
+- Runs on a real phone and a real laptop browser with GPU raster.
+- The real bundle's link structure. Every result here is synthetic, and a more clustered real graph would bin better.
+
 ## C6: in-page router
 
 A dependency-free router of about 190 lines: 5,488 B minified, 2,388 B gzip.

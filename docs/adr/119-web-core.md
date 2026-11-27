@@ -7,8 +7,9 @@ Amendment 2 (2026-11-23) what the live app does not serve (folders, feeds, the s
 where its home page comes from, and the retirement of ADR-073's view; Amendment 3 (2026-11-24) the
 live explorer and who may list a KB; Amendment 4 (2026-11-24) where the live app's slot components and
 their data come from. Spikes
-C1–C6 and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and
-C13 are still to spike. D14 (search) and D15 (graph) stay open until they report. Phased (S0, L1–L3,
+C1–C6, C5b and C10–C12 are measured (results: `docs/research/119-spike-results.md`). C4b, C7, C8 and
+C13 are still to spike. D14 (search) stays open until C4b reports. D15 (graph) waits on the owner's
+decisions that C5b raised (its "Open" entry below). Phased (S0, L1–L3,
 X1, below).
 
 **Depends on:**
@@ -1013,7 +1014,15 @@ is: `/edit/` (the browser client).
 - **The licence opinion** and the self-built Graphviz module (D13).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
-  - C5b: graph theming, zoom, hierarchical views and phones;
+  - C5b is measured (2026-11-27). D15 waits on three owner decisions:
+    - whether the bulk chord layer may be drawn at one pixel per CSS pixel. That is 10–30× cheaper,
+      and visibly softer on a 2× screen.
+    - whether the hierarchical views leave L1c until they are redesigned. As built, they take 0.3–2 s
+      and 0.35–1.9 GB.
+    - whether the parity suite's graph rows (P-55, P-57, P-57a, P-64) may assert on an exposed
+      graph model plus sampled pixels, instead of on chord elements.
+
+    Real-device GPU runs are still owed.
   - C7: fail-closed rules;
   - C8: contrast;
   - C13: the live path, measuring change index → re-derivation → notice under concurrent readers, the
