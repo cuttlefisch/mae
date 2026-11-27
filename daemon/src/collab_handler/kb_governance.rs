@@ -93,6 +93,7 @@ fn not_operator(id: serde_json::Value) -> JsonRpcResponse {
 // its blocked keys, block another KB's owner, or unblock themselves.
 pub(super) async fn handle_kb_block_unblock_principal(
     doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
     session_id: u64,
     auth_principal: Option<&str>,
     method: &str,
@@ -135,6 +136,9 @@ pub(super) async fn handle_kb_block_unblock_principal(
     };
     match result {
         Ok(()) => {
+            if block {
+                super::kb_membership::cut_off(broadcaster, &kb_id, &principal);
+            }
             info!(
                 session = session_id,
                 operator = ?auth_principal,

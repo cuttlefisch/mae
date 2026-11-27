@@ -64,5 +64,59 @@ filter = "test(a_removed_members_open_sessions_stop_receiving_the_kb)"
 ref = "a removed member's open sessions stop receiving the KB"
 [[mutant.edit]]
 file = "daemon/src/collab_handler/kb_membership.rs"
-find = '''        cut_off(broadcaster, kb_id, ch.member);'''
-replace = '''        let _ = (broadcaster, ch.member);'''
+find = '''    if !ch.add {
+        cut_off(broadcaster, kb_id, ch.member);
+    }
+    // ADR-026'''
+replace = '''    // ADR-026'''
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_membership.rs"
+find = '''        // check before the removal persisted may have landed since the first.
+        cut_off(broadcaster, kb_id, ch.member);'''
+replace = '''        // check before the removal persisted may have landed since the first.'''
+
+[[mutant]]
+id = "operator-socket/block-not-cut-off"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_blocked_principals_open_sessions_stop_receiving_the_kb)"
+ref = "a blocked principal's open sessions stop receiving the KB"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_governance.rs"
+find = '''                super::kb_membership::cut_off(broadcaster, &kb_id, &principal);'''
+replace = '''                let _ = (broadcaster, &principal);'''
+
+[[mutant]]
+id = "operator-socket/unblock-cuts-off"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_blocked_principals_open_sessions_stop_receiving_the_kb)"
+ref = "an unblock cuts nobody off"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_governance.rs"
+find = '''            if block {
+                super::kb_membership::cut_off'''
+replace = '''            if true {
+                super::kb_membership::cut_off'''
+
+[[mutant]]
+id = "operator-socket/revoke-not-cut-off"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_revoke_cuts_off_only_once_it_reaches_its_quorum)"
+ref = "a revoke that reaches its quorum cuts the subject off"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/mod.rs"
+find = '''        kb_membership::cut_off(broadcaster, kb_id, subject);'''
+replace = '''        let _ = (broadcaster, subject);'''
+
+[[mutant]]
+id = "operator-socket/revoke-cuts-off-below-quorum"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_revoke_cuts_off_only_once_it_reaches_its_quorum)"
+ref = "one co-signature below the quorum cuts nobody off"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/mod.rs"
+find = '''    if !after.members.contains_key(subject) {'''
+replace = '''    if true || !after.members.contains_key(subject) {'''

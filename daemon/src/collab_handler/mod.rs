@@ -659,7 +659,7 @@ pub(crate) fn register_session(
     let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
     let rx = bc.subscribe_doc_scoped(session_id, vec![]);
     // Recorded so a member's removal can cut this session off its KB's
-    // documents at once (`apply_membership_change`).
+    // documents at once (`kb_membership::cut_off`).
     bc.set_principal(session_id, principal);
     rx
 }
@@ -1469,8 +1469,16 @@ async fn append_signed_revoke(
     let update = coll.append_signed_op(&op, &sig, &pubkey);
     persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update)
         .await
-        .map(|_| ())
-        .map_err(McpError::internal_fault)
+        .map_err(McpError::internal_fault)?;
+    // One co-signature may not reach the quorum: cut the subject's open
+    // sessions off only once the derivation no longer counts them a member.
+    let after = doc_store
+        .derived_membership(kb_id, coll, &anchor, now)
+        .await;
+    if !after.members.contains_key(subject) {
+        kb_membership::cut_off(broadcaster, kb_id, subject);
+    }
+    Ok(())
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
@@ -2160,6 +2168,7 @@ async fn handle_doc_request_inner(
         Method::KbBlockPrincipal | Method::KbUnblockPrincipal => {
             kb_governance::handle_kb_block_unblock_principal(
                 doc_store,
+                broadcaster,
                 session_id,
                 auth_principal,
                 request.method.as_str(),
