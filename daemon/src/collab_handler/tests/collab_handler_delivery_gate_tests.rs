@@ -283,3 +283,34 @@ async fn a_lapsed_timebox_is_refused_at_delivery_with_nothing_written() {
         "past the timebox, nothing written"
     );
 }
+
+/// Recording an anchor changes no document, yet it moves a KB from its member
+/// list to its signed log: a log with no genesis the anchor signed admits
+/// nobody, so a member on the list loses read access. Kills: an anchor record
+/// not moving the access generation, which would keep the memoized allow.
+#[tokio::test]
+async fn recording_an_anchor_ends_a_memoized_allow() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let (owner, bob) = (fp("owner"), fp("bob"));
+    let mut docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        "kbz",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    let add = kb_member_msg("kb/add_member", "kbz", &bob, Some("viewer"));
+    let r = dispatch_as(&store, &bc, Some("owner"), Some(&owner), add, &mut docs).await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+
+    let mut gate = delivery_gate::DeliveryGate::new(Some(&bob), Transport::Hub);
+    assert!(gate.admits(&store, "kbz").await, "on the member list");
+    let key = Identity::generate("someone").public().to_bytes();
+    store.set_kb_anchor("kbz", key).await.unwrap();
+    assert!(!gate.admits(&store, "kbz").await, "the log now governs");
+}

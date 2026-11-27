@@ -68,3 +68,17 @@ ref = "a document is closed and reported once"
 file = "daemon/src/collab_handler/delivery_gate.rs"
 find = '''        if !self.closed.contains(doc) && !docs.iter().any(|d| d == doc) {'''
 replace = '''        if !docs.iter().any(|d| d == doc) {'''
+
+[[mutant]]
+id = "delivery-gate/anchor-keeps-the-allow"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(recording_an_anchor_ends_a_memoized_allow)"
+ref = "recording an anchor moves the access generation"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        drop(anchors);
+        self.note_access_change(kb_id);
+        Ok(())'''
+replace = '''        drop(anchors);
+        Ok(())'''
