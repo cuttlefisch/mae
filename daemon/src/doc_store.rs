@@ -111,6 +111,10 @@ pub struct DocStore {
     /// whether a KB holds a blob without a second handle being threaded
     /// through the listener. Absent: no attachment resolves.
     blob_store: std::sync::OnceLock<Arc<crate::blob_store::BlobStore>>,
+    /// ADR-113 E8: the operator's second-factor values and window for
+    /// controlled acts, set once at startup. Unset: no accepted value, so an
+    /// act that needs one is refused (fail closed).
+    step_up: std::sync::OnceLock<crate::sign_in::StepUpRule>,
     /// Per-KB content trust anchor (ADR-026): the owner pubkey a peer verifies the
     /// op-log genesis against. Registered for a KB JOINED from a relay we don't
     /// trust (the join-ticket node-id, by the dialer), and — ADR-036 Amendment 1
@@ -363,6 +367,7 @@ impl DocStore {
             signer: std::sync::OnceLock::new(),
             bindings: std::sync::OnceLock::new(),
             blob_store: std::sync::OnceLock::new(),
+            step_up: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
             content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
@@ -913,6 +918,17 @@ impl DocStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         g.get(kb_id).copied().unwrap_or(0)
+    }
+
+    /// Install the operator's second-factor rule (ADR-113 E8). Called once at
+    /// startup; idempotent.
+    pub fn set_step_up_rule(&self, rule: crate::sign_in::StepUpRule) {
+        let _ = self.step_up.set(rule);
+    }
+
+    /// The operator's second-factor rule; the fail-closed default when unset.
+    pub fn step_up_rule(&self) -> crate::sign_in::StepUpRule {
+        self.step_up.get().cloned().unwrap_or_default()
     }
 
     /// The live site's derivation cache.

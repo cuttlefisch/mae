@@ -87,14 +87,26 @@ fn rsa_key() -> (String, JwkOwned) {
     (pem, jwk)
 }
 
+/// The record on, with a generous commit timeout. A commit includes an
+/// fsync, and a loaded CI runner can make that slower than any short bound:
+/// a 300 ms default failed `a_stop_waits_for_a_request_in_flight_to_record_its_event`
+/// in CI with an ordinary commit refused 503 (reproduced by delaying the
+/// commit 400 ms). A test whose subject is the timeout uses [`outage_settings`].
 fn record_settings(f: impl FnOnce(&mut ActivitySettings)) -> ActivitySettings {
     let mut s = ActivitySettings {
         enabled: true,
-        commit_timeout_ms: 300,
+        commit_timeout_ms: 10_000,
         ..ActivitySettings::default()
     };
     f(&mut s);
     s
+}
+
+/// For a test whose writer is held or cannot open, so the timeout is what
+/// answers: short, so the test does not wait, and deterministic, since no
+/// commit can land however fast the machine.
+fn outage_settings() -> ActivitySettings {
+    record_settings(|s| s.commit_timeout_ms = 300)
 }
 
 impl Harness {
@@ -501,7 +513,7 @@ fn the_method_lists_are_the_dispatchers_own_arms() {
 /// the same read is answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_held_writer_refuses_a_read_and_sends_none_of_it() {
-    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let h = Harness::new(Some(outage_settings())).await;
     let token = h.token(3600);
     let get = json!({"kb_id": "kb-a", "node_id": "n1"});
     let held = Held::new(&h.db);
@@ -532,7 +544,7 @@ async fn health(h: &Harness) -> (u16, Value) {
 /// every insert); back to `200` by itself once a commit succeeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_fails_with_the_writer_and_recovers_by_itself() {
-    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let h = Harness::new(Some(outage_settings())).await;
     let token = h.token(3600);
     assert_eq!(health(&h).await, (200, json!({"status": "ok"})));
     let saboteur = ActivityDb::open(&h.db).unwrap();
@@ -562,11 +574,7 @@ async fn health_is_503_from_the_start_when_the_record_cannot_open() {
     let dir = tempfile::tempdir().unwrap();
     let blocked = dir.path().join("a-file");
     std::fs::write(&blocked, b"").unwrap();
-    let h = Harness::at(
-        Some(record_settings(|_| {})),
-        Some(blocked.join("activity.db")),
-    )
-    .await;
+    let h = Harness::at(Some(outage_settings()), Some(blocked.join("activity.db"))).await;
     assert_eq!(health(&h).await, (503, json!({"status": "unavailable"})));
     let off = Harness::new(None).await;
     assert_eq!(health(&off).await, (200, json!({"status": "ok"})));
@@ -1062,7 +1070,7 @@ async fn until_healthy(h: &Harness) {
 /// record's `503` too, never its real `401`. Recovered, it gets the `401`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn after_a_failed_first_refusal_the_next_meets_the_records_refusal_too() {
-    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let h = Harness::new(Some(outage_settings())).await;
     let held = Held::new(&h.db);
     for label in ["first", "second"] {
         let r = h.send("POST", "/", Some("not.a.token"), "", "").await;
@@ -1080,7 +1088,7 @@ async fn after_a_failed_first_refusal_the_next_meets_the_records_refusal_too() {
 /// origin, and every other route, get none.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_records_503_carries_the_routes_cors_header() {
-    let h = Harness::new(Some(record_settings(|_| {}))).await;
+    let h = Harness::new(Some(outage_settings())).await;
     let token = h.token(3600);
     let with_origin = |o: &str| format!("Origin: {o}\r\n");
     let held = Held::new(&h.db);
@@ -1330,7 +1338,7 @@ async fn a_stop_waits_for_a_request_in_flight_to_record_its_event() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bad_token_flood_during_an_outage_queues_a_bounded_number() {
     let (waves, per_wave) = (5, 10);
-    let h = Harness::new(Some(record_settings(|s| s.commit_timeout_ms = 300))).await;
+    let h = Harness::new(Some(outage_settings())).await;
     let record = h.record.clone().unwrap();
     let held = Held::new(&h.db);
     let first = h.send("POST", "/", Some("not.a.token"), "", "").await;
