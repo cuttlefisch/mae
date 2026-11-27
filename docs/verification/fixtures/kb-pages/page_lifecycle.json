@@ -1,0 +1,192 @@
+{
+  "$comment": "ADR-036 Amendment 2 fixture: a browser editor's page lifecycle. JSON-RPC 2.0 frames on the browser client's /ws session (ADR-099), as the daemon's own test sends them (daemon/src/collab_handler/tests/collab_handler_page_lifecycle_tests.rs, which pins this file). Clients branch on error.data.kind only. Identifiers, keys and signatures are the test's; field names, kinds and the order of steps are normative.",
+  "contract": {
+    "node_id": "The client mints it: a UUID v4.",
+    "signing": "Every change below is signed with the person's member key: kb/node_update with signOp (maecontent/v1), the two list methods with signManifestOp (maemanifest/v1, mae-crypto 0.4.0). The header fields (author, author_pubkey, epoch as decimal text, issued_at, sig) sit beside the method's own params.",
+    "create": "kb/node_update of the new node first (its content exists, unlisted: nothing else sees it yet), then kb/collection_node_add with its title (it is listed). Never the reverse: a listed node without content would be listed empty.",
+    "rename": "kb/node_update changing the node's title, then kb/collection_node_add of the same node_id with the new title. An add of an existing node_id is an upsert: it retitles, it is not refused. The listed title does not follow the content by itself; a client shows both and retries the add when they differ.",
+    "delete": "kb/collection_node_remove, with no title. A node holding any publication-review revision is refused (see the refusals); derogate it instead.",
+    "notification": "Each list change reaches every other session subscribed to kbc:<kb_id> as one sync_update event. A node's own kb/node_update is not a list change and sends none to them.",
+    "switch": "[collab.auth] require_signed_content_ops. Off, an unsigned change is accepted and counted; on, refused signature_required. A signed change that fails verification is refused at any setting."
+  },
+  "steps": [
+    {
+      "name": "create, 1: the node's content",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "kb/node_update",
+        "params": {
+          "kb_id": "kb-hv",
+          "node_id": "5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03",
+          "update": "<base64 yrs update: the new node's document>",
+          "author": "<the signer's member-key fingerprint>",
+          "author_pubkey": "<base64: the signer's 32-byte public key>",
+          "epoch": "0",
+          "issued_at": 1790000000,
+          "base_sv": "",
+          "sig": "<base64: the 64-byte Ed25519 signature>"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "result": {
+          "applied": true
+        }
+      }
+    },
+    {
+      "name": "create, 2: list it",
+      "request": {
+        "id": 21,
+        "jsonrpc": "2.0",
+        "method": "kb/collection_node_add",
+        "params": {
+          "author": "<the signer's member-key fingerprint>",
+          "author_pubkey": "<base64: the signer's 32-byte public key>",
+          "epoch": "0",
+          "issued_at": 1790000000,
+          "kb_id": "kb-hv",
+          "node_id": "5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03",
+          "sig": "<base64: the 64-byte Ed25519 signature>",
+          "title": "Release checklist"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "result": {
+          "added": true,
+          "kb_id": "kb-hv",
+          "node_id": "5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03"
+        }
+      }
+    },
+    {
+      "name": "delete",
+      "request": {
+        "id": 23,
+        "jsonrpc": "2.0",
+        "method": "kb/collection_node_remove",
+        "params": {
+          "author": "<the signer's member-key fingerprint>",
+          "author_pubkey": "<base64: the signer's 32-byte public key>",
+          "epoch": "0",
+          "issued_at": 1790000000,
+          "kb_id": "kb-hv",
+          "node_id": "5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03",
+          "sig": "<base64: the 64-byte Ed25519 signature>"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 23,
+        "result": {
+          "added": false,
+          "kb_id": "kb-hv",
+          "node_id": "5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03"
+        }
+      }
+    }
+  ],
+  "notification": {
+    "data": {
+      "buffer_name": "kbc:kb-hv",
+      "update_base64": "<base64: the yrs update of kbc:<kb_id>>",
+      "wal_seq": 6
+    },
+    "type": "sync_update"
+  },
+  "refusals": [
+    {
+      "case": "unsigned, the switch on",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "unsigned content op for KB 'kb-hv' node '5f0c2a9e-8d1b-4c3e-9a7f-2b6d4e8c1a03' rejected: this daemon requires signed content ops (ADR-036 require-signed)",
+          "data": {
+            "kind": "signature_required"
+          }
+        }
+      }
+    },
+    {
+      "case": "a field changed after signing",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "signed manifest op rejected: the signature does not verify, or its key is not the author's",
+          "data": {
+            "kind": "signature_invalid"
+          }
+        }
+      }
+    },
+    {
+      "case": "another person's op",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "manifest op signed by <fingerprint> sent by session <fingerprint>: a session may send only ops it authored (ADR-036 Amendment 1 F4)",
+          "data": {
+            "kind": "not_author"
+          }
+        }
+      }
+    },
+    {
+      "case": "a stale epoch",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "signed manifest op rejected: a stale epoch",
+          "data": {
+            "caller_epoch": 1,
+            "current_epoch": 0,
+            "kind": "epoch_fenced"
+          }
+        }
+      }
+    },
+    {
+      "case": "a viewer",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "role 'viewer' may not Edit KB 'kb-hv'",
+          "data": {
+            "kind": "role_forbidden",
+            "required": "editor"
+          }
+        }
+      }
+    },
+    {
+      "case": "delete a node that has any publication-review revision (pinned in review-api/other_surface_refusals.json)",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32603,
+          "message": "a node with a revision is never deleted; derogate it",
+          "data": {
+            "kind": "invalid_transition",
+            "act": "delete",
+            "reason": "has_revisions"
+          }
+        }
+      }
+    }
+  ]
+}

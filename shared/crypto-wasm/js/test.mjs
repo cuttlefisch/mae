@@ -41,7 +41,7 @@ const OPS = new Map([
   ['keyInfo', 6], ['fingerprint', 7], ['checkChallenge', 8], ['signChallenge', 9],
   ['backupSeal', 10], ['backupOpen', 11], ['backupParams', 12], ['contentKeyGenerate', 13],
   ['contentSeal', 14], ['contentOpen', 15], ['contentWrap', 16], ['contentUnwrap', 17], ['signOp', 18],
-  ['opCanonicalBytes', 19], ['verifyOp', 20],
+  ['opCanonicalBytes', 19], ['verifyOp', 20], ['signManifestOp', 21], ['manifestOpCanonicalBytes', 22],
 ]);
 const FAST = { m: 19456, t: 2, p: 1 };
 const ISS = 'https://idp.example.com';
@@ -213,6 +213,20 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
     check(m.verifyOp({ ...op, sig: h.sig }) === true, 'verifyOp: the signed op verifies');
     check(m.verifyOp({ ...op, node_id: 'concept:other', sig: h.sig }) === false, 'verifyOp: another node fails');
     check(m.verifyOp({ ...op, sig: h.sig, author: 'SHA256:someone' }) === false, 'verifyOp: a claimed author fails');
+
+    // ADR-036 Amendment 2: a node-list change, the pinned vector of mae-crypto's manifest_op tests.
+    const mop = { kb_id: 'kb-alpha', node_id: 'concept:buffer', action: 'add', title: 'Buffer', epoch: '7', issued_at: 1790000000 };
+    const ms = m.signManifestOp({ key: k.key, ...mop });
+    check(Buffer.from(ms.sig, 'base64').toString('hex') === '3aae6f6a56a95395ebe4e27dc93075c005115bb0647705d9e158ef9e016693864dbaae39413797cfea7a5bafae905cd06bdda2ea09ee7a96013b586a8c562a02',
+      'signManifestOp: the pinned vector');
+    check(ms.author === k.fingerprint && ms.title === 'Buffer' && ms.action === 'add', 'signManifestOp: returns what it signed');
+    const mu = m.manifestOpCanonicalBytes({ ...mop, author_pubkey: k.public_key });
+    const msig = Buffer.from(await crypto.subtle.sign({ name: 'Ed25519' }, priv, Buffer.from(mu.canonical, 'base64')));
+    check(msig.toString('base64') === ms.sig, 'WebCrypto over manifestOpCanonicalBytes: the pinned vector');
+    const codeOf = (f) => { try { f(); return 'ok'; } catch (e) { return e.code; } };
+    check(codeOf(() => m.signManifestOp({ key: k.key, ...mop, title: 'a\0b' })) === 'nul-in-field', 'a NUL in the title is refused');
+    check(codeOf(() => m.signManifestOp({ key: k.key, ...mop, action: 'remove' })) === 'title-on-remove', 'a titled removal is refused');
+    check(codeOf(() => m.signManifestOp({ key: k.key, ...mop, action: 'rename' })) === 'bad-request', 'an unknown action is refused');
   }
   // And a signature verifies over exactly the challenge bytes.
   const signed = w.map(result).find((r) => r.ok && r.result.body);

@@ -24,6 +24,7 @@ use mae_crypto::backup::{self, BackupError, KdfParams};
 use mae_crypto::content_crypto::{self as cc, ContentKey, CryptoError};
 use mae_crypto::content_op::{ContentOp, HeaderError};
 use mae_crypto::identity_challenge::{self as ic, Challenge, ChallengeRefusal, Claimant};
+use mae_crypto::manifest_op::{ManifestAction, ManifestHeaderError, ManifestOp};
 use mae_crypto::member::{self, MemberKey};
 use mae_crypto::rng;
 use serde::{Deserialize, Serialize};
@@ -57,11 +58,13 @@ pub enum Op {
     SignOp = 18,
     OpCanonicalBytes = 19,
     VerifyOp = 20,
+    SignManifestOp = 21,
+    ManifestOpCanonicalBytes = 22,
 }
 
 impl Op {
     /// Every operation, in ABI order.
-    pub const ALL: [Op; 20] = [
+    pub const ALL: [Op; 22] = [
         Op::Version,
         Op::Generate,
         Op::ImportSeed,
@@ -82,6 +85,8 @@ impl Op {
         Op::SignOp,
         Op::OpCanonicalBytes,
         Op::VerifyOp,
+        Op::SignManifestOp,
+        Op::ManifestOpCanonicalBytes,
     ];
 
     pub fn from_u32(n: u32) -> Option<Op> {
@@ -132,6 +137,16 @@ impl From<HeaderError> for ApiError {
         match e {
             HeaderError::EmptyField(_) => Self::new("empty-field", e),
             HeaderError::NulInField(_) => Self::new("nul-in-field", e),
+        }
+    }
+}
+
+impl From<ManifestHeaderError> for ApiError {
+    fn from(e: ManifestHeaderError) -> Self {
+        match e {
+            ManifestHeaderError::EmptyField(_) => Self::new("empty-field", e),
+            ManifestHeaderError::NulInField(_) => Self::new("nul-in-field", e),
+            ManifestHeaderError::TitleOnRemove => Self::new("title-on-remove", e),
         }
     }
 }
@@ -198,6 +213,8 @@ fn run(op: Op, r: &[u8]) -> Result<String, ApiError> {
         Op::SignOp => sign_op(r),
         Op::OpCanonicalBytes => op_canonical_bytes(r),
         Op::VerifyOp => verify_op(r),
+        Op::SignManifestOp => sign_manifest_op(r),
+        Op::ManifestOpCanonicalBytes => manifest_op_canonical_bytes(r),
     }
 }
 
@@ -805,5 +822,149 @@ fn verify_op(r: &[u8]) -> Result<String, ApiError> {
         valid: req.author.as_deref().is_none_or(|a| a == op.author)
             && op.fingerprint_matches(&public)
             && op.verify(&sig, &public, &update),
+    })
+}
+
+// ---- manifest ops (ADR-036 Amendment 2, G1) ----
+
+/// A node-list change's fields, as `sign_manifest_op` and
+/// `manifest_op_canonical_bytes` take them. `title` is the node's title for
+/// an add, absent or empty for a removal.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestReq<'a> {
+    /// `sign_manifest_op` only: the held key.
+    #[serde(default)]
+    key: Option<u32>,
+    /// `manifest_op_canonical_bytes` only: the signing key's public half.
+    #[serde(borrow, default)]
+    author_pubkey: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    kb_id: Cow<'a, str>,
+    #[serde(borrow)]
+    node_id: Cow<'a, str>,
+    #[serde(borrow)]
+    action: Cow<'a, str>,
+    #[serde(borrow, default)]
+    title: Option<Cow<'a, str>>,
+    /// Decimal text, as `sign_op`'s.
+    #[serde(borrow)]
+    epoch: Cow<'a, str>,
+    issued_at: u64,
+}
+
+/// The op `req` names for the key whose fingerprint is `author`, checked as
+/// the daemon checks it (ids present, no NUL in any field, no title on a
+/// removal).
+fn manifest_op(req: &ManifestReq, author: String) -> Result<ManifestOp, ApiError> {
+    let action = match req.action.as_ref() {
+        "add" => ManifestAction::Add,
+        "remove" => ManifestAction::Remove,
+        _ => {
+            return Err(ApiError::new(
+                "bad-request",
+                "action is \"add\" or \"remove\"",
+            ))
+        }
+    };
+    let op = ManifestOp {
+        kb_id: req.kb_id.to_string(),
+        node_id: req.node_id.to_string(),
+        action,
+        title: req.title.as_deref().unwrap_or_default().to_string(),
+        author,
+        epoch: decimal_u64("epoch", &req.epoch)?,
+        issued_at: req.issued_at,
+    };
+    op.check()?;
+    Ok(op)
+}
+
+/// The header the daemon reads beside `kb_id`, `node_id` and `title` in
+/// `kb/collection_node_add`/`_remove`'s params, and the op's fields, so the
+/// client can show what was signed.
+#[derive(Serialize)]
+struct ManifestHeader {
+    kb_id: String,
+    node_id: String,
+    action: &'static str,
+    title: String,
+    author: String,
+    epoch: String,
+    issued_at: u64,
+    author_pubkey: String,
+}
+
+fn manifest_header(op: &ManifestOp, public: [u8; 32]) -> ManifestHeader {
+    ManifestHeader {
+        kb_id: op.kb_id.clone(),
+        node_id: op.node_id.clone(),
+        action: op.action.as_str(),
+        title: op.title.clone(),
+        author: op.author.clone(),
+        epoch: op.epoch.to_string(),
+        issued_at: op.issued_at,
+        author_pubkey: STANDARD.encode(public),
+    }
+}
+
+/// `sign_manifest_op`: a node-list change signed by the held key, whose
+/// fingerprint is the author. The module builds the signed bytes itself from
+/// the parsed fields; it never signs bytes a caller supplies.
+fn sign_manifest_op(r: &[u8]) -> Result<String, ApiError> {
+    let req: ManifestReq = parse(r)?;
+    if req.author_pubkey.is_some() {
+        return Err(ApiError::new(
+            "bad-request",
+            "author_pubkey belongs to manifest_op_canonical_bytes",
+        ));
+    }
+    let handle = req
+        .key
+        .ok_or_else(|| ApiError::new("bad-request", "sign_manifest_op needs key"))?;
+    let (op, sig, public) = held(handle, |k| {
+        let op = manifest_op(&req, k.fingerprint())?;
+        let sig = op.sign_with(k);
+        Ok::<_, ApiError>((op, sig, k.public_key()))
+    })??;
+    #[derive(Serialize)]
+    struct Signed {
+        #[serde(flatten)]
+        header: ManifestHeader,
+        sig: String,
+    }
+    out(&Signed {
+        header: manifest_header(&op, public),
+        sig: STANDARD.encode(sig),
+    })
+}
+
+/// `manifest_op_canonical_bytes`: the exact bytes the daemon verifies, for a
+/// key held outside the module, and the header to send with the signature.
+fn manifest_op_canonical_bytes(r: &[u8]) -> Result<String, ApiError> {
+    let req: ManifestReq = parse(r)?;
+    if req.key.is_some() {
+        return Err(ApiError::new(
+            "bad-request",
+            "key belongs to sign_manifest_op",
+        ));
+    }
+    let pubkey = req.author_pubkey.as_deref().ok_or_else(|| {
+        ApiError::new(
+            "bad-request",
+            "manifest_op_canonical_bytes needs author_pubkey",
+        )
+    })?;
+    let public = *bytes32("author_pubkey", pubkey)?;
+    let op = manifest_op(&req, member::fingerprint(&public))?;
+    #[derive(Serialize)]
+    struct Unsigned {
+        canonical: String,
+        #[serde(flatten)]
+        header: ManifestHeader,
+    }
+    out(&Unsigned {
+        canonical: STANDARD.encode(op.canonical_bytes()),
+        header: manifest_header(&op, public),
     })
 }

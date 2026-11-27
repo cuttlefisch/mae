@@ -1,0 +1,36 @@
+# mae-crypto 0.4.0: the browser's manifest-op signer (ADR-036 Amendment 2,
+# G4). One mutant per guard, each named for the test that must catch it.
+
+[[mutant]]
+id = "crypto-manifest-op/check-skipped"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "manifest_op"]
+filter = "test(unencodable_and_malformed_requests_are_refused)"
+ref = "G4: the module refuses what the encoding cannot carry"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''    op.check()?;
+    Ok(op)'''
+replace = '''    Ok(op)'''
+
+[[mutant]]
+id = "crypto-manifest-op/action-swapped"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "manifest_op"]
+filter = "test(a_signed_manifest_op_is_the_pinned_vector_and_verifies)"
+ref = "G1: the action signed is the action asked"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''        "add" => ManifestAction::Add,'''
+replace = '''        "add" => ManifestAction::Remove,'''
+
+[[mutant]]
+id = "crypto-manifest-op/outside-author-not-derived"
+runner = "editor"
+targets = ["-p", "mae-crypto-wasm", "--test", "manifest_op"]
+filter = "test(canonical_bytes_match_what_the_daemon_verifies)"
+ref = "ADR-098 Amendment 2: the author is the key's fingerprint, never claimed"
+[[mutant.edit]]
+file = "shared/crypto-wasm/src/api.rs"
+find = '''    let op = manifest_op(&req, member::fingerprint(&public))?;'''
+replace = '''    let op = manifest_op(&req, String::from("SHA256:claimed"))?;'''
