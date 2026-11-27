@@ -257,3 +257,73 @@ async fn with_nothing_configured_nothing_passes() {
         "second_factor_unconfigured"
     );
 }
+
+/// O24 (owner, 2026-11-27): annulling an attachment and derogating a document
+/// in force need the recent second factor too, and record it. Kills each
+/// check removed.
+#[tokio::test]
+async fn annulment_and_derogation_need_it_too() {
+    let env = env().await;
+    let _dir = with_blobs(&env);
+    configure(&env);
+    require_mfa(&env, json!({})).await;
+    let (rq, revs) = requested(&env, &["n1"]).await;
+    let ok = strong(&env, &env.viewer, &["approvers"]);
+    let p = json!({"kb_id": KB, "revision_id": revs[0]});
+    as_(&env, &ok, "kb/review.approve", p).await.unwrap();
+    let blob = put(&env, &pdf("signed")).await;
+    let attach = json!({"kb_id": KB, "revision_id": revs[0], "blob_sha256": blob});
+    as_(&env, &ok, "kb/review.attach_signed_pdf", attach)
+        .await
+        .unwrap();
+
+    let annul = json!({"kb_id": KB, "revision_id": revs[0], "kind": "signed_pdf",
+        "reason": "The wrong scan."});
+    let m = "kb/review.annul_attachment";
+    let weak_owner = signed(&env, &env.owner, &[], &["pwd"], 5);
+    let stale_owner = signed(&env, &env.owner, &[], &["pwd", "mfa"], 301);
+    assert_eq!(
+        err_kind(as_(&env, &weak_owner, m, annul.clone()).await),
+        "mfa_required"
+    );
+    assert_eq!(
+        err_kind(as_(&env, &stale_owner, m, annul.clone()).await),
+        "reauthentication_required"
+    );
+    as_(&env, &strong(&env, &env.owner, &[]), m, annul)
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded_sign_in(&env, "annul_attachment").await["second_factor"]["value"],
+        json!("mfa")
+    );
+
+    let blob = put(&env, &pdf("signed again")).await;
+    let attach = json!({"kb_id": KB, "revision_id": revs[0], "blob_sha256": blob});
+    as_(&env, &ok, "kb/review.attach_signed_pdf", attach)
+        .await
+        .unwrap();
+    let force = json!({"kb_id": KB, "request_id": rq, "effective_at": NOW});
+    as_(&env, &ok, "kb/review.enter_into_force", force)
+        .await
+        .unwrap();
+
+    let derogate = json!({"kb_id": KB, "node_id": "n1", "effective_at": NOW,
+        "reason": "Procedure retired."});
+    let m = "kb/review.derogate";
+    let weak = signed(&env, &env.viewer, &["approvers"], &["pwd"], 5);
+    let stale = signed(&env, &env.viewer, &["approvers"], &["pwd", "mfa"], 301);
+    assert_eq!(
+        err_kind(as_(&env, &weak, m, derogate.clone()).await),
+        "mfa_required"
+    );
+    assert_eq!(
+        err_kind(as_(&env, &stale, m, derogate.clone()).await),
+        "reauthentication_required"
+    );
+    as_(&env, &ok, m, derogate).await.unwrap();
+    assert_eq!(
+        recorded_sign_in(&env, "derogate").await["second_factor"]["value"],
+        json!("mfa")
+    );
+}

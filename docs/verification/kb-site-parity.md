@@ -145,14 +145,62 @@ Conventions for acceptance tests:
 
 ### 3.7 Graph
 
+*(Owner, 2026-11-27:)* the graph draws its links on a canvas (ADR-119 D15, C5b), so links are not DOM
+elements. Its acceptance tests read the **graph model**, a read-only snapshot the mounted graph exposes
+for tests (`handle.model()`), and check it against **sampled pixels**:
+
+```ts
+type Role = "hovered" | "found" | "current" | "neighbour" | "other";
+type Point = { x: number; y: number };   // CSS px from the graph canvas's top-left
+type Colour = string;                     // lower-case sRGB, "#rrggbb" or "#rrggbbaa"
+
+interface GraphModel {
+  version: 1;
+  view: "chord" | "sunburst" | "balloon";
+  camera: { x: number; y: number; zoom: number; rotation: number };  // rotation in radians
+  base: { draws: number };                // the all-links layer: how often drawn since mount
+  // Every note and, in a hierarchical view, every folder ("folder:" + its path).
+  notes: { id: string; kind: "note" | "folder"; at: Point & { r: number };
+           roles: Role[]; painted: Role; visited: boolean; labelled: boolean }[];
+  // The highlighted links only, in paint order (later is on top). Undirected:
+  // from < to by ID. `sample` lies on this link and on no other highlighted one.
+  links: { from: string; to: string; roles: Role[]; painted: Role; sample: Point }[];
+  // Where a hovered link crosses a current-page link: indexes into `links`.
+  crossings: { a: number; b: number; at: Point }[];
+  colours: Record<"background" | "base" | Role | "visited", Colour>;  // "other": an unlit note
+}
+```
+
+- **Roles.** A note or link holds every role that applies. It is painted in the first of `hovered`,
+  `found`, `current`, `neighbour` and `other` that it holds, and `painted` names that role.
+- **Colours** are as painted, and `base` is the tint of the all-links layer. A sampled pixel on that
+  layer is `colours.base` composited over `colours.background`.
+- **Pixel checks.** A test converts a `Point` to device pixels with `devicePixelRatio` and compares the
+  pixel there with the expected colour: on a note, at a link's `sample`, at a crossing, on the visited
+  band.
+  - The model's points lie on the centreline of what they name.
+  - Every mark a point names (a highlighted link, a note, the visited band) is at least **3 device
+    pixels** wide at any `devicePixelRatio`: `max(its CSS width, 3 / devicePixelRatio)` CSS px. The
+    sampled pixel is the one containing the point, so its centre can be up to 0.71 device px from the
+    centreline, and its far corner up to 1.41. Covering that on both sides takes 2.83 px. So the pixel
+    is fully covered at any angle, and anti-aliasing does not reach it.
+  - The tolerance is **2 per 8-bit channel**, for rounding only.
+  - The first implementation measures the largest difference it sees across both browsers, modes and
+    palettes, and records it here. If the measurement needs more than 2, the number changes here, for
+    both sides, never in one test.
+- **Versions.** The snapshot carries `version`. Either side may add fields within a version, and only a
+  change of meaning raises it.
+
+The rows below keep their requirements; only the tests changed (P-55, P-57, P-57a, P-64).
+
 | ID | Requirement | Acceptance test |
 |---|---|---|
 | P-53 | MUST show a graph of the site in the side panel of each page and offer an expanded full-page view. | Browser: graph present on every content page; an expand control opens the full view. |
 | P-54 | MUST place every published page (minus configured exclusions such as tag pages) in the graph, grouped by top-level folder, folders told apart by gaps and labels, not by colour alone. | Graph node count equals published pages minus exclusions; group boundaries present. |
-| P-55 | MUST colour by role (all notes, current note and its links, its neighbours, visited band), each role ≥ 3:1 against the page and the visited band ≥ 3:1 against what it sits on, in light and dark. Plain edges (between pages other than the current one) are texture and are not held to 3:1: every relationship they draw is also stated in text, in each page's links and backlinks, so they are not required to understand the content (WCAG 1.4.11). | Computed fills of each role class; contrast checks per mode and per palette; plain edges exempt. |
+| P-55 | MUST colour by role (all notes, current note and its links, its neighbours, visited band), each role ≥ 3:1 against the page and the visited band ≥ 3:1 against what it sits on, in light and dark. Plain edges (between pages other than the current one) are texture and are not held to 3:1: every relationship they draw is also stated in text, in each page's links and backlinks, so they are not required to understand the content (WCAG 1.4.11). | `model().colours` against `background`: contrast per role, mode and palette, `base` (plain edges) exempt; the pixel at each note's `at` and each link's `sample` matches the colour of its `painted` role. |
 | P-56 | MUST lift, name and show the links of a note on hover or focus while keeping the current note's links lit. | Browser: hover a note; its label is visible; its links and the current note's links have the highlight class. |
-| P-57 | MUST draw the current page's links above all others, and a hovered note's links above all others while hovered. | DOM order: highlighted link elements come after all others (painted on top). |
-| P-57a | MUST change only the hovered (or focused, or search-found) note and its own links; every other link keeps its stroke colour, opacity and width, and is not redrawn, before, during and after. | Browser, both views and modes: for every non-incident link, computed stroke/opacity/stroke-width and element identity are equal before, during and after the hover; incident links do change. |
+| P-57 | MUST draw the current page's links above all others, and a hovered note's links above all others while hovered. | `model().links` lists the current page's links, then a hovered note's after them (painted on top); the pixel at each `crossings[].at` has the hovered colour. |
+| P-57a | MUST change only the hovered (or focused, or search-found) note and its own links; every other link keeps its stroke colour, opacity and width, and is not redrawn, before, during and after. | Browser, both views and modes: `model().base.draws` is the same before, during and after the hover; only the hovered note's own links enter `model().links`; pixels sampled away from its links are equal before, during and after; incident links do change. |
 | P-58 | MUST highlight a note and the link to it from the current page while a body link to that note is hovered; nothing when it is left. | Browser, mouse: hover a body link; exactly that note and those links highlighted; move away; none. |
 | P-59 | MUST make the graph one tab stop, with arrow keys, Home and End to move between notes, and Enter to open; hierarchical views also walk folders (Up/Down within a level, Right into, Left out of). | Browser: Tab focuses the graph once; keys move focus as specified; Enter navigates without reload. |
 | P-60 | MUST give every note an accessible name and emit no native tooltips (no SVG `<title>`, no `title` attribute) in the graph, its controls included. (new for the controls: today's site gives its graph buttons `title` attributes) | DOM: 0 `title` elements/attributes in the graph and its controls; each note and control has a non-empty accessible name. |
@@ -160,7 +208,7 @@ Conventions for acceptance tests:
 | P-61a | MUST set the expanded view's camera once when it opens, to its final framing, with no intermediate zoom or pan transforms; the same when it closes. | Browser: record the zoom transform every animation frame for 1.5 s after the expand control is activated; at most one change after the first full-size frame, then constant; equal to the settled framing. Same on close. |
 | P-62 | MUST close the expanded view with Escape, and on browser Back return to the previous page through the router, closing the view. | Browser: Escape closes; Back with view open: previous URL, marker survives, no view. |
 | P-63 | MUST, in the expanded view, let a search find a note: mark it with a visible label, focus it, colour its links distinctly, and not navigate; a click on it opens its page. | Browser: search + Enter; URL unchanged after 1 s; note has the found marker and visible label; click navigates without reload. |
-| P-64 | MUST keep the camera stable: toggling display options (e.g. the "you are here" marker) neither redraws nor reframes; moving in hierarchical views only moves the camera. | Browser: same node element identities and same `viewBox` before and after the toggle. |
+| P-64 | MUST keep the camera stable: toggling display options (e.g. the "you are here" marker) neither redraws nor reframes; moving in hierarchical views only moves the camera. | Browser: `model().base.draws`, `camera` and the note IDs are the same before and after the toggle; moving in a hierarchical view changes `camera` only. |
 | P-65 | SHOULD offer a "you are here" marker, always shown in the side-panel graph, with a toggle in the expanded view (`role=switch`, `aria-checked`) that persists. | Browser: toggle flips `aria-checked` and marker visibility; reload keeps the choice. |
 | P-66 | SHOULD mark notes already visited, remembered per browser. | Browser: visit B, return to A; B has the visited band. |
 | P-67 | MUST keep the side-panel graph clickable after navigating from a page whose side panel is empty (e.g. tag or folder pages). | Browser: tag page → note page → click a graph note: navigation happens. |

@@ -984,6 +984,18 @@ The rest of D6. `mae_site::incremental::Deriver` keeps, per KB, what each page's
   - The change index and the thin notices (D9) are not built.
   - C13 still measures memory per KB. Each kept KB holds its pages' text and outputs alongside the derived site.
 
+### E1a. D8 enforced in the live app (2026-11-27)
+
+The live route's gate did not read the review policy: a KB with publication review on would have been
+served from its working copy, drafts included. D8 keeps such a KB off the live app until the
+published view (L3). The gate now answers it with the same not-found as every refusal, on every
+request and before the cache, so switching review on hides a cached KB at once. A policy that cannot
+be read hides it too.
+
+No KB on the test deployment had review on when this was found, so nothing was exposed. The
+published view on the site (in-force revisions only, with its leak test) is the next step for a
+review-enabled KB to be readable there.
+
 ### E2. `/edit/` belongs to the browser client
 
 The browser client's editor (ADR-100) mirrors the reader's addresses under `/edit/`. Its node pages
@@ -1053,13 +1065,36 @@ is: `/edit/` (the browser client).
 - **The licence opinion** and the self-built Graphviz module (D13).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
-  - C5b is measured (2026-11-27). D15 waits on three owner decisions:
-    - whether the bulk chord layer may be drawn at one pixel per CSS pixel. That is 10–30× cheaper,
-      and visibly softer on a 2× screen.
-    - whether the hierarchical views leave L1c until they are redesigned. As built, they take 0.3–2 s
-      and 0.35–1.9 GB.
-    - whether the parity suite's graph rows (P-55, P-57, P-57a, P-64) may assert on an exposed
-      graph model plus sampled pixels, instead of on chord elements.
+  - C5b is measured (2026-11-27). Its three owner decisions:
+    - **The bulk chord layer at one pixel per CSS pixel** *(owner, 2026-11-27, after a side-by-side
+      at 1,560 and 10,000 notes)*: yes. It is 10–30× cheaper (40 ms at 1,560 notes, about 125 ms at
+      10,000, against 0.4–4.5 s), keeps zoom usable, and is visibly softer only as background
+      texture: the current page's and the hovered note's links, the labels, the markers and the
+      visited band stay at device resolution on the overlay. A sharper layer swapped in later by a
+      worker, for small KBs, stays possible as an addition.
+
+      With this, D15 is decided: the chord layer baked at 1× in a worker and tinted for palette and
+      accent, the overlay at device resolution, notes as elements, and the hierarchical views
+      redesigned before the graph ships.
+    - **The hierarchical views** *(owner, 2026-11-27)*: redesigned **before** the graph ships, so
+      L1c's first release has the chord, sunburst and balloon views. As built, they take 0.3–2 s and
+      0.35–1.9 GB.
+
+      **What the redesign changes**, measured with `buildScene` on the same synthetic graphs:
+      - The layout itself is cheap. With the links removed, a scene takes 8–12 ms at 1,560 notes and
+        46–53 ms at 10,000, so positions stay in the browser.
+      - The cost is one scene object per link: an SVG path string and 24 culling boxes each. At
+        1,560 notes that is 22 MB of link data, against 1.1 MB for every note and folder, and
+        160–190 ms of the build. At 10,000 notes it is 1.3–1.4 s of the build.
+      - The redesign keeps the layout and makes no per-link objects. The worker draws the bundled
+        links straight into the 1× tinted layer, as the chord view does. Only the links of the
+        current, hovered and found notes get paths, for the overlay. With the links on a canvas,
+        nothing needs culling boxes.
+      - Still to measure, when it is built: the worker's bake of the bundled paths, which have more
+        segments than a chord.
+    - **The graph's parity rows** *(owner, 2026-11-27)*: P-55, P-57, P-57a and P-64 assert on the
+      graph model the mounted graph exposes, plus sampled pixels, instead of on chord elements. The
+      model's shape is in the parity spec, §3.7.
 
     Real-device GPU runs are still owed.
   - C7: fail-closed rules;

@@ -73,3 +73,14 @@ ref = "a failed derivation is not held"
 file = "daemon/src/site_cache.rs"
 find = '''        if !matches!(*site, Derived::Failed) {'''
 replace = '''        if true {'''
+
+[[mutant]]
+id = "site-cache/review-enabled-served"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_review_enabled_kb_is_not_served)"
+ref = "ADR-119 D8: a review-enabled KB is not served until the published view"
+[[mutant.edit]]
+file = "daemon/src/site.rs"
+find = '''    if !review_off(doc_store, kb_id).await {'''
+replace = '''    if false && !review_off(doc_store, kb_id).await {'''
