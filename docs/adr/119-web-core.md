@@ -1027,8 +1027,20 @@ is: `/edit/` (the browser client).
       redesigned before the graph ships.
     - **The hierarchical views** *(owner, 2026-11-27)*: redesigned **before** the graph ships, so
       L1c's first release has the chord, sunburst and balloon views. As built, they take 0.3–2 s and
-      0.35–1.9 GB. The redesign derives per-note positions on the server, cached with D6, and draws
-      the links as a tinted bulk layer, like the chord view.
+      0.35–1.9 GB.
+
+      **What the redesign changes**, measured with `buildScene` on the same synthetic graphs:
+      - The layout itself is cheap. With the links removed, a scene takes 8–12 ms at 1,560 notes and
+        46–53 ms at 10,000, so positions stay in the browser.
+      - The cost is one scene object per link: an SVG path string and 24 culling boxes each. At
+        1,560 notes that is 22 MB of link data, against 1.1 MB for every note and folder, and
+        160–190 ms of the build. At 10,000 notes it is 1.3–1.4 s of the build.
+      - The redesign keeps the layout and makes no per-link objects. The worker draws the bundled
+        links straight into the 1× tinted layer, as the chord view does. Only the links of the
+        current, hovered and found notes get paths, for the overlay. With the links on a canvas,
+        nothing needs culling boxes.
+      - Still to measure, when it is built: the worker's bake of the bundled paths, which have more
+        segments than a chord.
     - **The graph's parity rows** *(owner, 2026-11-27)*: P-55, P-57, P-57a and P-64 assert on the
       graph model the mounted graph exposes, plus sampled pixels, instead of on chord elements. The
       model's shape is in the parity spec, §3.7.
