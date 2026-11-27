@@ -510,6 +510,26 @@ mod tests {
             assert_eq!(set.second_factor_rule(), rule(&["mfa"], &["strong"]));
         }
 
+        /// ADR-113 E8: the window defaults to 300 s, and the daemon refuses
+        /// `pwd` as a second factor and a window under the 60 s clock leeway.
+        /// The boundary (60 passes, 59 fails) is pinned.
+        #[test]
+        fn the_step_up_configuration_refuses_pwd_and_a_short_window() {
+            let default = crate::config::OAuthConfig::default();
+            assert_eq!(default.step_up_rule().max_age_secs, 300);
+            assert!(default.check_second_factor().is_empty());
+            let read = |t: &str| -> crate::config::OAuthConfig { toml::from_str(t).unwrap() };
+            let ok = read("second_factor_amr = [\"mfa\"]\nsecond_factor_max_age_secs = 60");
+            assert!(ok.check_second_factor().is_empty());
+            assert_eq!(ok.step_up_rule().max_age_secs, 60);
+            for bad in [
+                "second_factor_amr = [\"pwd\", \"mfa\"]",
+                "second_factor_max_age_secs = 59",
+            ] {
+                assert_eq!(read(bad).check_second_factor().len(), 1, "{bad}");
+            }
+        }
+
         #[test]
         fn the_measured_sign_ins_are_read_as_emitted() {
             let now = now_unix();

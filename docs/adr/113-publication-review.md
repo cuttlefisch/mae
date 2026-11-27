@@ -1946,6 +1946,37 @@ named.
     authorization, as E8 requires, and a refreshed token fails check 3 (`mfa_required`), which is
     the intended outcome. Whether that IdP's *access* tokens carry `amr` and `auth_time` at all is
     still to be measured.
+  - **Answered (2026-11-26, PR-8).** Measured against authentik 2026.8.5 in a rehearsal of the
+    deployment's IdP:
+    - **The access token for the daemon's audience carries the claims.** After a password and
+      TOTP sign-in it holds `amr: ["pwd", "mfa"]` (an array) and an integer `auth_time`, as does
+      the ID token.
+    - **`acr` is useless here.** It is a fixed provider default, the same whatever the factors,
+      which confirms E8's decision not to consult it.
+    - **A password-only sign-in never reaches the daemon.** The flow stops at the second-factor
+      stage, so no token is minted without it.
+    - **A refresh keeps the original `amr` and `auth_time`.** So the window refuses a refreshed
+      token once it is older than `W`, as E8 intends.
+    - **`max_age=0` is ignored.** That IdP treats 0 as absent, so a client must send `max_age=1`,
+      never 0.
+    - **`prompt=login` re-authenticates only once per IdP session.** A client must not rely on it.
+    - **With the provider's authentication flow allowing a signed-in user, `max_age=1` past its
+      age re-runs password and TOTP, and `auth_time` moves.** Under a flow that admits only
+      signed-out users, the same request answered 404, so step-up needs the provider's flow set to
+      allow it.
+    - **A failed step-up (a wrong TOTP) issues no code and leaves the old session signed in.**
+
+    So E8's rule stands as written, with `accepted_amr = ["mfa"]` and no `acr`, and PR-8 builds it.
+
+    The browser client's server, relaying an act:
+    - steps up with `max_age=1` immediately before the act;
+    - checks that the new token's `auth_time` moved and that its `sub` is the user it started with;
+    - treats "no code" as "still not fresh", never as a sign-out;
+    - on `reauthentication_required`, steps up again.
+
+    The daemon never trusts the step-up itself. It judges only the verified token's `amr` and
+    `auth_time`, and its principal is that token's own `(iss, sub)` binding. So a different
+    account that re-authenticates is a different principal.
 - **O22. Deleting drafts and mistakes (Amendment 4, E7).** Its own ADR, not this one.
 - **O23. A session with no absolute lifetime (Amendment 4, E8).** The same rehearsal measured that
   each refresh resets the IdP session's idle lifetime, with no absolute cap, so a session refreshed

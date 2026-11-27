@@ -1,0 +1,133 @@
+# ADR-113 PR-8: a recent second factor at the moment of acting (E8). One mutant
+# per guard, each named for the test that must catch it.
+
+[[mutant]]
+id = "second-factor/empty-configuration-allowed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(with_nothing_configured_nothing_passes)"
+ref = "E8 check 2: nothing configured, nothing passes"
+[[mutant.edit]]
+file = "daemon/src/review/strength.rs"
+find = '''    if accepted.is_empty() {'''
+replace = '''    if false {'''
+
+[[mutant]]
+id = "second-factor/freshness-reversed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_window_is_exact_at_both_ends)"
+ref = "E8 check 4: the window"
+[[mutant.edit]]
+file = "daemon/src/review/strength.rs"
+find = '''    if !sign_in.fresh_within(now_secs, window) {'''
+replace = '''    if sign_in.fresh_within(now_secs, window) {'''
+
+[[mutant]]
+id = "second-factor/acr-counted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(acr_never_counts)"
+ref = "E8: acr is not consulted"
+[[mutant.edit]]
+file = "daemon/src/review/strength.rs"
+find = '''        acr: Vec::new(),
+    };'''
+replace = '''        acr: op.rule.acr.clone(),
+    };'''
+
+[[mutant]]
+id = "second-factor/kb-window-ignored"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_kb_window_only_shortens_the_operators)"
+ref = "E8: the KB's window is held"
+[[mutant.edit]]
+file = "daemon/src/review/strength.rs"
+find = '''        .map_or(op.max_age_secs, |w| w.min(op.max_age_secs))'''
+replace = '''        .map_or(op.max_age_secs, |_| op.max_age_secs)'''
+
+[[mutant]]
+id = "second-factor/window-bounds-dropped"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_kb_window_only_shortens_the_operators)"
+ref = "E8: a KB window from 60 to the operator's"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''        Some(w) if (min..=op_max).contains(&w) => Ok(Some(Some(w))),'''
+replace = '''        Some(w) if w > 0 || min > op_max => Ok(Some(Some(w))),'''
+
+[[mutant]]
+id = "second-factor/approve-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_controlled_act_needs_a_recent_second_factor)"
+ref = "PR-8: approve"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let satisfied = super::strength::required(store, &g.policy, who)?;
+    let set = completing_set(store, kb_id, &rev).await?;'''
+replace = '''    let satisfied = None;
+    let set = completing_set(store, kb_id, &rev).await?;'''
+
+[[mutant]]
+id = "second-factor/enter-into-force-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_controlled_act_needs_a_recent_second_factor)"
+ref = "PR-8: enter_into_force"
+[[mutant.edit]]
+file = "daemon/src/review/acts.rs"
+find = '''    let satisfied = super::strength::required(store, &g.policy, who)?;
+    let now = store.now_ms() as i64;'''
+replace = '''    let satisfied = None;
+    let now = store.now_ms() as i64;'''
+
+[[mutant]]
+id = "second-factor/signed-pdf-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(every_controlled_act_needs_a_recent_second_factor)"
+ref = "PR-8: attach_signed_pdf"
+[[mutant.edit]]
+file = "daemon/src/review/attach.rs"
+find = '''    let satisfied = super::strength::required(store, &g.policy, who)?;
+    let sha = required_str(params, "blob_sha256")?;'''
+replace = '''    let satisfied = None;
+    let sha = required_str(params, "blob_sha256")?;'''
+
+[[mutant]]
+id = "second-factor/set-code-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(administration_and_the_switch_itself_need_it)"
+ref = "PR-8: set_code"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    let satisfied = super::strength::required(store, &g.policy, who)?;
+    let node_id = required_str(params, "node_id")?.to_string();'''
+replace = '''    let satisfied = None;
+    let node_id = required_str(params, "node_id")?.to_string();'''
+
+[[mutant]]
+id = "second-factor/set-policy-unchecked"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(administration_and_the_switch_itself_need_it)"
+ref = "PR-8: set_policy, and the switch itself"
+[[mutant.edit]]
+file = "daemon/src/review/methods.rs"
+find = '''    if !current.approval_requires_mfa && !next.approval_requires_mfa {'''
+replace = '''    if true {'''
+
+[[mutant]]
+id = "second-factor/pwd-accepted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(the_step_up_configuration_refuses_pwd_and_a_short_window)"
+ref = "E8: pwd never counts"
+[[mutant.edit]]
+file = "daemon/src/oauth_config.rs"
+find = '''        if self.second_factor_amr.iter().any(|v| v == "pwd") {'''
+replace = '''        if false {'''

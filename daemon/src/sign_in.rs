@@ -18,6 +18,32 @@ use serde::Serialize;
 /// below tolerates exactly the clock skew the validator does, and no more.
 pub const JWT_CLOCK_LEEWAY_SECS: u64 = 60;
 
+/// ADR-113 E8: the window, seconds, between a person's sign-in and a
+/// controlled act, when the operator sets none. It only has to cover the
+/// step-up immediately before the act, a slow second-factor push and one retry.
+pub const DEFAULT_REAUTH_MAX_AGE_SECS: u64 = 300;
+
+/// ADR-113 E8: no window may be shorter. Below the clock leeway, the two
+/// hosts' clocks, not the person, would decide whether an act passes.
+pub const MIN_REAUTH_MAX_AGE_SECS: u64 = JWT_CLOCK_LEEWAY_SECS;
+
+/// What the operator configured for acts that need a recent second factor
+/// (ADR-113 E8): the accepted values, and the longest window a KB may use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepUpRule {
+    pub rule: SecondFactorRule,
+    pub max_age_secs: u64,
+}
+
+impl Default for StepUpRule {
+    fn default() -> Self {
+        StepUpRule {
+            rule: SecondFactorRule::default(),
+            max_age_secs: DEFAULT_REAUTH_MAX_AGE_SECS,
+        }
+    }
+}
+
 /// The claim names [`SecondFactor::claim`] reports.
 pub const AMR: &str = "amr";
 pub const ACR: &str = "acr";

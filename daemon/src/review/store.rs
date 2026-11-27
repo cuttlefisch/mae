@@ -143,6 +143,17 @@ pub(crate) fn ensure_schema(conn: &sqlite::Connection) -> Result<(), sqlite::Err
              INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    // PR-8: E8's switch, off, and the operator's window, on a KB an earlier
+    // PR left.
+    if !has_column(conn, "kb_review_policy", "approval_requires_mfa")? {
+        conn.execute(
+            "ALTER TABLE kb_review_policy ADD COLUMN approval_requires_mfa \
+             INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    if !has_column(conn, "kb_review_policy", "reauth_max_age_secs")? {
+        conn.execute("ALTER TABLE kb_review_policy ADD COLUMN reauth_max_age_secs INTEGER")?;
+    }
     if !has_column(conn, "kb_review_acts", "rendered_pdf_sha256")? {
         conn.execute("ALTER TABLE kb_review_acts ADD COLUMN rendered_pdf_sha256 TEXT")?;
     }
@@ -248,6 +259,12 @@ pub struct Policy {
     pub approvers: Vec<Performer>,
     /// B7: `approve` must carry the revision's current rendered PDF's hash.
     pub approval_requires_rendered_pdf: bool,
+    /// B7, C4, E8 (PR-8): every controlled and administrative act needs a
+    /// recent second factor.
+    pub approval_requires_mfa: bool,
+    /// E8: this KB's window, seconds; `None` is the operator's. Never longer
+    /// than the operator's, never under 60.
+    pub reauth_max_age_secs: Option<u64>,
 }
 
 impl Default for Policy {
@@ -263,6 +280,8 @@ impl Default for Policy {
             reviewers: Vec::new(),
             approvers: Vec::new(),
             approval_requires_rendered_pdf: false,
+            approval_requires_mfa: false,
+            reauth_max_age_secs: None,
         }
     }
 }
@@ -270,7 +289,8 @@ impl Default for Policy {
 pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT review_enabled, in_force_on_approval, required_acts, approval_record,
-                code_prefixes, reviewers, approvers, approval_requires_rendered_pdf
+                code_prefixes, reviewers, approvers, approval_requires_rendered_pdf,
+                approval_requires_mfa, reauth_max_age_secs
          FROM kb_review_policy WHERE kb_id = ?1",
     )?;
     stmt.bind((1, kb_id))?;
@@ -291,6 +311,11 @@ pub(crate) fn policy(conn: &sqlite::Connection, kb_id: &str) -> Result<Policy, S
         approvers: performers_from(&stmt.read::<String, _>("approvers")?)
             .ok_or_else(|| bad("approvers"))?,
         approval_requires_rendered_pdf: stmt.read::<i64, _>("approval_requires_rendered_pdf")? != 0,
+        approval_requires_mfa: stmt.read::<i64, _>("approval_requires_mfa")? != 0,
+        reauth_max_age_secs: stmt
+            .read::<Option<i64>, _>("reauth_max_age_secs")?
+            .map(|w| u64::try_from(w).map_err(|_| bad("reauth_max_age_secs")))
+            .transpose()?,
     })
 }
 
@@ -302,8 +327,9 @@ pub(crate) fn put_policy(
     let mut stmt = conn.prepare(
         "INSERT OR REPLACE INTO kb_review_policy
          (kb_id, review_enabled, in_force_on_approval, required_acts, approval_record, code_prefixes,
-          reviewers, approvers, approval_requires_rendered_pdf)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+          reviewers, approvers, approval_requires_rendered_pdf, approval_requires_mfa,
+          reauth_max_age_secs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
     stmt.bind((1, kb_id))?;
     stmt.bind((2, i64::from(p.review_enabled)))?;
@@ -324,6 +350,11 @@ pub(crate) fn put_policy(
     stmt.bind((7, performers_json(&p.reviewers).as_str()))?;
     stmt.bind((8, performers_json(&p.approvers).as_str()))?;
     stmt.bind((9, i64::from(p.approval_requires_rendered_pdf)))?;
+    stmt.bind((10, i64::from(p.approval_requires_mfa)))?;
+    let window = p
+        .reauth_max_age_secs
+        .map(|w| i64::try_from(w).unwrap_or(i64::MAX));
+    stmt.bind((11, window))?;
     stmt.next()?;
     Ok(())
 }

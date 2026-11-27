@@ -394,11 +394,7 @@ fn record_withdrawal(
 
 /// The policy fields a later PR adds (refused until then, never silently
 /// ignored).
-const LATER_FIELDS: &[&str] = &[
-    "approval_requires_mfa",
-    "reauth_max_age_secs",
-    "attachment_retention_days",
-];
+const LATER_FIELDS: &[&str] = &["attachment_retention_days"];
 const ACTS: &[&str] = &["reviewed", "approved"];
 const RECORDS: &[&str] = &["act", "signed_pdf"];
 
@@ -479,8 +475,35 @@ fn performer_list(params: &Value, name: &str) -> Result<Option<Vec<Performer>>, 
     Ok(Some(list))
 }
 
+/// E8: a KB's window may only shorten the operator's `op_max`, and never go
+/// under 60 seconds (the clock leeway).
+fn reauth_window(params: &Value, op_max: u64) -> Result<Option<Option<u64>>, McpError> {
+    let Some(v) = params.get("reauth_max_age_secs") else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(Some(None));
+    }
+    let min = crate::sign_in::MIN_REAUTH_MAX_AGE_SECS;
+    match v.as_u64() {
+        Some(w) if (min..=op_max).contains(&w) => Ok(Some(Some(w))),
+        _ => Err(McpError::invalid_params(
+            "reauth_max_age_secs",
+            format!(
+                "reauth_max_age_secs must be a whole number of seconds from {min} to this \
+                 daemon's {op_max}, or null for the daemon's"
+            ),
+        )),
+    }
+}
+
 /// The policy as `params` would leave it, and the reason, if one is needed.
-fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<String>), McpError> {
+/// `op_max` is the operator's window, the longest a KB may set (E8).
+fn proposed_policy(
+    current: &Policy,
+    params: &Value,
+    op_max: u64,
+) -> Result<(Policy, Option<String>), McpError> {
     if let Some(f) = LATER_FIELDS.iter().find(|f| params.get(**f).is_some()) {
         return Err(McpError::invalid_params(
             f,
@@ -493,6 +516,12 @@ fn proposed_policy(current: &Policy, params: &Value) -> Result<(Policy, Option<S
     }
     if let Some(b) = optional_bool(params, "approval_requires_rendered_pdf")? {
         p.approval_requires_rendered_pdf = b;
+    }
+    if let Some(b) = optional_bool(params, "approval_requires_mfa")? {
+        p.approval_requires_mfa = b;
+    }
+    if let Some(w) = reauth_window(params, op_max)? {
+        p.reauth_max_age_secs = w;
     }
     if let Some(b) = optional_bool(params, "in_force_on_approval")? {
         p.in_force_on_approval = b;
@@ -568,10 +597,10 @@ fn policy_json(p: &Policy) -> Value {
         "required_acts": p.required_acts,
         "reviewers": p.reviewers.iter().map(Performer::to_json).collect::<Vec<_>>(),
         "approvers": p.approvers.iter().map(Performer::to_json).collect::<Vec<_>>(),
-        "approval_requires_mfa": false,
+        "approval_requires_mfa": p.approval_requires_mfa,
         "approval_requires_rendered_pdf": p.approval_requires_rendered_pdf,
         "approval_record": p.approval_record,
-        "reauth_max_age_secs": null,
+        "reauth_max_age_secs": p.reauth_max_age_secs,
         "attachment_retention_days": null,
         "code_prefixes": p.code_prefixes,
     })
@@ -607,19 +636,28 @@ pub(super) async fn set_policy(
     }
     // Validated against the gate's read, and again against the row under the
     // writer, so a concurrent change is never silently overwritten.
-    let (proposed, _) = proposed_policy(&g.policy, params)?;
+    let op = store.step_up_rule();
+    let (proposed, _) = proposed_policy(&g.policy, params, op.max_age_secs)?;
     named_members_are_persons(store, &proposed)?;
     let signer = signer(store)?;
-    let (kb, params, actor) = (kb_id.to_string(), params.clone(), actor(who));
+    let (kb, params, who) = (kb_id.to_string(), params.clone(), who.clone());
     let at = store.now_ms() as i64;
     flatten(
         store
             .review_write(move |c| {
                 let current = store::policy(c, &kb)?;
-                let (next, reason) = match proposed_policy(&current, &params) {
+                let (next, reason) = match proposed_policy(&current, &params, op.max_age_secs) {
                     Ok(p) => p,
                     Err(e) => return Ok(Err(e)),
                 };
+                // E8 on the owner's administration, judged on the stored row:
+                // switching the requirement off needs it, and so does switching
+                // it on (the owner shows they can meet it before it binds them).
+                let satisfied = match policy_strength(&who, &op, (&current, &next), at) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(Err(e)),
+                };
+                let actor = super::strength::actor(&who, &satisfied);
                 let mut changed = changes(&current, &next);
                 if changed.is_empty() {
                     return Ok(Ok(
@@ -646,6 +684,22 @@ pub(super) async fn set_policy(
             })
             .await,
     )
+}
+
+/// E8 for a policy change from `current` to `next`, at `at_ms`: required when
+/// either requires a second factor, under the shorter of their windows.
+fn policy_strength(
+    who: &ValidatedPrincipal,
+    op: &crate::sign_in::StepUpRule,
+    (current, next): (&Policy, &Policy),
+    at_ms: i64,
+) -> Result<Option<super::strength::Satisfied>, McpError> {
+    if !current.approval_requires_mfa && !next.approval_requires_mfa {
+        return Ok(None);
+    }
+    let window = super::strength::window(op, current).min(super::strength::window(op, next));
+    let now = u64::try_from(at_ms).unwrap_or_default() / 1000;
+    super::strength::check(who, op, window, now).map(Some)
 }
 
 /// ADR-117 D8: a member named as a performer must be bound as a person, or no
@@ -713,6 +767,7 @@ pub(super) async fn set_code(
             None,
         ));
     }
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let node_id = required_str(params, "node_id")?.to_string();
     let code = required_str(params, "doc_code")?.to_string();
     let bad_code = || {
@@ -727,7 +782,7 @@ pub(super) async fn set_code(
         return Err(node_not_in_kb());
     }
     let signer = signer(store)?;
-    let (kb, actor) = (kb_id.to_string(), actor(who));
+    let (kb, actor) = (kb_id.to_string(), super::strength::actor(who, &satisfied));
     let at = store.now_ms() as i64;
     flatten(
         store

@@ -165,6 +165,9 @@ struct AttachInput {
     /// Signed PDF only: the set may enter into force here (its author check
     /// covered every member), and the override it recorded.
     completes: Option<Value>,
+    /// The sign-in E8's check accepted, when the policy required one: the
+    /// event records it.
+    satisfied: Option<super::strength::Satisfied>,
 }
 
 /// The attach transaction: write-once, the `attach` event, the row, and, for
@@ -208,7 +211,7 @@ fn record_attach(
             kb_id: &i.kb,
             kind: "attach",
             at: time(at),
-            actor: actor(&i.who),
+            actor: super::strength::actor(&i.who, &i.satisfied),
             payload,
         },
     )?;
@@ -234,7 +237,10 @@ fn record_attach(
         },
     )?;
     let in_force_since = match i.completes {
-        Some(ovr) => complete_signed_set(c, signer, &i.kb, &r, at, actor(&i.who), seq, ovr)?,
+        Some(ovr) => {
+            let actor = super::strength::actor(&i.who, &i.satisfied);
+            complete_signed_set(c, signer, &i.kb, &r, at, actor, seq, ovr)?
+        }
         None => None,
     };
     Ok(Ok(
@@ -337,6 +343,7 @@ pub(super) async fn attach_signed_pdf(
     if let Some(e) = state_refusal(&rev, "signed_pdf") {
         return Err(e);
     }
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let sha = required_str(params, "blob_sha256")?;
     // The binding lock first: attaches to one KB then run one at a time from
     // this check to their commit, so of two approvers attaching a set's last
@@ -354,6 +361,7 @@ pub(super) async fn attach_signed_pdf(
         declared_source: None,
         who: who.clone(),
         completes,
+        satisfied,
     };
     write(store, input, guard).await
 }
@@ -399,6 +407,8 @@ pub(super) async fn attach_rendered_pdf(
         declared_source: Some(declared.to_string()),
         who: who.clone(),
         completes: None,
+        // The requester's rendering is not a controlled act (E8).
+        satisfied: None,
     };
     let mut out = write(store, input, guard).await?;
     if let Some(o) = out.as_object_mut() {

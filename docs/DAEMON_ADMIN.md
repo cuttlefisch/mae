@@ -386,6 +386,7 @@ in `principal_claim` must bind its subjects instead.
 #                                          # empty (default) = no gate. Not applied to self-issued tokens.
 # second_factor_amr = []                   # amr values that count as a second factor — NO default (below)
 # second_factor_acr = []                   # acr values that count as one (exact match) — NO default
+# second_factor_max_age_secs = 300         # longest sign-in age for a controlled act (ADR-113 E8); >= 60
 identity_binding_enabled = true            # POST /identity/challenge + /identity/bind (default false)
 # identity_challenge_ttl_secs = 300        # a challenge is valid for minutes
 # identity_max_pending_challenges = 4      # unused challenges one subject may hold
@@ -432,8 +433,7 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
   `second_factor: {"claim": "amr"|"acr", "value": …}` naming the configured value the sign-in
   meets, or `null`. A self-issued token reports `sign_in: null`: it is no sign-in. A claim of the
   wrong type (`amr` as one string or holding a non-string, `acr` not a string, `auth_time` not a
-  non-negative integer) is treated as absent, never as a pass. Nothing is enforced yet; ADR-113
-  will refuse its controlled acts on this answer.
+  non-negative integer) is treated as absent, never as a pass.
 - **The second-factor rule has no default.** `second_factor_amr` and `second_factor_acr` are empty
   unless you set them, because the values differ by identity provider: measure what yours emits
   (sign in with and without the second factor and read the probe's `sign_in`) and list the values
@@ -445,6 +445,23 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
   never meets an `amr` rule. A sign-in is *fresh* when its `auth_time` is within the act's window;
   no `auth_time` is never fresh, and one ahead of the daemon's clock by more than the token
   validator's 60 s leeway is refused.
+- **Publication review enforces it (ADR-113 E8).** A KB whose review policy sets
+  `approval_requires_mfa` refuses each controlled act (approve, enter into force, attaching a
+  signed PDF) and each owner's change (`set_policy`, `set_code`) unless:
+  - the caller is a person signed in at the identity provider (`agent_forbidden`);
+  - `second_factor_amr` lists a value (`second_factor_unconfigured`);
+  - the token's `amr` holds one (`mfa_required`, with `accepted_amr`);
+  - its `auth_time` is within the window (`reauthentication_required`, with `max_age`).
+
+  `acr` is never consulted there.
+
+  The window is `second_factor_max_age_secs`: default 300, at least 60. A KB's owner may only
+  shorten it, with `reauth_max_age_secs`. Switching the requirement on or off needs it too, so it
+  cannot be switched on while nothing is configured.
+
+  The daemon refuses to start when `second_factor_amr` lists `pwd`, or when the window is under 60.
+
+  Each act's event records the sign-in that met it.
 - **Administration is local only** — no network method, MCP tool or Scheme primitive unbinds,
   rebinds or sets `kind`. `mae-daemon binding` works while the daemon serves; a change holds on the
   listener's next request:
