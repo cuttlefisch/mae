@@ -516,7 +516,13 @@ async fn search(
         )));
     }
 
-    let needle = query.to_lowercase();
+    // Unicode canonical caseless matching, the same key everywhere MAE
+    // compares names: a query typed composed (NFC, as browsers send it)
+    // matches text stored decomposed (NFD, as macOS writes it), and case
+    // folds fully (`ß` matches `SS`). Accents still count: `arbol` is not
+    // `árbol`. `str::to_lowercase` did neither.
+    let fold = mae_sync::portable_name::fold_key;
+    let needle = fold(query);
     let nodes = coll.list_nodes(); // Vec<(node_id, title)>
     let total = nodes.len();
     let mut scanned = 0usize;
@@ -535,7 +541,7 @@ async fn search(
         };
         let title = doc.title();
         let body = doc.body();
-        if title.to_lowercase().contains(&needle) || body.to_lowercase().contains(&needle) {
+        if fold(&title).contains(&needle) || fold(&body).contains(&needle) {
             let excerpt: String = body.chars().take(200).collect();
             results.push(json!({
                 "id": node_id,

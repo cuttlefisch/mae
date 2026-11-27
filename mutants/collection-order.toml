@@ -1,0 +1,26 @@
+# A collection's node and member lists come out in key order, whatever decode
+# of the same bytes reads them (shared/sync/tests/collection_order.rs).
+
+[[mutant]]
+id = "collection-order/nodes-unsorted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--test", "collection_order"]
+filter = "test(every_decode_lists_nodes_and_members_in_key_order)"
+ref = "list_nodes is in node-id order on every decode"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_core.rs"
+find = '''        nodes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+'''
+replace = ''''''
+
+[[mutant]]
+id = "collection-order/members-unsorted"
+runner = "editor"
+targets = ["-p", "mae-sync", "--test", "collection_order"]
+filter = "test(every_decode_lists_nodes_and_members_in_key_order)"
+ref = "member_roles is in fingerprint order on every decode"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_roles.rs"
+find = '''        out.sort_unstable_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+'''
+replace = ''''''
