@@ -23,7 +23,7 @@ pub(super) fn with_blobs(env: &Env) -> tempfile::TempDir {
 
 /// Upload `bytes` to the KB as the blob route does (process, stage, commit),
 /// on a blocking worker as the route runs it.
-async fn put(env: &Env, bytes: &[u8]) -> String {
+pub(super) async fn put(env: &Env, bytes: &[u8]) -> String {
     let blobs = Arc::clone(env.store.blob_store().unwrap());
     let bytes = bytes.to_vec();
     tokio::task::spawn_blocking(move || {
@@ -57,7 +57,7 @@ async fn forge(env: &Env, bytes: &[u8], media: MediaType) -> String {
     .unwrap()
 }
 
-fn pdf(tag: &str) -> Vec<u8> {
+pub(super) fn pdf(tag: &str) -> Vec<u8> {
     format!("%PDF-1.7\n% {tag}\n%%EOF\n").into_bytes()
 }
 

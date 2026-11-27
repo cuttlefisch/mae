@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.213] - 2026-11-27
+
+
+
+
+### Features
+
+- *(review)* A recent second factor at the moment of acting (ADR-113 PR-8) ([daf4ecc](https://github.com/cuttlefisch/mae/commit/daf4ecc6baa99e20d970e2f5d44e0750ec3f7d99))
+
+### Refactor
+
+- *(review)* Set_policy's write and the policy switches as named steps ([51f649f](https://github.com/cuttlefisch/mae/commit/51f649f04b29dd66ee8bb9b0d1f14239d857329e))
+
+### Documentation
+
+- *(adr-113)* What PR-8 covers as built, and O24 (derogate, annul under E8) ([5aecbcd](https://github.com/cuttlefisch/mae/commit/5aecbcd60d94d7099d99a0d503595556cd8098b4))
+
+### Testing
+
+- *(activity)* A generous commit timeout by default; short only where it is the subject ([67bc12a](https://github.com/cuttlefisch/mae/commit/67bc12aee35e70e6ba43f35c2994a979983bfc1d))
+
 ## [0.14.212] - 2026-11-27
 
 
@@ -10,6 +31,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr-119)* C5b, the graph spike's results ([6540335](https://github.com/cuttlefisch/mae/commit/654033594ce92a2b76c6aff894937bb3df8306b1))
+
+### Miscellaneous
+
+- Bump version to 0.14.212 ([6322c0c](https://github.com/cuttlefisch/mae/commit/6322c0c429e807c8deeb8afdc823b84360d3086d))
 
 ## [0.14.211] - 2026-11-26
 

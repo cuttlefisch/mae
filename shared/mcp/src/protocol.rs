@@ -774,6 +774,42 @@ impl McpError {
         Self::kinded(-32603, message, "agent_forbidden", serde_json::json!({}))
     }
 
+    /// The act needs a second factor and the operator has configured no
+    /// accepted `amr` value, so no sign-in can have one (ADR-113 E8).
+    pub fn second_factor_unconfigured(message: String) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "second_factor_unconfigured",
+            serde_json::json!({}),
+        )
+    }
+
+    /// The caller's sign-in shows none of the accepted second factors
+    /// (ADR-113 B7, E8): `accepted_amr` is what would satisfy it.
+    pub fn mfa_required(message: String, accepted_amr: Vec<String>) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "mfa_required",
+            serde_json::json!({ "accepted_amr": accepted_amr }),
+        )
+    }
+
+    /// The caller signed in longer ago than `max_age` seconds, or the token
+    /// says nothing of when (ADR-113 C4, E8): sign in again and retry.
+    pub fn reauthentication_required(
+        message: String,
+        max_age: u64,
+        auth_time: Option<u64>,
+    ) -> Self {
+        let mut data = serde_json::json!({ "max_age": max_age });
+        if let Some(t) = auth_time {
+            data["auth_time"] = serde_json::json!(t);
+        }
+        Self::kinded(-32603, message, "reauthentication_required", data)
+    }
+
     /// A set cannot enter into force until every member is approved
     /// (ADR-113 D4).
     pub fn set_incomplete(message: String, missing: Vec<String>) -> Self {

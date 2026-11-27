@@ -554,6 +554,15 @@ fn refuse_invalid_config(
         eprintln!("Error: invalid [[tenant]] configuration (see log for details)");
         std::process::exit(1);
     }
+    let second_factor = config.oauth.check_second_factor();
+    if !second_factor.is_empty() {
+        eprintln!("Error: invalid second-factor configuration; the daemon will not start:");
+        for p in &second_factor {
+            tracing::error!(problem = %p, "second-factor configuration error");
+            eprintln!("  - {p}");
+        }
+        std::process::exit(1);
+    }
     match mae_daemon::site_components::SiteComponents::load(&config.oauth.site_components) {
         Ok(c) => Arc::new(c),
         Err(problems) => {
@@ -692,6 +701,8 @@ async fn spawn_oauth_listener(
     }
     if let Some(store) = doc_store.as_ref() {
         store.site_cache().set_capacity(config.oauth.site_cache_kbs);
+        // ADR-113 E8: what a controlled act's second-factor check reads.
+        store.set_step_up_rule(config.oauth.step_up_rule());
     }
     let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
     {
@@ -1628,6 +1639,14 @@ fn run_check_config(config: &DaemonConfig) {
         eprintln!("Tenant configuration issues:");
         for issue in &tenant_issues {
             eprintln!("  - {issue}");
+        }
+        std::process::exit(1);
+    }
+    let second_factor = config.oauth.check_second_factor();
+    if !second_factor.is_empty() {
+        eprintln!("Second-factor configuration issues:");
+        for p in &second_factor {
+            eprintln!("  - {p}");
         }
         std::process::exit(1);
     }
