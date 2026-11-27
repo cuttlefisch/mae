@@ -142,6 +142,18 @@ export class MaeCrypto {
   verifyOp(request: OutsideOpRequest & { sig: B64; author?: string }): boolean;
 
   /**
+   * Signs a change to a KB's node list (ADR-036 Amendment 2) with a held key: `add` lists a node
+   * (or retitles a listed one), `remove` unlists it. The module builds the signed message itself
+   * ('maemanifest/v1'); the author is the key's own fingerprint. Send the result's fields as the params
+   * of `kb/collection_node_add` / `kb/collection_node_remove`. Refusals: 'empty-field',
+   * 'nul-in-field', 'title-on-remove', 'bad-request' (an unknown action, a non-canonical epoch),
+   * 'no-key'.
+   */
+  signManifestOp(request: ManifestOpRequest & { key: KeyHandle }): SignedManifestOp;
+  /** The exact bytes a node-list change signs, for a key held outside the module (as `opCanonicalBytes`). */
+  manifestOpCanonicalBytes(request: ManifestOpRequest & { author_pubkey: B64 }): UnsignedManifestOp;
+
+  /**
    * The key's seed, sealed under the passphrase: envelope v1 text. The module NFC-normalises the
    * passphrase; it must then have at least 12 characters ('passphrase-weak').
    */
@@ -191,6 +203,40 @@ export interface UnsignedContentOpHeader {
   issued_at: number;
   base_sv: B64;
   author_pubkey: B64;
+}
+
+export interface ManifestOpRequest {
+  kb_id: string;
+  /** A new node's ID: the client mints it (a UUID v4). */
+  node_id: string;
+  action: 'add' | 'remove';
+  /** The node's listed title, for an add; empty (the default) for a remove. */
+  title?: string;
+  /** The author's epoch in the KB, as canonical decimal text. */
+  epoch: string;
+  /** Unix seconds; defaults to this host's clock. */
+  issued_at?: number;
+}
+
+/** What was signed, and the header the daemon reads. */
+export interface ManifestOpFields {
+  kb_id: string;
+  node_id: string;
+  action: 'add' | 'remove';
+  title: string;
+  author: string;
+  epoch: string;
+  issued_at: number;
+  author_pubkey: B64;
+}
+
+export interface SignedManifestOp extends ManifestOpFields {
+  sig: B64;
+}
+
+export interface UnsignedManifestOp extends ManifestOpFields {
+  /** The bytes to sign. */
+  canonical: B64;
 }
 
 export interface SignOpRequest {
