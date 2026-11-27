@@ -497,6 +497,28 @@ fn reauth_window(params: &Value, op_max: u64) -> Result<Option<Option<u64>>, Mcp
     }
 }
 
+/// The policy's on/off switches and E8's window, as `params` sets them.
+fn set_switches(p: &mut Policy, params: &Value, op_max: u64) -> Result<(), McpError> {
+    let switches: [(&str, &mut bool); 4] = [
+        ("review_enabled", &mut p.review_enabled),
+        (
+            "approval_requires_rendered_pdf",
+            &mut p.approval_requires_rendered_pdf,
+        ),
+        ("approval_requires_mfa", &mut p.approval_requires_mfa),
+        ("in_force_on_approval", &mut p.in_force_on_approval),
+    ];
+    for (name, field) in switches {
+        if let Some(b) = optional_bool(params, name)? {
+            *field = b;
+        }
+    }
+    if let Some(w) = reauth_window(params, op_max)? {
+        p.reauth_max_age_secs = w;
+    }
+    Ok(())
+}
+
 /// The policy as `params` would leave it, and the reason, if one is needed.
 /// `op_max` is the operator's window, the longest a KB may set (E8).
 fn proposed_policy(
@@ -511,21 +533,7 @@ fn proposed_policy(
         ));
     }
     let mut p = current.clone();
-    if let Some(b) = optional_bool(params, "review_enabled")? {
-        p.review_enabled = b;
-    }
-    if let Some(b) = optional_bool(params, "approval_requires_rendered_pdf")? {
-        p.approval_requires_rendered_pdf = b;
-    }
-    if let Some(b) = optional_bool(params, "approval_requires_mfa")? {
-        p.approval_requires_mfa = b;
-    }
-    if let Some(w) = reauth_window(params, op_max)? {
-        p.reauth_max_age_secs = w;
-    }
-    if let Some(b) = optional_bool(params, "in_force_on_approval")? {
-        p.in_force_on_approval = b;
-    }
+    set_switches(&mut p, params, op_max)?;
     if let Some(acts) = string_list(params, "required_acts")? {
         let set: BTreeSet<&str> = acts.iter().map(String::as_str).collect();
         if set.len() != acts.len()
@@ -644,46 +652,59 @@ pub(super) async fn set_policy(
     let at = store.now_ms() as i64;
     flatten(
         store
-            .review_write(move |c| {
-                let current = store::policy(c, &kb)?;
-                let (next, reason) = match proposed_policy(&current, &params, op.max_age_secs) {
-                    Ok(p) => p,
-                    Err(e) => return Ok(Err(e)),
-                };
-                // E8 on the owner's administration, judged on the stored row:
-                // switching the requirement off needs it, and so does switching
-                // it on (the owner shows they can meet it before it binds them).
-                let satisfied = match policy_strength(&who, &op, (&current, &next), at) {
-                    Ok(s) => s,
-                    Err(e) => return Ok(Err(e)),
-                };
-                let actor = super::strength::actor(&who, &satisfied);
-                let mut changed = changes(&current, &next);
-                if changed.is_empty() {
-                    return Ok(Ok(
-                        json!({ "event_id": null, "policy": policy_json(&next) }),
-                    ));
-                }
-                store::put_policy(c, &kb, &next)?;
-                changed.insert("reason".into(), json!(reason));
-                let seq = store::append_event(
-                    c,
-                    &signer,
-                    NewEvent {
-                        kb_id: &kb,
-                        kind: "policy_changed",
-                        at: time(at),
-                        actor,
-                        payload: Value::Object(changed),
-                    },
-                )?;
-                Ok(Ok(json!({
-                    "event_id": store::event_id(seq),
-                    "policy": policy_json(&next),
-                })))
-            })
+            .review_write(move |c| write_policy(c, &signer, (&kb, &params, &who, &op), at))
             .await,
     )
+}
+
+/// `set_policy`'s write: the change against the stored row, E8 on it, the
+/// row and its `policy_changed` event (or nothing, for no change).
+fn write_policy(
+    c: &sqlite::Connection,
+    signer: &mae_mcp::identity::Identity,
+    (kb, params, who, op): (
+        &str,
+        &Value,
+        &ValidatedPrincipal,
+        &crate::sign_in::StepUpRule,
+    ),
+    at: i64,
+) -> TxnResult<Value> {
+    let current = store::policy(c, kb)?;
+    let (next, reason) = match proposed_policy(&current, params, op.max_age_secs) {
+        Ok(p) => p,
+        Err(e) => return Ok(Err(e)),
+    };
+    // E8 on the owner's administration, judged on the stored row: switching
+    // the requirement off needs it, and so does switching it on (the owner
+    // shows they can meet it before it binds them).
+    let satisfied = match policy_strength(who, op, (&current, &next), at) {
+        Ok(s) => s,
+        Err(e) => return Ok(Err(e)),
+    };
+    let mut changed = changes(&current, &next);
+    if changed.is_empty() {
+        return Ok(Ok(
+            json!({ "event_id": null, "policy": policy_json(&next) }),
+        ));
+    }
+    store::put_policy(c, kb, &next)?;
+    changed.insert("reason".into(), json!(reason));
+    let seq = store::append_event(
+        c,
+        signer,
+        NewEvent {
+            kb_id: kb,
+            kind: "policy_changed",
+            at: time(at),
+            actor: super::strength::actor(who, &satisfied),
+            payload: Value::Object(changed),
+        },
+    )?;
+    Ok(Ok(json!({
+        "event_id": store::event_id(seq),
+        "policy": policy_json(&next),
+    })))
 }
 
 /// E8 for a policy change from `current` to `next`, at `at_ms`: required when
