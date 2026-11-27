@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.218] - 2026-11-27
+
+
+
+
+### Bug Fixes
+
+- *(kb)* Stable node and member order; search by canonical caseless key ([64ccefa](https://github.com/cuttlefisch/mae/commit/64ccefa378f2d850050a880b209b1bb069358dcd))
+
+### Testing
+
+- *(kb)* Split the search fixture test under the function-length ceiling ([5707464](https://github.com/cuttlefisch/mae/commit/5707464874a45b0f41983b1f81c462f44a0c286a))
+
 ## [0.14.217] - 2026-11-27
 
 
@@ -31,6 +44,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(adr-kb)* Regenerate the ADR KB checksum after merging main ([4c51a57](https://github.com/cuttlefisch/mae/commit/4c51a576eb831ffed18c74853d6be2a435944b12))
+- Bump version to 0.14.217 ([fdf066e](https://github.com/cuttlefisch/mae/commit/fdf066ecb3b9f22bf4774aeaeb4379f234058a56))
 
 ## [0.14.216] - 2026-11-27
 
