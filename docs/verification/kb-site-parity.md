@@ -178,8 +178,12 @@ interface GraphModel {
 - **Pixel checks.** A test converts a `Point` to device pixels with `devicePixelRatio` and compares the
   pixel there with the expected colour: on a note, at a link's `sample`, at a crossing, on the visited
   band.
-  - The model's points lie on the centreline of what they name, and a highlighted link is at least
-    2 device pixels wide. So the pixel there is fully covered, and anti-aliasing does not reach it.
+  - The model's points lie on the centreline of what they name.
+  - Every mark a point names (a highlighted link, a note, the visited band) is at least **3 device
+    pixels** wide at any `devicePixelRatio`: `max(its CSS width, 3 / devicePixelRatio)` CSS px. The
+    sampled pixel is the one containing the point, so its centre can be up to 0.71 device px from the
+    centreline, and its far corner up to 1.41. Covering that on both sides takes 2.83 px. So the pixel
+    is fully covered at any angle, and anti-aliasing does not reach it.
   - The tolerance is **2 per 8-bit channel**, for rounding only.
   - The first implementation measures the largest difference it sees across both browsers, modes and
     palettes, and records it here. If the measurement needs more than 2, the number changes here, for
