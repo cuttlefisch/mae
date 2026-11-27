@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3210,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "mae-agent-cli"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3229,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3253,11 +3253,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.217"
+version = "0.14.218"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "serde",
  "serde_json",
@@ -3265,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "criterion",
  "hex",
@@ -3337,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "mae-core",
  "serde",
@@ -3348,11 +3348,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.217"
+version = "0.14.218"
 
 [[package]]
 name = "mae-export"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "mae-babel",
  "mae-org",
@@ -3363,11 +3363,11 @@ dependencies = [
 
 [[package]]
 name = "mae-format"
-version = "0.14.217"
+version = "0.14.218"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -3381,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "cozo",
  "hex",
@@ -3407,14 +3407,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "serde",
  "serde_json",
@@ -3424,14 +3424,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme-extra"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "mae-scheme",
  "parking_lot 0.13.0",
@@ -3514,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "alacritty_terminal",
  "mae-mcp",
@@ -3540,15 +3540,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.217"
+version = "0.14.218"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.217"
+version = "0.14.218"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.217"
+version = "0.14.218"
 dependencies = [
  "base64 0.23.1",
  "criterion",
