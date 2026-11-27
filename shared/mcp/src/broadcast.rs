@@ -176,6 +176,9 @@ struct ClientEntry {
     /// to that document, even before it has subscribed to any (see
     /// [`EventBroadcaster::subscribe_doc_scoped`]).
     doc_scoped: bool,
+    /// The session's authenticated principal, when the host records it: what a
+    /// revocation finds the session by ([`EventBroadcaster::unsubscribe_principal_docs`]).
+    principal: Option<String>,
     /// Bounded channel for event delivery.
     tx: mpsc::Sender<EditorEvent>,
     /// Documents closed for this client because an event for them did not
@@ -236,6 +239,7 @@ impl EventBroadcaster {
                 event_subs: subscriptions,
                 doc_subs: HashSet::new(),
                 doc_scoped: false,
+                principal: None,
                 tx,
                 overflowed: Vec::new(),
             },
@@ -377,6 +381,43 @@ impl EventBroadcaster {
                 entry.event_subs.push(event_type.to_string());
             }
         }
+    }
+
+    /// Record `session_id`'s authenticated principal, so a revocation can find
+    /// the session ([`Self::unsubscribe_principal_docs`]).
+    pub fn set_principal(&mut self, session_id: u64, principal: Option<&str>) {
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            entry.principal = principal.filter(|p| !p.is_empty()).map(str::to_string);
+        }
+    }
+
+    /// Unsubscribe every session of `principal` from every document `doc`
+    /// matches: a member removed from a KB stops receiving its documents'
+    /// events at once, on sessions it already has open. Answers how many
+    /// subscriptions were dropped.
+    ///
+    /// @ai-caution: [security] Subscribing again goes through the host's
+    /// access-gated document methods, so a revoked principal cannot.
+    pub fn unsubscribe_principal_docs(
+        &mut self,
+        principal: &str,
+        doc: impl Fn(&str) -> bool,
+    ) -> usize {
+        let mut dropped: Vec<(u64, String)> = Vec::new();
+        for (sid, entry) in &mut self.clients {
+            if entry.principal.as_deref() != Some(principal) {
+                continue;
+            }
+            let gone: Vec<String> = entry.doc_subs.iter().filter(|d| doc(d)).cloned().collect();
+            for d in gone {
+                entry.doc_subs.remove(&d);
+                dropped.push((*sid, d));
+            }
+        }
+        for (sid, d) in &dropped {
+            self.release_awareness_doc(*sid, d);
+        }
+        dropped.len()
     }
 
     /// Subscribe a client to a specific document's events.
@@ -737,6 +778,43 @@ mod tests {
         assert!(rx1.try_recv().is_err());
         // Session 2 should receive it.
         assert!(rx2.recv().await.is_some());
+    }
+
+    /// A revocation drops exactly the named principal's subscriptions to the
+    /// documents it matches: its other documents, and every other principal's
+    /// sessions on the same documents, keep receiving.
+    #[tokio::test]
+    async fn a_revocation_cuts_off_only_that_principals_matching_documents() {
+        let mut bc = EventBroadcaster::new();
+        let ev = |doc: &str| EditorEvent::SyncUpdate {
+            buffer_name: doc.to_string(),
+            update_base64: "dGVzdA==".to_string(),
+            wal_seq: 0,
+            content_header: None,
+        };
+        let mut bob_a = bc.subscribe_doc_scoped(1, vec!["*".into()]);
+        let mut bob_b = bc.subscribe_doc_scoped(2, vec!["*".into()]);
+        let mut carol = bc.subscribe_doc_scoped(3, vec!["*".into()]);
+        bc.set_principal(1, Some("SHA256:bob"));
+        bc.set_principal(2, Some("SHA256:bob"));
+        bc.set_principal(3, Some("SHA256:carol"));
+        for sid in [1, 2, 3] {
+            bc.subscribe_doc(sid, "kbn:kb1:n1");
+            bc.subscribe_doc(sid, "kbn:kb2:n1");
+        }
+        let dropped = bc.unsubscribe_principal_docs("SHA256:bob", |d| d.starts_with("kbn:kb1:"));
+        assert_eq!(dropped, 2, "both of bob's sessions, one document each");
+        bc.broadcast(&ev("kbn:kb1:n1"));
+        assert!(
+            bob_a.try_recv().is_err() && bob_b.try_recv().is_err(),
+            "bob is cut off kb1"
+        );
+        assert!(carol.try_recv().is_ok(), "carol still receives kb1");
+        bc.broadcast(&ev("kbn:kb2:n1"));
+        assert!(
+            bob_a.try_recv().is_ok() && bob_b.try_recv().is_ok(),
+            "bob keeps kb2"
+        );
     }
 
     #[tokio::test]

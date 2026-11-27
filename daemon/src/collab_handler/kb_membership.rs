@@ -607,6 +607,29 @@ pub struct MembershipChange<'a> {
 /// use it): update the collection's `member_roles`, persist and broadcast it,
 /// then mirror the change into the signed op-log when this daemon owns the KB.
 /// The caller has already decided the change is allowed.
+/// A removed member's sessions already open stop receiving KB `kb_id`'s
+/// documents at once: their subscriptions to its collection and nodes are
+/// dropped (a new one needs an access-gated method, which now refuses). Without
+/// this, a removed member's open connection kept receiving the KB's changes
+/// until it disconnected.
+fn cut_off(broadcaster: &SharedBroadcaster, kb_id: &str, member: &str) {
+    let in_kb = |doc: &str| match mae_sync::DocAddress::parse(doc) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id: k }) => k == kb_id,
+        Some(mae_sync::DocAddress::KbNode { kb_id: k, .. }) => k == kb_id,
+        _ => false,
+    };
+    let dropped = broadcaster
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .unsubscribe_principal_docs(member, in_kb);
+    if dropped > 0 {
+        info!(
+            kb_id,
+            member, dropped, "removed member's open subscriptions cut off"
+        );
+    }
+}
+
 async fn apply_membership_change(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
@@ -631,6 +654,9 @@ async fn apply_membership_change(
     persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update)
         .await
         .map_err(McpError::internal_fault)?;
+    if !ch.add {
+        cut_off(broadcaster, kb_id, ch.member);
+    }
     // ADR-026: mirror the change into the signed op-log (owned KBs).
     let (action, signed_role) = if ch.add {
         (MembershipAction::Admit, Some(ch.role))

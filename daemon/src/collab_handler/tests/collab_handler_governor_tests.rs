@@ -123,7 +123,7 @@ async fn reauthorization_closes_only_the_kb_the_principal_lost() {
     .await;
 
     let bob_session = 9;
-    let mut rx = register_session(&bc, bob_session);
+    let mut rx = register_session(&bc, bob_session, None);
     bc.lock().unwrap().add_event_sub(bob_session, "sync_update");
     let mut bob_docs = open(&["kbc:kra", "kbc:krb", "shared:pad"]);
     for d in &bob_docs {

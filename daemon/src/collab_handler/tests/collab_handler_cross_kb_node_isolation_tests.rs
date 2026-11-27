@@ -379,8 +379,8 @@ async fn awareness_notification_cannot_subscribe_an_outsider_to_another_kbs_node
     let all = || vec!["sync_update".to_string(), "awareness_update".to_string()];
     // Registered as the daemon registers every collab session, then opted in
     // to every event type.
-    let mut mallory_rx = register_session(&bc, mallory);
-    let _victim_rx = register_session(&bc, victim);
+    let mut mallory_rx = register_session(&bc, mallory, None);
+    let _victim_rx = register_session(&bc, victim, None);
     for sid in [mallory, victim] {
         for t in all() {
             bc.lock().unwrap().add_event_sub(sid, &t);
@@ -445,7 +445,7 @@ async fn awareness_notification_cannot_subscribe_an_outsider_to_another_kbs_node
 #[tokio::test]
 async fn a_session_subscribed_to_no_document_receives_no_documents_events() {
     let bc = test_broadcaster();
-    let mut rx = register_session(&bc, 11);
+    let mut rx = register_session(&bc, 11, None);
     bc.lock().unwrap().add_event_sub(11, "sync_update");
     for doc in ["kbn:any-kb:any-node", "kbc:any-kb", "notes.org"] {
         bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {

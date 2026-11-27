@@ -445,7 +445,7 @@ async fn run_session<R, W>(
     // Subscribe with empty subs — client opts in later. Doc-scoped: a
     // document's events reach this session only once it is subscribed to
     // that document (which every doc method gates on access).
-    let mut event_rx = register_session(&broadcaster, session_id);
+    let mut event_rx = register_session(&broadcaster, session_id, auth_principal.as_deref());
 
     let tool_defs: Vec<ToolInfo> = vec![];
     let mut consecutive_write_failures: u32 = 0;
@@ -654,9 +654,14 @@ fn augment_initialize(
 pub(crate) fn register_session(
     broadcaster: &SharedBroadcaster,
     session_id: u64,
+    principal: Option<&str>,
 ) -> tokio::sync::mpsc::Receiver<EditorEvent> {
     let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-    bc.subscribe_doc_scoped(session_id, vec![])
+    let rx = bc.subscribe_doc_scoped(session_id, vec![]);
+    // Recorded so a member's removal can cut this session off its KB's
+    // documents at once (`apply_membership_change`).
+    bc.set_principal(session_id, principal);
+    rx
 }
 
 /// The JSON-RPC error for a document write that storage refused or failed.

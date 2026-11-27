@@ -55,3 +55,14 @@ ref = "a symlinked socket directory is refused"
 file = "daemon/src/operator_socket.rs"
 find = '''        Ok(m) if !m.file_type().is_dir() => {'''
 replace = '''        Ok(m) if false && !m.file_type().is_dir() => {'''
+
+[[mutant]]
+id = "operator-socket/removal-not-cut-off"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_removed_members_open_sessions_stop_receiving_the_kb)"
+ref = "a removed member's open sessions stop receiving the KB"
+[[mutant.edit]]
+file = "daemon/src/collab_handler/kb_membership.rs"
+find = '''        cut_off(broadcaster, kb_id, ch.member);'''
+replace = '''        let _ = (broadcaster, ch.member);'''

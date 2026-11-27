@@ -1390,7 +1390,9 @@ as the daemon.
   `operator/operator.sock` in its data directory. The directory is `0700` and the socket `0600`:
   only the daemon's own account can open it.
   - The change applies at once, without a restart.
-  - Connected editors receive it, and a removed member's next request is refused.
+  - Connected editors receive it.
+  - A removed member's open sessions stop receiving the KB's changes at once, and their next request
+    is refused. The same holds when an owner removes a member from the editor.
   - A directory sync can run it every few minutes without disconnecting anyone.
 - **With the daemon stopped**, the command writes the store directly, under the store lock, like
   `kb seed`. It refuses, writing nothing: a KB another
