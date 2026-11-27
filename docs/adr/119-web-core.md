@@ -1014,13 +1014,16 @@ is: `/edit/` (the browser client).
 - **The licence opinion** and the self-built Graphviz module (D13).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
-  - C5b is measured (2026-11-27). D15 waits on three owner decisions:
-    - whether the bulk chord layer may be drawn at one pixel per CSS pixel. That is 10–30× cheaper,
-      and visibly softer on a 2× screen.
-    - whether the hierarchical views leave L1c until they are redesigned. As built, they take 0.3–2 s
-      and 0.35–1.9 GB.
-    - whether the parity suite's graph rows (P-55, P-57, P-57a, P-64) may assert on an exposed
-      graph model plus sampled pixels, instead of on chord elements.
+  - C5b is measured (2026-11-27). Its three owner decisions:
+    - **The bulk chord layer at one pixel per CSS pixel**: open. It is 10–30× cheaper and visibly
+      softer on a 2× screen. The owner is reviewing a side-by-side before deciding.
+    - **The hierarchical views** *(owner, 2026-11-27)*: redesigned **before** the graph ships, so
+      L1c's first release has the chord, sunburst and balloon views. As built, they take 0.3–2 s and
+      0.35–1.9 GB. The redesign derives per-note positions on the server, cached with D6, and draws
+      the links as a tinted bulk layer, like the chord view.
+    - **The graph's parity rows** *(owner, 2026-11-27)*: P-55, P-57, P-57a and P-64 assert on the
+      graph model the mounted graph exposes, plus sampled pixels, instead of on chord elements. The
+      model's shape is in the parity spec, §3.7.
 
     Real-device GPU runs are still owed.
   - C7: fail-closed rules;
