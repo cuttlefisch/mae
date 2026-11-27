@@ -70,13 +70,13 @@ impl Page {
 fn page(i: usize) -> Page {
     Page {
         id: format!("p{i}"),
-        title: format!("Page {i}"),
+        title: format!("Page {i} secret:t{i}"),
         tags: vec![format!("t{}", i % 3)],
         links: vec![],
         heading: format!("Heading {i}"),
         heading_id: format!("h{i}"),
         custom_id: format!("c-p{i}"),
-        body: format!("Body of page {i}."),
+        body: format!("Body of page {i}, see secret:ref{i}."),
         attachment: None,
         transclude: None,
     }
@@ -184,7 +184,7 @@ fn a_warm_deriver_matches_a_fresh_one_after_every_edit() {
             // Now and then the operator hides a namespace, or stops hiding it.
             if r.below(8) == 0 {
                 opts.hidden_namespaces = match opts.hidden_namespaces.is_empty() {
-                    true => vec!["p3".into()],
+                    true => vec!["secret".into()],
                     false => vec![],
                 };
             }
