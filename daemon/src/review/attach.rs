@@ -38,8 +38,7 @@ use super::attach_store::{self, Annulment, Attachment, KINDS};
 use super::methods::{flatten, TxnResult};
 use super::store::{self, NewEvent, Revision};
 use super::{
-    actor, gate, required_str, required_text, signer, storage_fault, time, within_bytes,
-    MAX_REASON_BYTES,
+    gate, required_str, required_text, signer, storage_fault, time, within_bytes, MAX_REASON_BYTES,
 };
 use crate::blob_store::{sniff::MediaType, BlobMeta, KbGuard};
 use crate::doc_store::DocStore;
@@ -449,6 +448,8 @@ pub(super) async fn annul_attachment(
     };
     let reason = required_text(params, "reason")?.to_string();
     within_bytes("reason", &reason, MAX_REASON_BYTES)?;
+    // O24: an annulment can undo a signed PDF.
+    let satisfied = super::strength::required(store, &g.policy, who)?;
     let owner = g.role == mae_sync::kb::Role::Owner;
     let signer = signer(store)?;
     let (kb, who) = (kb_id.to_string(), who.clone());
@@ -492,7 +493,7 @@ pub(super) async fn annul_attachment(
                         kb_id: &kb,
                         kind: "annul_attachment",
                         at: time(at),
-                        actor: actor(&who),
+                        actor: super::strength::actor(&who, &satisfied),
                         payload,
                     },
                 )?;

@@ -1991,11 +1991,10 @@ named.
     - **When a change binds.** A policy change binds the acts that reach their own check after it
       commits. An act whose check ran on the policy before the change completes under that policy,
       the same rule the approver lists already follow.
-    - **Open (O24).** `derogate`, which ends a document's force, and `annul_attachment`, which can
-      undo a signed PDF, are outside E8's list. Should they need the factor too?
-- **O24. `derogate` and `annul_attachment` under E8 (PR-8).** Both are recorded acts on a
-  controlled document: one ends its force, the other can undo a signed PDF. E8 lists neither. Decide
-  whether a KB with `approval_requires_mfa` requires a recent second factor for them too.
+    - **O24, decided** *(owner, 2026-11-27)*: `derogate`, which ends a document's force, and
+      `annul_attachment`, which can undo a signed PDF, need the factor too, on the same terms.
+- **O24. `derogate` and `annul_attachment` under E8 (PR-8).** *Closed (owner, 2026-11-27):* both
+  require a recent second factor on a KB with `approval_requires_mfa`, and record it.
 - **O22. Deleting drafts and mistakes (Amendment 4, E7).** Its own ADR, not this one.
 - **O23. A session with no absolute lifetime (Amendment 4, E8).** The same rehearsal measured that
   each refresh resets the IdP session's idle lifetime, with no absolute cap, so a session refreshed

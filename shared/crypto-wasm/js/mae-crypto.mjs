@@ -33,6 +33,8 @@ const OPS = new Map([
   ['signOp', 18],
   ['opCanonicalBytes', 19],
   ['verifyOp', 20],
+  ['signManifestOp', 21],
+  ['manifestOpCanonicalBytes', 22],
 ]);
 
 /**
@@ -226,6 +228,21 @@ export class MaeCrypto {
     const req = { kb_id, node_id, base_sv, author_pubkey, epoch, issued_at, update, sig };
     if (author !== undefined) req.author = author;
     return this.call('verifyOp', req).valid;
+  }
+
+  // A node-list change (ADR-036 Amendment 2): add a node to a KB, retitle it
+  // (an add of an existing node), or remove it, signed with the held key. The
+  // module builds the signed bytes ('maemanifest/v1') from these fields and
+  // refuses a NUL in any of them. Send the result's fields as the params of
+  // `kb/collection_node_add` or `kb/collection_node_remove`.
+  signManifestOp({ key, kb_id, node_id, action, title = '', epoch, issued_at = nowSeconds() }) {
+    return this.call('signManifestOp', { key, kb_id, node_id, action, title, epoch, issued_at });
+  }
+
+  // The exact bytes a node-list change signs, for a key held outside the
+  // module. Sign `canonical` and send the other fields plus `sig`.
+  manifestOpCanonicalBytes({ kb_id, node_id, action, title = '', author_pubkey, epoch, issued_at = nowSeconds() }) {
+    return this.call('manifestOpCanonicalBytes', { kb_id, node_id, action, title, author_pubkey, epoch, issued_at });
   }
 
   // The key backup (envelope v1). The module NFC-normalises the passphrase

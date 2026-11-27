@@ -319,8 +319,9 @@ that change itself, recorded only against the session. This amendment closes it 
   change made through them.
 - `kb/share` (the owner's own first share, which creates the KB) and the mesh dialer's pushed
   collection (#727 part 3, after the pilot).
-- The browser client writes none of these. It never writes the collection document; a node's title
-  lives in its own node document, so a rename is a content op (mae-web, 2026-11-26).
+- The browser client wrote none of these when this was written: it never wrote the collection
+  document (mae-web, 2026-11-26). Since 2026-11-27 it creates, retitles and deletes pages through
+  `kb/collection_node_add`/`_remove` with signed manifest ops (G4).
 
 ### G1. A node-list change carries a signed manifest op
 
@@ -388,8 +389,19 @@ both is the epoch.
 ### G4. Signers
 
 - The native editor signs with its identity key (D2), in the network task that sends the request.
-- mae-crypto gains the canonical bytes for both kinds of signer. A WASM `sign_manifest_op` is not
-  built until a browser client needs one; mae-web does not write the node list.
+- mae-crypto gains the canonical bytes for both kinds of signer.
+- *(2026-11-27)* The browser client now creates, retitles and deletes pages, so it writes the node
+  list. **mae-crypto 0.4.0's WASM API** therefore adds `sign_manifest_op` (op 21) and
+  `manifest_op_canonical_bytes` (op 22), with the same discipline as `sign_op`:
+  - the module builds the signed bytes from parsed fields, never from caller bytes;
+  - it runs the daemon's own check before signing;
+  - it returns what it signed.
+
+  The browser's page lifecycle is pinned in `docs/verification/fixtures/kb-pages/page_lifecycle.json`,
+  in this order:
+  - **create:** the node's first `kb/node_update`, then `kb/collection_node_add`;
+  - **rename:** the content's title, then an add of the same ID, which is an upsert;
+  - **delete:** `kb/collection_node_remove`.
 - The browser client's relay will refuse methods its editor never sends, closing the socket `4405`
   (mae-web, agreed 2026-11-26, scheduled after browser signing), so a same-origin script cannot reach
   `kb/collection_node_*` through it even before the switch is on. Until then the daemon's role check
