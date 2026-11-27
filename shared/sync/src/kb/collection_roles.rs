@@ -102,7 +102,9 @@ impl KbCollectionDoc {
         None
     }
 
-    /// All members with their roles (the ReBAC tuple set for this KB).
+    /// All members with their roles (the ReBAC tuple set for this KB), sorted
+    /// by fingerprint: a yrs map's own order changes from one decode to the
+    /// next (see `list_nodes`).
     pub fn member_roles(&self) -> Vec<Member> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let txn = self.doc.transact();
@@ -127,6 +129,7 @@ impl KbCollectionDoc {
                 }
             }
         }
+        out.sort_unstable_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         out
     }
 

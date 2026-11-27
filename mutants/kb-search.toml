@@ -1,0 +1,27 @@
+# kb/query.search matches by Unicode canonical caseless key, in node-id order
+# (daemon/src/seed/tests/search_tests.rs, and its fixture
+# docs/verification/fixtures/kb-search/query_search.json).
+
+[[mutant]]
+id = "kb-search/lowercase-only"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(search_matches_by_canonical_caseless_key_and_the_fixture_holds)"
+ref = "a composed query matches decomposed text, and case folds fully"
+[[mutant.edit]]
+file = "daemon/src/kb_query.rs"
+find = '''    let fold = mae_sync::portable_name::fold_key;'''
+replace = '''    let fold = |s: &str| s.to_lowercase();'''
+
+[[mutant]]
+id = "kb-search/scan-order-unsorted"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(search_matches_by_canonical_caseless_key_and_the_fixture_holds)"
+ref = "the scan and its results are in node-id order"
+[[mutant.edit]]
+file = "shared/sync/src/kb/collection_core.rs"
+find = '''        nodes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+'''
+replace = '''        nodes.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+'''

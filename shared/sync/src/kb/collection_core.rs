@@ -180,17 +180,27 @@ impl KbCollectionDoc {
         }
     }
 
-    /// List all nodes in the collection: (node_id, title) pairs.
+    /// List all nodes in the collection: (node_id, title) pairs, sorted by
+    /// node id.
+    ///
+    /// @ai-caution: [determinism] A yrs map iterates in its `HashMap`'s order,
+    /// which is seeded per instance: two decodes of the same bytes list the
+    /// nodes differently. Unsorted, every capped scan (`kb/query.search`
+    /// examines the first `max_scan_nodes`) chose a different subset on each
+    /// request, and every listing reordered itself. Never return a yrs map's
+    /// iteration order.
     pub fn list_nodes(&self) -> Vec<(String, String)> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let txn = self.doc.transact();
-        match root.get(&txn, COLL_NODES_KEY) {
+        let mut nodes: Vec<(String, String)> = match root.get(&txn, COLL_NODES_KEY) {
             Some(Out::YMap(nodes)) => nodes
                 .iter(&txn)
                 .map(|(k, v)| (k.to_string(), v.to_string(&txn)))
                 .collect(),
             _ => Vec::new(),
-        }
+        };
+        nodes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        nodes
     }
 
     /// Does `node_id` belong to this collection?
