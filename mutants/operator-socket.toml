@@ -33,3 +33,25 @@ ref = "a running daemon's socket is never taken over"
 file = "daemon/src/operator_socket.rs"
 find = '''        if UnixStream::connect(path).await.is_ok() {'''
 replace = '''        if false && UnixStream::connect(path).await.is_ok() {'''
+
+[[mutant]]
+id = "operator-socket/dir-not-private"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_running_daemon_takes_membership_changes_on_its_operator_socket)"
+ref = "the socket lives in a 0700 directory"
+[[mutant.edit]]
+file = "daemon/src/operator_socket.rs"
+find = '''    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))'''
+replace = '''    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))'''
+
+[[mutant]]
+id = "operator-socket/symlink-followed"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(the_socket_directory_is_never_a_symlink)"
+ref = "a symlinked socket directory is refused"
+[[mutant.edit]]
+file = "daemon/src/operator_socket.rs"
+find = '''        Ok(m) if !m.file_type().is_dir() => {'''
+replace = '''        Ok(m) if false && !m.file_type().is_dir() => {'''

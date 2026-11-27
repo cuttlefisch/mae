@@ -1386,8 +1386,9 @@ The operator's bridge until ADR-098. It changes membership of a KB **this daemon
 through the same write path as `kb/add_member`, and signs the change into the KB's membership op-log
 as the daemon.
 
-- **With the daemon running**, the command goes through the daemon's operator socket, `operator.sock`
-  in its data directory. The socket is mode `0600`: only the daemon's own account can open it.
+- **With the daemon running**, the command goes through the daemon's operator socket,
+  `operator/operator.sock` in its data directory. The directory is `0700` and the socket `0600`:
+  only the daemon's own account can open it.
   - The change applies at once, without a restart.
   - Connected editors receive it, and a removed member's next request is refused.
   - A directory sync can run it every few minutes without disconnecting anyone.

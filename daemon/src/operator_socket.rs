@@ -2,8 +2,10 @@
 //! RUNNING daemon, so a membership change (a directory sync, an admin's
 //! command) no longer needs the daemon stopped and every editor disconnected.
 //!
-//! **Who can reach it.** A Unix socket in the daemon's data directory, mode
-//! `0600`: only the account the daemon runs as. It serves the membership
+//! **Who can reach it.** A Unix socket in a private directory of the daemon's
+//! data directory: the directory `0700`, the socket `0600`, so only the
+//! account the daemon runs as, and never another for even an instant (the
+//! socket is born under the process umask before it is narrowed). It serves the membership
 //! commands and nothing else. The KB socket the editor talks to does not serve
 //! them, and no MCP tool or Scheme primitive calls them (CLAUDE.md principle
 //! #16: a control that bounds who may read a KB is not on the agent's
@@ -33,7 +35,9 @@ use crate::collab_handler::{
 use crate::doc_store::DocStore;
 use mae_sync::kb::Role;
 
-/// The socket's file name in the daemon's data directory.
+/// The private directory, in the daemon's data directory, that holds it.
+pub const DIR_NAME: &str = "operator";
+/// The socket's file name in that directory.
 pub const FILE_NAME: &str = "operator.sock";
 
 /// The largest request the socket reads: a command is a few hundred bytes.
@@ -42,12 +46,38 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Where a daemon with this data directory listens.
 pub fn path(data_dir: &Path) -> PathBuf {
-    data_dir.join(FILE_NAME)
+    data_dir.join(DIR_NAME).join(FILE_NAME)
+}
+
+/// `dir`, created `0700` or narrowed to it; refused if it is a symlink or not
+/// a directory, so the socket's directory is never one another account chose.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if !m.file_type().is_dir() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} is not a directory", dir.display()),
+            ))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)?;
+        }
+        Err(e) => return Err(e),
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
 /// Bind the socket at `path`, owner-only. A leftover file is removed only when
 /// nothing answers on it; a live daemon's socket is never taken over.
 pub async fn bind(path: &Path) -> std::io::Result<UnixListener> {
+    if let Some(dir) = path.parent() {
+        private_dir(dir)?;
+    }
     if path.exists() {
         if UnixStream::connect(path).await.is_ok() {
             return Err(std::io::Error::new(
@@ -56,9 +86,6 @@ pub async fn bind(path: &Path) -> std::io::Result<UnixListener> {
             ));
         }
         std::fs::remove_file(path)?;
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
     }
     let listener = UnixListener::bind(path)?;
     use std::os::unix::fs::PermissionsExt;
@@ -73,8 +100,14 @@ pub async fn serve(
     broadcaster: SharedBroadcaster,
 ) {
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            continue;
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(e) => {
+                // Out of descriptors, say: pause rather than spin.
+                tracing::warn!(error = %e, "operator socket: accept failed");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
         };
         let (store, bc) = (Arc::clone(&doc_store), broadcaster.clone());
         tokio::spawn(async move {
@@ -163,11 +196,22 @@ async fn handle(store: &DocStore, bc: &SharedBroadcaster, req: &Value) -> Result
     }
 }
 
-/// Send one command to the daemon listening at `path`: `Ok(None)` when no
-/// daemon answers there (none is running), so the caller can work offline.
+/// Send one command to the daemon listening at `path`: `Ok(None)` only when
+/// no daemon is there (no socket, or nothing accepting on it), so the caller
+/// can work offline. Any other failure (permission, a full backlog) is an
+/// error, never a silent fallback.
 pub async fn request(path: &Path, method: &str, params: Value) -> Result<Option<Value>, String> {
-    let Ok(stream) = UnixStream::connect(path).await else {
-        return Ok(None);
+    let stream = match UnixStream::connect(path).await {
+        Ok(s) => s,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None)
+        }
+        Err(e) => return Err(format!("operator socket {}: {e}", path.display())),
     };
     let (r, mut w) = stream.into_split();
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});

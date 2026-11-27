@@ -221,6 +221,12 @@ async fn a_running_daemon_takes_membership_changes_on_its_operator_socket() {
     let listener = crate::operator_socket::bind(&path).await.unwrap();
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "owner-only");
+    let dir_mode = std::fs::metadata(path.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(dir_mode, 0o700, "in a private directory");
     let bc: mae_mcp::broadcast::SharedBroadcaster = Default::default();
     let mut watcher = {
         let mut b = bc.lock().unwrap();
@@ -284,9 +290,32 @@ async fn no_daemon_means_the_offline_path() {
     let path = crate::operator_socket::path(dir.path());
     let none = crate::operator_socket::request(&path, "member.list", json!({"kb_id": KB})).await;
     assert_eq!(none, Ok(None));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, b"stale").unwrap();
     assert!(
         crate::operator_socket::bind(&path).await.is_ok(),
         "a stale file is replaced"
+    );
+}
+
+/// The socket's directory must be a real directory: a symlink in its place
+/// (one another account could aim elsewhere) is refused, not followed.
+#[tokio::test]
+async fn the_socket_directory_is_never_a_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        dir.path().join(crate::operator_socket::DIR_NAME),
+    )
+    .unwrap();
+    let path = crate::operator_socket::path(dir.path());
+    assert!(crate::operator_socket::bind(&path).await.is_err());
+    assert!(
+        std::fs::read_dir(elsewhere.path())
+            .unwrap()
+            .next()
+            .is_none(),
+        "nothing created there"
     );
 }
