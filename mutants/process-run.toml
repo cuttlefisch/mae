@@ -55,8 +55,8 @@ filter = "test(output_past_the_cap_is_drained_and_reported_truncated)"
 ref = "each stream is capped and its truncation reported"
 [[mutant.edit]]
 file = "crates/scheme/src/runtime/process_run.rs"
-find = '''                kept.extend_from_slice(&buf[..n.min(room)]);'''
-replace = '''                kept.extend_from_slice(&buf[..n]);'''
+find = '''                k.0.extend_from_slice(&buf[..n.min(room)]);'''
+replace = '''                k.0.extend_from_slice(&buf[..n]);'''
 
 [[mutant]]
 id = "process-run/argv-element-skipped"
@@ -68,3 +68,49 @@ ref = "a non-string ARGV element is refused, never dropped"
 file = "crates/scheme/src/runtime/process_run.rs"
 find = '''    let argv = strings(&args[0], "ARGV")?;'''
 replace = '''    let argv = crate::ffi::list_to_strings(&args[0]);'''
+
+[[mutant]]
+id = "process-run/timeout-reported-as-signal"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(the_deadline_kills_the_whole_process_group)"
+ref = "a run the deadline ended is timed-out, not signalled"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''            (true, _) => Ending::TimedOut,'''
+replace = '''            (true, Ok(s)) => ending_of(s),
+            (true, Err(_)) => Ending::TimedOut,'''
+
+[[mutant]]
+id = "process-run/no-session"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(the_child_leads_its_own_session)"
+ref = "the child leads its own session"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''            if libc::setsid() == -1 {'''
+replace = '''            if libc::setpgid(0, 0) == -1 {'''
+
+[[mutant]]
+id = "process-run/descriptors-inherited"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(no_descriptor_of_the_editor_reaches_the_child)"
+ref = "no descriptor of the editor reaches the child"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''            cloexec_from_3();
+'''
+replace = ''''''
+
+[[mutant]]
+id = "process-run/partial-output-dropped"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(an_escapee_holding_the_pipes_is_abandoned_with_its_output_kept)"
+ref = "an abandoned pipe's output read so far is kept"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''    (std::mem::take(&mut k.0), k.1, abandoned)'''
+replace = '''    (if abandoned { Vec::new() } else { std::mem::take(&mut k.0) }, k.1, abandoned)'''

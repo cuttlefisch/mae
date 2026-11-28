@@ -5,17 +5,28 @@
 //! - **No shell.** ARGV is a list of strings, and its first element is an
 //!   absolute path: no PATH lookup, no word splitting, no expansion.
 //! - **Nothing inherited.** The environment is exactly ENV; the working
-//!   directory is CWD (default `/`); stdin is empty.
-//! - **A time limit that holds.** The child leads a process group of its own
-//!   (Unix), and at the deadline the whole group is killed, so a grandchild
-//!   cannot keep running past it or hold the output pipes open.
+//!   directory is CWD (default `/`); stdin is empty. On Unix the child starts
+//!   a session of its own (`setsid`: no controlling terminal), and every
+//!   descriptor above stderr is closed at exec, including any the editor's
+//!   own libraries opened without close-on-exec.
+//! - **A time limit that holds.** The child's session is its own process
+//!   group, and at the deadline the whole group is killed, so a grandchild
+//!   cannot keep running past it. However the program ends, the group is
+//!   killed before the call returns. A process that deliberately leaves the
+//!   group (`setsid`, `setpgid`) is beyond its reach: if it holds the output
+//!   pipes the call stops waiting for them after a grace and reports
+//!   `output-abandoned`, with whatever output was read by then.
 //! - **Exact output.** stdout and stderr are kept apart, as bytevectors (a
 //!   probe's evidence is hashed, so it must not pass through lossy UTF-8),
 //!   each capped at [`MAX_OUTPUT_BYTES`] with the excess drained, not
 //!   blocked on, and reported as truncated.
 //!
 //! It blocks the calling thread until the program ends or the deadline
-//! passes, as `shell-command` does, which [`MAX_TIMEOUT_MS`] bounds.
+//! passes, as `shell-command` does, which [`MAX_TIMEOUT_MS`] bounds, plus the
+//! output grace (two streams, [`DRAIN_GRACE`] each). Two cases it cannot
+//! bound: a program stuck in uninterruptible sleep (a hung NFS read) delays
+//! the reap until the kernel lets it die; and an editor that has set SIGCHLD
+//! to be ignored makes `waitid` fail, reported as `spawn-failed` ("wait").
 //!
 //! @ai-caution: [security] Shell tier, like `shell-command` (the owner's
 //! decision, 2026-11-28): an agent granted the shell tier can call it.
@@ -103,27 +114,74 @@ pub fn check(spec: &Spec) -> Result<(), String> {
     Ok(())
 }
 
-/// Read `r` to its end, keeping at most [`MAX_OUTPUT_BYTES`].
-fn drain(mut r: impl Read) -> (Vec<u8>, bool) {
-    let mut kept = Vec::new();
-    let mut truncated = false;
+/// One stream's output so far: (bytes kept, truncated), shared with its
+/// reader so that what was read survives an abandoned pipe.
+type Kept = std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>;
+
+/// Read `r` to its end into `kept`, keeping at most [`MAX_OUTPUT_BYTES`]
+/// and draining the rest.
+fn drain(mut r: impl Read, kept: &Kept) {
     let mut buf = [0u8; 8192];
     loop {
         match r.read(&mut buf) {
-            Ok(0) | Err(_) => return (kept, truncated),
+            Ok(0) | Err(_) => return,
             Ok(n) => {
-                let room = MAX_OUTPUT_BYTES - kept.len();
-                kept.extend_from_slice(&buf[..n.min(room)]);
-                truncated |= n > room;
+                let mut k = kept.lock().unwrap_or_else(|e| e.into_inner());
+                let room = MAX_OUTPUT_BYTES - k.0.len();
+                k.0.extend_from_slice(&buf[..n.min(room)]);
+                k.1 |= n > room;
             }
         }
     }
 }
 
+/// Every descriptor from 3 up closed at exec. Async-signal-safe (it runs
+/// between fork and exec). Marked close-on-exec rather than closed, so std's
+/// own exec-error pipe still reports a failed exec.
+#[cfg(unix)]
+fn cloexec_from_3() {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: close_range(2) with CLOSE_RANGE_CLOEXEC only sets flags.
+        let r = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                3u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            )
+        };
+        if r == 0 {
+            return;
+        }
+    }
+    // SAFETY: sysconf(3) is async-signal-safe and reads a limit.
+    let max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+    let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
+    for fd in 3..max {
+        // SAFETY: fcntl(2) on a possibly-closed fd fails harmlessly (EBADF).
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+    }
+}
+
+/// The child starts its own session (so its own process group, and no
+/// controlling terminal), with every descriptor above stderr closed.
 #[cfg(unix)]
 fn own_group(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
-    cmd.process_group(0);
+    // SAFETY: the closure runs in the forked child before exec and calls
+    // only async-signal-safe functions (setsid, close_range/sysconf/fcntl).
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            cloexec_from_3();
+            Ok(())
+        });
+    }
 }
 #[cfg(not(unix))]
 fn own_group(_cmd: &mut Command) {}
@@ -132,7 +190,7 @@ fn own_group(_cmd: &mut Command) {}
 fn kill_all(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        // The child leads its group (`process_group(0)`): its pid is the pgid.
+        // The child leads its session and group (`setsid`): its pid is the pgid.
         if let Ok(pid) = i32::try_from(child.id()) {
             // SAFETY: kill(2) with a negative pid signals that process group;
             // no memory is involved.
@@ -214,13 +272,25 @@ fn wait_for_end(child: &mut std::process::Child, deadline: Instant) -> Ending {
     }
 }
 
-/// One stream's output, waited for at most [`DRAIN_GRACE`]: (bytes,
-/// truncated, abandoned).
-fn collect(rx: mpsc::Receiver<(Vec<u8>, bool)>) -> (Vec<u8>, bool, bool) {
-    match rx.recv_timeout(DRAIN_GRACE) {
-        Ok((bytes, truncated)) => (bytes, truncated, false),
-        Err(_) => (Vec::new(), false, true),
-    }
+/// A thread reading `r` into a shared buffer, and the signal that it ended.
+fn reader(r: impl Read + Send + 'static) -> (Kept, mpsc::Receiver<()>) {
+    let kept: Kept = Default::default();
+    let (done, ended) = mpsc::channel();
+    let k = std::sync::Arc::clone(&kept);
+    std::thread::spawn(move || {
+        drain(r, &k);
+        let _ = done.send(());
+    });
+    (kept, ended)
+}
+
+/// One stream's output: (bytes, truncated, abandoned). Its end is waited for
+/// at most [`DRAIN_GRACE`]; past that, what was read so far is returned and
+/// the pipe reported abandoned.
+fn collect((kept, ended): (Kept, mpsc::Receiver<()>)) -> (Vec<u8>, bool, bool) {
+    let abandoned = ended.recv_timeout(DRAIN_GRACE).is_err();
+    let mut k = kept.lock().unwrap_or_else(|e| e.into_inner());
+    (std::mem::take(&mut k.0), k.1, abandoned)
 }
 
 /// Run `spec` (already [`check`]ed) and report the outcome.
@@ -249,20 +319,12 @@ pub fn run(spec: &Spec) -> Outcome {
             }
         }
     };
-    let (tx_out, rx_out) = mpsc::channel();
-    let (tx_err, rx_err) = mpsc::channel();
-    let out = child.stdout.take().expect("piped");
-    let err = child.stderr.take().expect("piped");
-    std::thread::spawn(move || {
-        let _ = tx_out.send(drain(out));
-    });
-    std::thread::spawn(move || {
-        let _ = tx_err.send(drain(err));
-    });
+    let out = reader(child.stdout.take().expect("piped"));
+    let err = reader(child.stderr.take().expect("piped"));
 
     let ending = wait_for_end(&mut child, start + spec.timeout);
-    let (stdout, stdout_truncated, a) = collect(rx_out);
-    let (stderr, stderr_truncated, b) = collect(rx_err);
+    let (stdout, stdout_truncated, a) = collect(out);
+    let (stderr, stderr_truncated, b) = collect(err);
     Outcome {
         ending,
         stdout,

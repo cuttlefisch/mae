@@ -104,7 +104,13 @@ fn streams_exit_code_and_signal_are_reported_apart() {
 fn the_deadline_kills_the_whole_process_group() {
     let d = scratch("deadline");
     let f = d.join("pid");
-    let o = sh(&format!("sleep 30 & echo $! > {}; wait", f.display()), 300);
+    // A deadline long enough that the script has always written the pid
+    // before it (load cannot make 3 s expire first), and far short of the
+    // 30 s the grandchild would run.
+    let o = sh(
+        &format!("sleep 30 & echo $! > {}; wait", f.display()),
+        3_000,
+    );
     assert_eq!(o.ending, Ending::TimedOut);
     assert!(o.elapsed < Duration::from_secs(10), "{:?}", o.elapsed);
     assert!(gone(pid_in(&f)), "the grandchild survived the deadline");
@@ -184,4 +190,98 @@ fn the_scheme_primitive_returns_the_documented_alist() {
     assert!(rt
         .eval(r#"(process-run '("/bin/echo") '(("A" . 1)) 2000)"#)
         .is_err());
+}
+
+/// stdin is empty: a program that reads it ends at once.
+#[test]
+fn stdin_is_empty() {
+    let o = run(&spec(&["/bin/cat"], &[], 5_000));
+    assert_eq!(o.ending, Ending::Exited(0));
+    assert!(o.stdout.is_empty());
+}
+
+/// The working directory is `/` by default, else the one given.
+#[test]
+fn the_working_directory_is_explicit() {
+    let o = run(&spec(&["/bin/pwd"], &[], 2_000));
+    assert_eq!(o.stdout, b"/\n");
+    let d = scratch("cwd").canonicalize().unwrap();
+    let mut s = spec(&["/bin/pwd"], &[], 2_000);
+    s.cwd = d.clone();
+    let o = run(&s);
+    assert_eq!(o.stdout, format!("{}\n", d.display()).into_bytes());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A program that stops itself is still killed at the deadline.
+#[test]
+fn a_stopped_program_is_killed_at_the_deadline() {
+    let o = sh("kill -STOP $$", 500);
+    assert_eq!(o.ending, Ending::TimedOut);
+    assert!(o.elapsed < Duration::from_secs(10), "{:?}", o.elapsed);
+}
+
+/// The child leads a session of its own: no controlling terminal shared
+/// with the editor.
+#[test]
+fn the_child_leads_its_own_session() {
+    let o = sh(
+        r#"test "$(ps -o sid= -p $$ | tr -d ' ')" = "$$" && echo leader"#,
+        5_000,
+    );
+    assert_eq!(
+        o.stdout,
+        b"leader\n",
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// A descriptor the editor opened without close-on-exec does not reach the
+/// child.
+#[test]
+fn no_descriptor_of_the_editor_reaches_the_child() {
+    let path = std::ffi::CString::new("/dev/null").unwrap();
+    // SAFETY: open(2) without O_CLOEXEC, deliberately: the leak under test.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+    assert!(fd > 2);
+    let o = sh(
+        &format!("test -e /dev/fd/{fd} && echo leaked || echo closed"),
+        5_000,
+    );
+    // SAFETY: closing the fd opened above.
+    unsafe { libc::close(fd) };
+    assert_eq!(o.stdout, b"closed\n");
+}
+
+/// A process that leaves the group and holds the pipes: the call returns
+/// after the grace, reports the output abandoned, and keeps what was read.
+#[test]
+fn an_escapee_holding_the_pipes_is_abandoned_with_its_output_kept() {
+    if !Path::new("/usr/bin/setsid").exists() {
+        return; // no setsid(1) here (macOS): nothing to escape with
+    }
+    let d = scratch("escapee");
+    let f = d.join("pid");
+    let o = sh(
+        // The parent waits until the escapee has left the group (it writes
+        // its pid only after setsid), or the group kill would catch it first.
+        &format!(
+            "echo before; /usr/bin/setsid sh -c 'echo $$ > {f}; exec sleep 30' & \
+             while [ ! -s {f} ]; do sleep 0.05; done",
+            f = f.display()
+        ),
+        5_000,
+    );
+    let escapee = pid_in(&f);
+    // SAFETY: killing the escapee this test started.
+    unsafe { libc::kill(escapee, libc::SIGKILL) };
+    assert_eq!(o.ending, Ending::Exited(0));
+    assert!(o.output_abandoned);
+    assert_eq!(
+        o.stdout, b"before\n",
+        "the output read before the grace is kept"
+    );
+    assert!(o.elapsed < Duration::from_secs(10), "{:?}", o.elapsed);
+    let _ = std::fs::remove_dir_all(&d);
 }
