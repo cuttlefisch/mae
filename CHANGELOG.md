@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.220] - 2026-11-28
+
+
+
+
+### Features
+
+- *(kb)* Read and write node properties from Scheme and MCP ([1f3447c](https://github.com/cuttlefisch/mae/commit/1f3447cebf5882b7d8f947079889501361a0da14))
+
+### Bug Fixes
+
+- *(mutate)* Mutant runs no longer leave proptest-regressions seeds in the checkout ([8297a95](https://github.com/cuttlefisch/mae/commit/8297a95428d7aa916edd4f2669fd174973843adc))
+- *(kb)* Classify kb_set_property for AI residency; keep the long functions from growing ([f37543d](https://github.com/cuttlefisch/mae/commit/f37543d4e0bd2834a7dd30a6ced42cce18461770))
+
+### Documentation
+
+- *(kb)* Help-KB entries for kb-node-properties and kb-set-node-property! ([75277d1](https://github.com/cuttlefisch/mae/commit/75277d1bf07d0b94e68e982443354f60b8858ca2))
+
 ## [0.14.219] - 2026-11-27
 
 
@@ -15,6 +33,10 @@ All notable changes to this project will be documented in this file.
 
 - *(mutants)* Re-anchor block-keeps-the-allow to the locked invalidation ([8a8f3a8](https://github.com/cuttlefisch/mae/commit/8a8f3a8cefa8d0a57e069452d636658fc9606656))
 - *(daemon)* The derive race test fails loudly on a cache hit, and claims only what it kills ([f4e4fe3](https://github.com/cuttlefisch/mae/commit/f4e4fe3ae0dba610694fbbe26d4c881cd352d0ec))
+
+### Miscellaneous
+
+- Bump version to 0.14.219 ([8081b6f](https://github.com/cuttlefisch/mae/commit/8081b6fb6df17e70bc3525fbdcbef1b992f5fcd7))
 
 ## [0.14.218] - 2026-11-27
 
