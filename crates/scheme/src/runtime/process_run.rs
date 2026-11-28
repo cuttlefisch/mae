@@ -183,6 +183,46 @@ fn ending_of(status: std::process::ExitStatus) -> Ending {
     Ending::Exited(-1)
 }
 
+/// Wait until the child ends or `deadline` passes, then kill its group and
+/// reap it.
+fn wait_for_end(child: &mut std::process::Child, deadline: Instant) -> Ending {
+    // However it ends, nothing it started outlives the call: the group is
+    // killed while the leader is still unreaped (so its id is still ours),
+    // then the leader is reaped. Then the pipes close; one held by a process
+    // that left the group is waited for only up to the grace.
+    loop {
+        let exited = match has_exited(child) {
+            Ok(exited) => exited,
+            Err(e) => {
+                kill_all(child);
+                let _ = child.wait();
+                break Ending::SpawnFailed(format!("wait: {e}"));
+            }
+        };
+        let timed_out = !exited && Instant::now() >= deadline;
+        if !exited && !timed_out {
+            std::thread::sleep(POLL);
+            continue;
+        }
+        kill_all(child);
+        let status = child.wait();
+        break match (timed_out, status) {
+            (true, _) => Ending::TimedOut,
+            (false, Ok(s)) => ending_of(s),
+            (false, Err(e)) => Ending::SpawnFailed(format!("wait: {e}")),
+        };
+    }
+}
+
+/// One stream's output, waited for at most [`DRAIN_GRACE`]: (bytes,
+/// truncated, abandoned).
+fn collect(rx: mpsc::Receiver<(Vec<u8>, bool)>) -> (Vec<u8>, bool, bool) {
+    match rx.recv_timeout(DRAIN_GRACE) {
+        Ok((bytes, truncated)) => (bytes, truncated, false),
+        Err(_) => (Vec::new(), false, true),
+    }
+}
+
 /// Run `spec` (already [`check`]ed) and report the outcome.
 pub fn run(spec: &Spec) -> Outcome {
     let start = Instant::now();
@@ -220,46 +260,9 @@ pub fn run(spec: &Spec) -> Outcome {
         let _ = tx_err.send(drain(err));
     });
 
-    let deadline = start + spec.timeout;
-    // However it ends, nothing it started outlives the call: the group is
-    // killed while the leader is still unreaped (so its id is still ours),
-    // then the leader is reaped. Then the pipes close; one held by a process
-    // that left the group is waited for only up to the grace.
-    let ending = loop {
-        let exited = match has_exited(&mut child) {
-            Ok(exited) => exited,
-            Err(e) => {
-                kill_all(&mut child);
-                let _ = child.wait();
-                break Ending::SpawnFailed(format!("wait: {e}"));
-            }
-        };
-        let timed_out = !exited && Instant::now() >= deadline;
-        if !exited && !timed_out {
-            std::thread::sleep(POLL);
-            continue;
-        }
-        kill_all(&mut child);
-        let status = child.wait();
-        break match (timed_out, status) {
-            (true, _) => Ending::TimedOut,
-            (false, Ok(s)) => ending_of(s),
-            (false, Err(e)) => Ending::SpawnFailed(format!("wait: {e}")),
-        };
-    };
-    let grace = Instant::now() + DRAIN_GRACE;
-    let take = |rx: mpsc::Receiver<(Vec<u8>, bool)>| {
-        rx.recv_timeout(grace.saturating_duration_since(Instant::now()))
-            .ok()
-    };
-    let (stdout, stdout_truncated, a) = match take(rx_out) {
-        Some((b, t)) => (b, t, false),
-        None => (Vec::new(), false, true),
-    };
-    let (stderr, stderr_truncated, b) = match take(rx_err) {
-        Some((b, t)) => (b, t, false),
-        None => (Vec::new(), false, true),
-    };
+    let ending = wait_for_end(&mut child, start + spec.timeout);
+    let (stdout, stdout_truncated, a) = collect(rx_out);
+    let (stderr, stderr_truncated, b) = collect(rx_err);
     Outcome {
         ending,
         stdout,
@@ -331,6 +334,26 @@ fn outcome_value(o: Outcome) -> Value {
     ])
 }
 
+/// `process-run` itself: its arguments checked, then the run.
+fn primitive(args: &[Value]) -> Result<Value, LispError> {
+    let argv = strings(&args[0], "ARGV")?;
+    let env = env_pairs(&args[1])?;
+    let ms = u64::try_from(args[2].as_int()?)
+        .map_err(|_| LispError::internal("process-run: TIMEOUT-MS must be positive".to_string()))?;
+    let cwd = match args.get(3) {
+        None => PathBuf::from("/"),
+        Some(v) => PathBuf::from(v.as_str()?),
+    };
+    let spec = Spec {
+        argv,
+        env,
+        timeout: Duration::from_millis(ms),
+        cwd,
+    };
+    check(&spec).map_err(|e| LispError::internal(format!("process-run: {e}")))?;
+    Ok(outcome_value(run(&spec)))
+}
+
 /// Register `process-run`.
 pub(super) fn register_process_run_fn(vm: &mut Vm) {
     vm.register_fn(
@@ -345,25 +368,7 @@ pub(super) fn register_process_run_fn(vm: &mut Vm) {
          stdout-truncated, stderr-truncated, output-abandoned, elapsed-ms. Blocks until done.",
         Arity::Variadic(3),
         tier::SHELL,
-        |args: &[Value]| {
-            let argv = strings(&args[0], "ARGV")?;
-            let env = env_pairs(&args[1])?;
-            let ms = u64::try_from(args[2].as_int()?).map_err(|_| {
-                LispError::internal("process-run: TIMEOUT-MS must be positive".to_string())
-            })?;
-            let cwd = match args.get(3) {
-                None => PathBuf::from("/"),
-                Some(v) => PathBuf::from(v.as_str()?),
-            };
-            let spec = Spec {
-                argv,
-                env,
-                timeout: Duration::from_millis(ms),
-                cwd,
-            };
-            check(&spec).map_err(|e| LispError::internal(format!("process-run: {e}")))?;
-            Ok(outcome_value(run(&spec)))
-        },
+        primitive,
     );
 }
 

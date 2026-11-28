@@ -2145,6 +2145,14 @@ mod tests {
             include_str!("../../../scheme/src/runtime/misc_primitives.rs"),
         ),
         (
+            "scheme/runtime/process_run.rs",
+            include_str!("../../../scheme/src/runtime/process_run.rs"),
+        ),
+        (
+            "scheme/runtime/process_run_tests.rs",
+            include_str!("../../../scheme/src/runtime/process_run_tests.rs"),
+        ),
+        (
             "scheme/runtime/shell_agenda.rs",
             include_str!("../../../scheme/src/runtime/shell_agenda.rs"),
         ),

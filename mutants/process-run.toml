@@ -66,5 +66,5 @@ filter = "test(the_scheme_primitive_returns_the_documented_alist)"
 ref = "a non-string ARGV element is refused, never dropped"
 [[mutant.edit]]
 file = "crates/scheme/src/runtime/process_run.rs"
-find = '''            let argv = strings(&args[0], "ARGV")?;'''
-replace = '''            let argv = crate::ffi::list_to_strings(&args[0]);'''
+find = '''    let argv = strings(&args[0], "ARGV")?;'''
+replace = '''    let argv = crate::ffi::list_to_strings(&args[0]);'''
