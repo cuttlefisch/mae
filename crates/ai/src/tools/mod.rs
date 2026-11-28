@@ -198,6 +198,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     tools.extend(lsp_tools::lsp_tool_definitions());
     tools.extend(dap_tools::dap_tool_definitions());
     tools.extend(kb_tools::kb_tool_definitions());
+    tools.extend(kb_tools::kb_property_tool_definitions());
     tools.extend(shell_tools::shell_tool_definitions());
     tools.extend(web_tools::web_tool_definitions());
     tools.extend(collab_tools::collab_tool_definitions());

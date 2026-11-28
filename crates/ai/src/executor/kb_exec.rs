@@ -13,9 +13,9 @@ use crate::tool_impls::{
     execute_kb_links_to, execute_kb_list, execute_kb_neighborhood, execute_kb_preview_dismiss,
     execute_kb_preview_show, execute_kb_promote, execute_kb_raw_query, execute_kb_register,
     execute_kb_reimport, execute_kb_related, execute_kb_restore, execute_kb_search,
-    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_role,
-    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
-    execute_kb_vector_search, execute_kb_view_query,
+    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_property,
+    execute_kb_set_role, execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister,
+    execute_kb_update, execute_kb_vector_search, execute_kb_view_query,
 };
 use crate::types::ToolCall;
 
@@ -31,6 +31,18 @@ use crate::types::ToolCall;
 /// kb_shortest_path) so they can post-filter their own results for the
 /// AI-residency seed-content exemption (ADR-048/#358, extended #361/#366);
 /// every other arm is unaffected.
+/// The node-property tools, beside [`dispatch`] (whose preamble has already
+/// run for the call by the time this is reached).
+pub(super) fn dispatch_property(
+    editor: &mut Editor,
+    call: &ToolCall,
+) -> Option<Result<String, String>> {
+    match call.name.as_str() {
+        "kb_set_property" => Some(execute_kb_set_property(editor, &call.arguments)),
+        _ => None,
+    }
+}
+
 pub(super) fn dispatch(
     editor: &mut Editor,
     call: &ToolCall,

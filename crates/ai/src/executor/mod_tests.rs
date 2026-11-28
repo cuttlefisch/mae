@@ -113,6 +113,36 @@ fn a_silent_command_still_acknowledges() {
     );
 }
 
+/// `kb_set_property` is reachable through the real dispatch (its own
+/// `kb_exec::dispatch_property` arm), and `kb_get` reads the result back.
+#[test]
+fn kb_set_property_dispatches_and_kb_get_reads_it_back() {
+    let mut editor = make_editor_with_text("");
+    editor
+        .kb_create_node("note:dispatch-props", "P", "Body.", mae_kb::NodeKind::Note)
+        .unwrap();
+    let set = make_call(
+        "kb_set_property",
+        serde_json::json!({"id": "note:dispatch-props", "key": "Provides", "value": "dns"}),
+    );
+    let r = unwrap_immediate(execute_tool(
+        &mut editor,
+        &set,
+        &all_tools(),
+        &tool_behaviour_policy(),
+    ));
+    assert!(r.success, "{}", r.output);
+    let get = make_call("kb_get", serde_json::json!({"id": "note:dispatch-props"}));
+    let r = unwrap_immediate(execute_tool(
+        &mut editor,
+        &get,
+        &all_tools(),
+        &tool_behaviour_policy(),
+    ));
+    let node: serde_json::Value = serde_json::from_str(&r.output).unwrap();
+    assert_eq!(node["properties"]["provides"], "dns", "{}", r.output);
+}
+
 #[test]
 fn buffer_read_full() {
     let mut editor = make_editor_with_text("hello\nworld\n");
@@ -1765,6 +1795,7 @@ fn known_mutating_tools_are_never_declared_read_only() {
         "kb_set_encryption",
         "kb_set_policy",
         "kb_set_role",
+        "kb_set_property",
         "git_commit",
         "git_push",
         "git_checkout",

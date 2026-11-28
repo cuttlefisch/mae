@@ -733,6 +733,24 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
 }
 
 /// `kb_reimport`: its description carries the when-to-re-import guidance.
+/// The node-property tools (`kb_set_property`; properties are read through
+/// `kb_get`).
+pub(super) fn kb_property_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefBuilder::new(
+            "kb_set_property",
+            "Set a KB node's property (a :PROPERTIES: drawer field) to a value, or remove it by omitting value. The key is printable ASCII without blanks or ':' and is stored lower-case; ID, KIND, ALIASES (node fields), END and PROPERTIES (drawer syntax) and a key ending in '+' are refused. The value is one non-empty line with no blank at either end; role takes source|atom|molecule|hub. Read properties back with kb_get.",
+        )
+        .prop("id", "string", "KB node id")
+        .prop("kb", "string", KB_TARGET)
+        .prop("key", "string", "Property key, e.g. 'valid-until'")
+        .prop("value", "string", "The value; omit to remove the property")
+        .required(["id", "key"])
+        .permission(PermissionTier::Write)
+        .build(),
+    ]
+}
+
 fn kb_reimport_def() -> ToolDefinition {
     ToolDefBuilder::new(
         "kb_reimport",

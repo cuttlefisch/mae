@@ -381,7 +381,7 @@ mod tests {
             classify: |name| match name {
                 "kb_search" | "kb_search_context" | "kb_agenda" => Some(ToolStage::Discovery),
                 "kb_get" | "kb_links_from" => Some(ToolStage::Read),
-                "kb_add_link" | "kb_set_role" => Some(ToolStage::Write),
+                "kb_add_link" | "kb_set_role" | "kb_set_property" => Some(ToolStage::Write),
                 _ => None,
             },
         }

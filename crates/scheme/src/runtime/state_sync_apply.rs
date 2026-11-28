@@ -870,5 +870,11 @@ fn apply_kb_node_op(
                 .map(|_| ());
             (format!("kb-set-role {id}"), r)
         }
+        crate::runtime::kb_crud::KbNodeOp::SetProperty { id, key, value, kb } => {
+            let r = editor
+                .kb_set_property_target(kb.as_deref(), &id, &key, value.as_deref())
+                .map(|_| ());
+            (format!("kb-set-node-property! {id}"), r)
+        }
     }
 }

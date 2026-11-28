@@ -1,0 +1,80 @@
+# Every rule in mae_kb::node_property::validate is needed for a property to
+# survive the node's org round trip: dropping one must break
+# `an_accepted_property_survives_the_round_trip` (shared/kb/src/node_property_tests.rs).
+
+[[mutant]]
+id = "node-property/colon-in-key"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "a key never holds ':'"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if let Some(c) = key.chars().find(|c| !c.is_ascii_graphic() || *c == ':') {'''
+replace = '''    if let Some(c) = key.chars().find(|c| !c.is_ascii_graphic() && *c != ':') {'''
+
+[[mutant]]
+id = "node-property/non-ascii-key"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "a key is ASCII"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if let Some(c) = key.chars().find(|c| !c.is_ascii_graphic() || *c == ':') {'''
+replace = '''    if let Some(c) = key.chars().find(|c| c.is_whitespace() || *c == ':') {'''
+
+[[mutant]]
+id = "node-property/reserved-keys"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "fields and drawer syntax are not properties"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if RESERVED.contains(&key.as_str()) {'''
+replace = '''    if false && RESERVED.contains(&key.as_str()) {'''
+
+[[mutant]]
+id = "node-property/empty-value"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "an empty value is a removal, not a value"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if value.is_empty() {'''
+replace = '''    if false && value.is_empty() {'''
+
+[[mutant]]
+id = "node-property/blank-edge"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "the readers trim the value"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if value.trim() != value {'''
+replace = '''    if false && value.trim() != value {'''
+
+[[mutant]]
+id = "node-property/multiline"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(an_accepted_property_survives_the_round_trip)"
+ref = "a value is one line"
+[[mutant.edit]]
+file = "shared/kb/src/node_property.rs"
+find = '''    if value.contains(['\n', '\r']) {'''
+replace = '''    if false && value.contains(['\n', '\r']) {'''
+
+[[mutant]]
+id = "node-property/tool-not-dispatched"
+runner = "editor"
+targets = ["-p", "mae-ai", "--lib"]
+filter = "test(kb_set_property_dispatches_and_kb_get_reads_it_back)"
+ref = "kb_set_property reaches the real dispatch"
+[[mutant.edit]]
+file = "crates/ai/src/executor/tool_dispatch.rs"
+find = '''    if let Some(result) = super::kb_exec::dispatch_property(editor, call) {'''
+replace = '''    if let Some(result) = None::<Result<String, String>>.filter(|_| { let _ = &call; false }) {'''

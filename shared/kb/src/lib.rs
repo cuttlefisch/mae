@@ -53,6 +53,7 @@ pub mod import_plan;
 pub mod kb_build;
 pub mod kb_identity;
 pub mod migrate;
+pub mod node_property;
 pub mod org;
 pub mod org_ingest;
 pub mod project_identity;
