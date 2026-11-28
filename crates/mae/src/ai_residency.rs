@@ -222,8 +222,8 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
     Some(match tool_name {
         // --- SingleTarget: resolves to one node id or KB instance name ---
         "kb_get" | "kb_update" | "kb_delete" | "kb_promote" | "kb_restore" | "kb_add_link"
-        | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
-        | "help_open" => SingleTarget,
+        | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_set_property"
+        | "kb_reimport" | "help_open" => SingleTarget,
 
         // --- SingleTarget (not Filterable): kb_export_subgraph_html's BFS
         // walk (mae_kb::KnowledgeBase::extract_subgraph) runs against ONE

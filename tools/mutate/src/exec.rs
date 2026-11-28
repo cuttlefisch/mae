@@ -113,6 +113,10 @@ impl From<String> for Stop {
 /// Run `argv` in `cwd` with stdout and stderr into `log`, polling for exit so
 /// a SIGINT/SIGTERM to the tool stops the child and unwinds to the restore.
 /// `MUTATE_ID` tells the command which mutant (or `control`) it serves.
+///
+/// Proptest's failure persistence is off: a case that fails under a mutant
+/// would otherwise be saved as a `proptest-regressions/` seed in the
+/// checkout, runner state that fails only under the mutant (never committed).
 pub fn run(cwd: &Path, argv: &[String], id: &str, log: &Path) -> Result<Done, Stop> {
     let err = |e: std::io::Error| Stop::Error(format!("{}: {e}", log.display()));
     let file = fs::File::create(log).map_err(err)?;
@@ -121,6 +125,7 @@ pub fn run(cwd: &Path, argv: &[String], id: &str, log: &Path) -> Result<Done, St
         .args(&argv[1..])
         .current_dir(cwd)
         .env("MUTATE_ID", id)
+        .env("PROPTEST_DISABLE_FAILURE_PERSISTENCE", "1")
         .stdin(Stdio::null())
         .stdout(file.try_clone().map_err(err)?)
         .stderr(file)
@@ -266,6 +271,26 @@ mod tests {
         // An explicit prefix is the caller's choice.
         let explicit = env_of(&[("SLURM_JOB_ID", "7414"), ("MUTATE_PREFIX", "env X=1")]);
         assert_eq!(check_not_nested(&explicit, true), Ok(()));
+    }
+
+    /// A mutant's proptest failures must not land in the checkout.
+    #[test]
+    fn a_run_disables_proptest_failure_persistence() {
+        let dir = std::env::temp_dir().join(format!("mutate-env-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let argv: Vec<String> = [
+            "sh",
+            "-c",
+            "echo \"[$PROPTEST_DISABLE_FAILURE_PERSISTENCE]\"",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(run(&dir, &argv, "control", &log).is_ok());
+        let out = fs::read_to_string(&log).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(out.trim(), "[1]");
     }
 
     #[test]

@@ -355,6 +355,7 @@ Source: `shared/kb/src/lib.rs`
 | `kb_build` | mod |
 | `kb_identity` | mod |
 | `migrate` | mod |
+| `node_property` | mod |
 | `org` | mod |
 | `org_ingest` | mod |
 | `project_identity` | mod |
@@ -732,6 +733,7 @@ Source: `shared/syntax/src/lib.rs`
 | `kb-list-remote` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-meta-members` | `scheme/src/runtime/kb_queries.rs` |
 | `kb-neighborhood` | `scheme/src/runtime/kb_queries.rs` |
+| `kb-node-properties` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-pending` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-preview-dismiss` | `scheme/src/runtime/kb_preview.rs` |
 | `kb-preview-show` | `scheme/src/runtime/kb_preview.rs` |
@@ -746,6 +748,7 @@ Source: `shared/syntax/src/lib.rs`
 | `kb-search` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-set-ai-residency` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-set-encryption` | `scheme/src/runtime/kb_primitives.rs` |
+| `kb-set-node-property!` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-set-policy` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-set-role` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-share` | `scheme/src/runtime/kb_primitives.rs` |

@@ -216,6 +216,9 @@ pub(crate) struct Pauses {
     /// `review_freeze` (ADR-113 A2), between reading the content and reading
     /// the high-water mark.
     pub freeze: std::sync::Mutex<Option<Pause>>,
+    /// `derived_membership`, between reading its inputs and caching the
+    /// result.
+    pub derive: std::sync::Mutex<Option<Pause>>,
 }
 
 /// Number of [`DocStore::replace_gates`] stripes.
@@ -827,7 +830,11 @@ impl DocStore {
                 }
             }
         }
-        // Miss — recompute. Every derive input is captured in the cache key below.
+        // Miss — recompute. Every derive input is captured in the cache key below,
+        // except the blocklist, whose changes move the access generation: read
+        // it BEFORE the inputs, so a block landing while this derives is seen at
+        // the insert below.
+        let generation = self.kb_access_generation(kb_id);
         let ops = coll.oplog_ops();
         let governance = derive_governance(&ops, anchor);
         let view = self.membership_view_for(kb_id).await;
@@ -845,23 +852,37 @@ impl DocStore {
             members,
             genesis_verified: mae_sync::membership::has_anchored_genesis(&ops, anchor),
         });
-        self.derive_cache.write().await.insert(
-            kb_id.to_string(),
-            CachedDerive {
-                sv,
-                anchor: *anchor,
-                valid_until,
-                result: Arc::clone(&result),
-            },
-        );
+        #[cfg(test)]
+        Self::pause_at(&self.pauses.derive).await;
+        let mut cache = self.derive_cache.write().await;
+        // A blocklist change since the inputs were read: this result may hold
+        // the old blocklist, and its key cannot tell (#1052). Answer it to this
+        // caller, a decision made before the change, but never cache it.
+        if self.kb_access_generation(kb_id) == generation {
+            cache.insert(
+                kb_id.to_string(),
+                CachedDerive {
+                    sv,
+                    anchor: *anchor,
+                    valid_until,
+                    result: Arc::clone(&result),
+                },
+            );
+        }
         result
     }
 
     /// Drop `kb_id`'s memoized membership (ADR-042). Called when a per-peer input that is NOT in
     /// the collection SV changes — i.e. the local blocklist (block/unblock).
+    ///
+    /// The generation moves while the cache is still locked: moved after the
+    /// unlock, a derive that read the old blocklist could insert in between
+    /// and see an unmoved generation (#1052).
     async fn invalidate_derive_cache(&self, kb_id: &str) {
-        self.derive_cache.write().await.remove(kb_id);
+        let mut cache = self.derive_cache.write().await;
+        cache.remove(kb_id);
         self.note_access_change(kb_id);
+        drop(cache);
     }
 
     /// Install the daemon's signing identity (ADR-026). Called once at startup in

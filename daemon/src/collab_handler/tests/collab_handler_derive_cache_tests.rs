@@ -289,3 +289,64 @@ async fn derive_cache_drops_a_timeboxed_out_member_when_wallclock_passes_expiry(
         "the owner (no timebox) remains a member across the expiry boundary"
     );
 }
+
+/// #1052: a derivation that read the blocklist before a block, and caches
+/// its result after the block's invalidation, must not leave the stale
+/// result cached: the next derivation, with nothing else changed, sees the
+/// block. Paused between reading its inputs and caching, so the order is
+/// forced, not hoped for. Kills: the insert not checking the generation. (The
+/// generation moving inside the cache lock is argued, not tested: a test would
+/// need a pause inside the window it closes.)
+#[tokio::test]
+async fn a_block_during_a_derivation_never_leaves_its_result_cached() {
+    use mae_mcp::identity::Identity;
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+    let owner = Identity::generate("owner");
+    let (ofp, anchor) = (owner.fingerprint(), owner.public().to_bytes());
+    store.set_signer(Arc::new(owner));
+    let bob = fp("bob");
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&ofp),
+        "kbr",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    let add = kb_member_msg("kb/add_member", "kbr", &bob, Some("viewer"));
+    let r = dispatch_as(&store, &bc, Some("owner"), Some(&ofp), add, &mut docs).await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+    store.set_kb_anchor("kbr", anchor).await.unwrap();
+    let coll = load_coll(&store, "kbr").await;
+    let now = 1_900_000_000;
+
+    let pause = store.pause_next(|p| &p.derive);
+    let racing = {
+        let (store, bytes) = (Arc::clone(&store), coll.encode_state());
+        tokio::spawn(async move {
+            let coll = KbCollectionDoc::from_bytes(&bytes).unwrap();
+            store.derived_membership("kbr", &coll, &anchor, now).await
+        })
+    };
+    // A cache hit would never reach the pause: fail loudly, not hang.
+    tokio::time::timeout(std::time::Duration::from_secs(10), pause.reached.notified())
+        .await
+        .expect("the derivation reached the pause (it was not served from the cache)");
+    store.add_kb_block("kbr", &bob).await.unwrap();
+    pause.proceed.notify_one();
+    let before_block = racing.await.unwrap();
+    assert!(
+        before_block.members.contains_key(&bob),
+        "read before the block"
+    );
+
+    let next = store.derived_membership("kbr", &coll, &anchor, now).await;
+    assert!(
+        !next.members.contains_key(&bob),
+        "the block holds on the next derivation"
+    );
+}

@@ -859,6 +859,10 @@
           "kind": "mod"
         },
         {
+          "name": "node_property",
+          "kind": "mod"
+        },
+        {
           "name": "org",
           "kind": "mod"
         },
@@ -2034,6 +2038,10 @@
       "source": "scheme/src/runtime/kb_queries.rs"
     },
     {
+      "name": "kb-node-properties",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
       "name": "kb-pending",
       "source": "scheme/src/runtime/kb_primitives.rs"
     },
@@ -2088,6 +2096,10 @@
     {
       "name": "kb-set-encryption",
       "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-set-node-property!",
+      "source": "scheme/src/runtime/kb_crud.rs"
     },
     {
       "name": "kb-set-policy",
