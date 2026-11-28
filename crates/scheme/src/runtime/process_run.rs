@@ -155,6 +155,9 @@ fn cloexec_from_3() {
             return;
         }
     }
+    // Without close_range (macOS, an old or seccomp'd kernel): mark each fd
+    // up to the open-files limit, capped at 65536. A process whose limit is
+    // raised past the cap could leak a descriptor numbered above it.
     // SAFETY: sysconf(3) is async-signal-safe and reads a limit.
     let max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
     let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;

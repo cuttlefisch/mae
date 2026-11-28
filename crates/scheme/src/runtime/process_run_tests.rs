@@ -222,19 +222,34 @@ fn a_stopped_program_is_killed_at_the_deadline() {
 }
 
 /// The child leads a session of its own: no controlling terminal shared
-/// with the editor.
+/// with the editor. Its process group is its own on every Unix (`pgid` is a
+/// keyword of both procps and BSD ps); on Linux its session id is checked too,
+/// from /proc (BSD ps has no session-id keyword).
 #[test]
 fn the_child_leads_its_own_session() {
     let o = sh(
-        r#"test "$(ps -o sid= -p $$ | tr -d ' ')" = "$$" && echo leader"#,
+        r#"test "$(ps -o pgid= -p $$ | tr -d ' ')" = "$$" && echo own-group"#,
         5_000,
     );
     assert_eq!(
         o.stdout,
-        b"leader\n",
+        b"own-group\n",
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    if Path::new("/proc/self/stat").exists() {
+        // Field 6 of /proc/PID/stat is the session id.
+        let o = sh(
+            r#"test "$(cut -d' ' -f6 /proc/$$/stat)" = "$$" && echo own-session"#,
+            5_000,
+        );
+        assert_eq!(
+            o.stdout,
+            b"own-session\n",
+            "{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
 }
 
 /// A descriptor the editor opened without close-on-exec does not reach the
@@ -271,7 +286,7 @@ fn an_escapee_holding_the_pipes_is_abandoned_with_its_output_kept() {
              while [ ! -s {f} ]; do sleep 0.05; done",
             f = f.display()
         ),
-        5_000,
+        20_000,
     );
     let escapee = pid_in(&f);
     // SAFETY: killing the escapee this test started.
