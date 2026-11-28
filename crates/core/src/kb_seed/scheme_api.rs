@@ -1180,6 +1180,20 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(kb-set-role \"concept:buffer\" \"hub\")",
             "kb-authoring",
         ),
+        (
+            "kb-node-properties",
+            "(kb-node-properties NODE-ID)",
+            "Return KB node NODE-ID's properties (its :PROPERTIES: drawer, without the ID, KIND and ALIASES fields) as an association list of (key . value) strings, sorted by key, or #f when no node has that id. Keys are lower-case, as the store keeps them.",
+            "(kb-node-properties \"concept:buffer\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-set-node-property!",
+            "(kb-set-node-property! NODE-ID KEY VALUE [KB])",
+            "Set KB node NODE-ID's property KEY to the string VALUE, or remove it when VALUE is #f. KEY is printable ASCII without blanks or ':' (stored lower-case); ID, KIND, ALIASES, END, PROPERTIES and a key ending in '+' are refused. VALUE is one non-empty line with no blank at either end; role takes source|atom|molecule|hub. A refusal signals at once. Optional KB names the KB holding the node.",
+            "(kb-set-node-property! \"concept:buffer\" \"valid-until\" \"2026-12-01\")",
+            "kb-authoring",
+        ),
 
         // KB graph (read-only queries)
         (
