@@ -870,6 +870,13 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(shell-command \"date\") ; => \"Mon May 12 ...\"",
             "shell",
         ),
+        (
+            "process-run",
+            "(process-run ARGV ENV TIMEOUT-MS [CWD])",
+            "Run one program without a shell. ARGV is a list of strings whose first is an absolute path (no PATH lookup); ENV is the complete environment as (NAME . VALUE) strings (nothing inherited); TIMEOUT-MS is 1..=600000; CWD defaults to /; stdin is empty. At the deadline the program's whole process group is killed, as is anything it leaves running. Returns an alist: status (exited | signalled | timed-out | spawn-failed), exit, signal, error, stdout and stderr as bytevectors (exact bytes, 1 MiB each at most), stdout-truncated, stderr-truncated, output-abandoned, elapsed-ms. Blocks until done. Shell tier.",
+            "(cdr (assq 'stdout (process-run '(\"/usr/bin/dig\" \"+short\" \"example.org\") '((\"PATH\" . \"/nonexistent\")) 5000)))",
+            "shell",
+        ),
         // Agenda
         (
             "agenda-add!",
@@ -2150,6 +2157,14 @@ mod tests {
         (
             "scheme/runtime/misc_primitives.rs",
             include_str!("../../../scheme/src/runtime/misc_primitives.rs"),
+        ),
+        (
+            "scheme/runtime/process_run.rs",
+            include_str!("../../../scheme/src/runtime/process_run.rs"),
+        ),
+        (
+            "scheme/runtime/process_run_tests.rs",
+            include_str!("../../../scheme/src/runtime/process_run_tests.rs"),
         ),
         (
             "scheme/runtime/shell_agenda.rs",

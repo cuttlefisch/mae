@@ -780,6 +780,7 @@ Source: `shared/syntax/src/lib.rs`
 | `point` | `scheme/src/runtime/state_sync_inject.rs` |
 | `point-max` | `scheme/src/runtime/state_sync_inject.rs` |
 | `point-min` | `scheme/src/runtime/state_sync_inject.rs` |
+| `process-run` | `scheme/src/runtime/process_run.rs` |
 | `provide-feature` | `scheme/src/runtime/io_packages.rs` |
 | `read-file` | `scheme/src/runtime/io_packages.rs` |
 | `recent-files-add!` | `scheme/src/runtime/shell_agenda.rs` |

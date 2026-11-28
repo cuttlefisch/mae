@@ -40,6 +40,7 @@ mod kb_queries;
 mod keybindings;
 mod lsp_dap;
 mod misc_primitives;
+mod process_run;
 mod shell_agenda;
 mod state_sync_apply;
 mod state_sync_apply2;
@@ -58,6 +59,7 @@ use kb_queries::register_kb_query_fns;
 use keybindings::register_keybinding_fns;
 use lsp_dap::register_lsp_dap_fns;
 use misc_primitives::register_misc_primitive_fns;
+use process_run::register_process_run_fn;
 use shell_agenda::register_shell_agenda_fns;
 use test_primitives::register_test_primitive_fns;
 
@@ -635,6 +637,7 @@ impl SchemeRuntime {
         register_kb_preview_fns(&mut vm, &shared);
         register_kb_export_fns(&mut vm, &shared);
         register_misc_primitive_fns(&mut vm, &shared);
+        register_process_run_fn(&mut vm);
         register_test_primitive_fns(&mut vm, &shared);
 
         // Register default values for state-injected variables
