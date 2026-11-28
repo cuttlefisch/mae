@@ -25,7 +25,7 @@ unicode-normalization = "0.1"
 # warns without it). Not `multi_template` (include/extends/import: a template
 # is exactly the file the manifest names), not `macros`, not `debug`, not
 # `deserialization`, not `adjacent_loop_items`, not `std_collections`.
-minijinja = { version = "2.24", default-features = false, features = ["builtins", "fuel", "serde"] }
+minijinja = { version = "3.1", default-features = false, features = ["builtins", "fuel", "serde"] }
 # The component manifest (`components.toml`) and its data files (JSON).
 toml = "1.1"
 serde_json = "1"
