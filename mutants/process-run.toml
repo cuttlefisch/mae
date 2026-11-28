@@ -1,0 +1,70 @@
+# process-run's guarantees (crates/scheme/src/runtime/process_run.rs), each
+# pinned by a test in process_run_tests.rs.
+
+[[mutant]]
+id = "process-run/env-inherited"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(the_environment_is_exactly_the_one_given)"
+ref = "nothing of the editor's environment is inherited"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''        .env_clear()
+'''
+replace = ''''''
+
+[[mutant]]
+id = "process-run/no-own-group"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(the_deadline_kills_the_whole_process_group)"
+ref = "the deadline kills the whole process group"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''    own_group(&mut cmd);
+'''
+replace = ''''''
+
+[[mutant]]
+id = "process-run/group-not-killed"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(nothing_outlives_a_normal_exit)"
+ref = "nothing the program started outlives the call"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''                libc::kill(-pid, libc::SIGKILL);'''
+replace = '''                libc::kill(pid, libc::SIGKILL);'''
+
+[[mutant]]
+id = "process-run/relative-program"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(arguments_outside_the_rules_are_refused)"
+ref = "the program is an absolute path"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''    if !Path::new(program).is_absolute() {'''
+replace = '''    if false && !Path::new(program).is_absolute() {'''
+
+[[mutant]]
+id = "process-run/no-cap"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(output_past_the_cap_is_drained_and_reported_truncated)"
+ref = "each stream is capped and its truncation reported"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''                kept.extend_from_slice(&buf[..n.min(room)]);'''
+replace = '''                kept.extend_from_slice(&buf[..n]);'''
+
+[[mutant]]
+id = "process-run/argv-element-skipped"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(the_scheme_primitive_returns_the_documented_alist)"
+ref = "a non-string ARGV element is refused, never dropped"
+[[mutant.edit]]
+file = "crates/scheme/src/runtime/process_run.rs"
+find = '''            let argv = strings(&args[0], "ARGV")?;'''
+replace = '''            let argv = crate::ffi::list_to_strings(&args[0]);'''
