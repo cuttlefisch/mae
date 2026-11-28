@@ -43,9 +43,9 @@ filter = "test(a_block_closes_a_principal_out_though_no_document_changed)"
 ref = "a blocklist change moves the access generation"
 [[mutant.edit]]
 file = "daemon/src/doc_store.rs"
-find = '''        self.derive_cache.write().await.remove(kb_id);
+find = '''        cache.remove(kb_id);
         self.note_access_change(kb_id);'''
-replace = '''        self.derive_cache.write().await.remove(kb_id);'''
+replace = '''        cache.remove(kb_id);'''
 
 [[mutant]]
 id = "delivery-gate/timebox-ignored"
