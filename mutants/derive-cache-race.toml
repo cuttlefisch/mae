@@ -1,0 +1,13 @@
+# #1052: a derivation that read the blocklist before a block never leaves
+# its result cached (daemon/src/doc_store.rs, derived_membership).
+
+[[mutant]]
+id = "derive-cache-race/insert-ignores-generation"
+runner = "daemon"
+targets = ["--lib"]
+filter = "test(a_block_during_a_derivation_never_leaves_its_result_cached)"
+ref = "a result derived across a blocklist change is not cached"
+[[mutant.edit]]
+file = "daemon/src/doc_store.rs"
+find = '''        if self.kb_access_generation(kb_id) == generation {'''
+replace = '''        if true || self.kb_access_generation(kb_id) == generation {'''

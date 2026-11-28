@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.219] - 2026-11-27
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* A derivation racing a block never caches its stale result ([c7051e4](https://github.com/cuttlefisch/mae/commit/c7051e400d31c509abf70f4ec9e85b2e5d410fc5))
+
+### Testing
+
+- *(mutants)* Re-anchor block-keeps-the-allow to the locked invalidation ([8a8f3a8](https://github.com/cuttlefisch/mae/commit/8a8f3a8cefa8d0a57e069452d636658fc9606656))
+- *(daemon)* The derive race test fails loudly on a cache hit, and claims only what it kills ([f4e4fe3](https://github.com/cuttlefisch/mae/commit/f4e4fe3ae0dba610694fbbe26d4c881cd352d0ec))
+
 ## [0.14.218] - 2026-11-27
 
 
@@ -14,6 +28,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(kb)* Split the search fixture test under the function-length ceiling ([5707464](https://github.com/cuttlefisch/mae/commit/5707464874a45b0f41983b1f81c462f44a0c286a))
+
+### Miscellaneous
+
+- Bump version to 0.14.218 ([c182f88](https://github.com/cuttlefisch/mae/commit/c182f88d5bf1d2cee66274b08d91efc68caa2afa))
 
 ## [0.14.217] - 2026-11-27
 
